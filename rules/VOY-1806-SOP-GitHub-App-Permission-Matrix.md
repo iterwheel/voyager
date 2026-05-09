@@ -53,7 +53,7 @@ repositories, manage secrets, deploy production, or merge code directly.
    | GitHub App name | Display stage | First operating mode |
    |-----------------|---------------|----------------------|
    | `iterwheel-blueprint` | Blueprint | Issue intake, issue title validation, triage comments, labels, and ready-state rocket reactions. |
-   | `iterwheel-stack` | Stack | Type, area, size, risk, and routing label classification. |
+   | `iterwheel-stack` | Stack | Issue type, area, size, risk, and routing label classification. |
    | `iterwheel-staticfire` | Static Fire | CI, test, workflow, and check aggregation. |
    | `iterwheel-clearance` | Clearance | Review readiness aggregation. |
    | `iterwheel-countdown` | Countdown | Final GO/HOLD merge gate with PR title/body convention checks, emoji reactions, review-thread resolution, and PR approval authority, but no merge authority. |
@@ -82,7 +82,7 @@ repositories, manage secrets, deploy production, or merge code directly.
    | App | Metadata | Contents | Issues | Pull requests | Checks | Actions | Commit statuses |
    |-----|----------|----------|--------|---------------|--------|---------|-----------------|
    | `iterwheel-blueprint` | Read | No access | Read & write | No access | Read & write | No access | No access |
-   | `iterwheel-stack` | Read | Read-only | Read & write | Read & write | Read & write | No access | No access |
+   | `iterwheel-stack` | Read | No access | Read & write | No access | No access | No access | No access |
    | `iterwheel-staticfire` | Read | Read-only | No access | Read-only | Read & write | Read-only | Read-only |
    | `iterwheel-clearance` | Read | Read-only | Read & write | Read & write | Read & write | No access | Read-only |
    | `iterwheel-countdown` | Read | Read-only | Read & write | Read & write | Read & write | Read-only | Read-only |
@@ -95,7 +95,7 @@ repositories, manage secrets, deploy production, or merge code directly.
    - `Issues: read & write` allows issue comments, labels, issue reactions, and
      PR comments that flow through issue APIs. This is required for
      `iterwheel-blueprint` ready-state rocket reactions, plus Stack label
-     management and issue/PR timeline emoji reactions. For Blueprint, label
+     management and issue timeline emoji reactions. For Blueprint, label
      write-back is limited to the VOY-1805 standard labels:
      `blueprint-needed`, `blueprint-ready`, and
      `blueprint-requests-revision`.
@@ -103,9 +103,10 @@ repositories, manage secrets, deploy production, or merge code directly.
      classification allow-list, including `stack-needs-review` for
      low-confidence classifications.
    - `Pull requests: read & write` allows PR review workflow participation for
-     Stack and Clearance. Countdown also receives pull-request write access so
-     it can create approving reviews, resolve review threads through the GraphQL
-     API, and react to pull request review comments.
+     Clearance. Countdown also receives pull-request write access so it can
+     create approving reviews, resolve review threads through the GraphQL API,
+     and react to pull request review comments. Stack does not need pull request
+     access because it is issue-only.
    - `Checks: read & write` allows each bot that publishes a verdict to create
      check runs.
    - `Actions: read-only` and `Commit statuses: read-only` are reserved for bots
@@ -125,7 +126,7 @@ repositories, manage secrets, deploy production, or merge code directly.
    | App | Events |
    |-----|--------|
    | `iterwheel-blueprint` | Issues, Issue comment |
-   | `iterwheel-stack` | Pull request, Issue comment, Label |
+   | `iterwheel-stack` | Issues, Issue comment |
    | `iterwheel-staticfire` | Check run, Check suite, Status, Workflow run, Pull request |
    | `iterwheel-clearance` | Pull request, Pull request review, Pull request review comment, Issue comment |
    | `iterwheel-countdown` | Pull request, Pull request review, Pull request review comment, Check run, Check suite, Status, Workflow run, Issue comment |
@@ -184,3 +185,5 @@ modes.
 | 2026-05-09 | Recorded the three-label Blueprint issue-state standard in the Issues write-back permission note          | Frank Xu + Codex |
 | 2026-05-09 | Recorded Stack v1 `stack-*` classification label write-back scope                                         | Frank Xu + Codex |
 | 2026-05-09 | Added `stack-needs-review`, Stack status comments, and Stack success `rocket` reactions                   | Frank Xu + Codex |
+| 2026-05-09 | Added Clearance v1 PR review-readiness event ownership                                                    | Frank Xu + Codex |
+| 2026-05-09 | Tightened Stack to issue-only labels and removed Stack PR event ownership                                 | Frank Xu + Codex |

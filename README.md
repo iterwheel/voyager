@@ -60,7 +60,7 @@ Blueprint → Stack → Static Fire → Clearance → Countdown → Liftoff
 | # | Bot | Stage | GitHub Job |
 |---|-----|-------|------------|
 | 1 | **Blueprint** 📐 | Mission blueprint | Issue intake and title validation |
-| 2 | **Stack** 🛰️ | Vehicle stacking | Issue / PR classification labels |
+| 2 | **Stack** 🛰️ | Vehicle stacking | Issue classification labels |
 | 3 | **Static Fire** 🔥 | Ground test | CI / test aggregation |
 | 4 | **Clearance** ✅ | Go / No-Go poll | Review status aggregation |
 | 5 | **Countdown** ⏱️ | T-minus | PR convention checks and final merge gate |

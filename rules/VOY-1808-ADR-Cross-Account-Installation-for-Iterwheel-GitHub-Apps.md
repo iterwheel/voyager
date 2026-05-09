@@ -92,13 +92,14 @@ The intended bridge configuration shape is:
 }
 ```
 
-The first target allow-list after installation is:
+The current Blueprint and Stack write-back allow-lists are app-specific:
 
 ```text
-BRIDGE_ALLOWED_REPOSITORIES=iterwheel/voyager-sandbox,frankyxhl/trinity,frankyxhl/fx_bin,frankyxhl/babs,frankyxhl/alfred,iterwheel/voyager
+BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_BLUEPRINT=iterwheel/voyager-sandbox,iterwheel/voyager,frankyxhl/trinity,frankyxhl/alfred,frankyxhl/babs,frankyxhl/fx_bin,frankyxhl/sweeping-monk
+BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_STACK=iterwheel/voyager-sandbox,iterwheel/voyager,frankyxhl/trinity,frankyxhl/alfred,frankyxhl/babs,frankyxhl/fx_bin,frankyxhl/sweeping-monk
 ```
 
-The first personal-repository rollout should start with Blueprint only:
+The first personal-repository rollout started with Blueprint only:
 
 - issue field validation
 - issue title validation
@@ -106,8 +107,9 @@ The first personal-repository rollout should start with Blueprint only:
   `blueprint-requests-revision` labels
 - upserted Blueprint intake comment
 
-Stack, Static Fire, Clearance, and Countdown should not write back to
-`frankyxhl/trinity` until their routing and write-back behavior are proven in
+After sandbox verification, Stack may use the same selected-repository rollout
+scope as Blueprint. Static Fire, Clearance, and Countdown should not write back
+to `frankyxhl/trinity` until their routing and write-back behavior are proven in
 the sandbox.
 
 Blueprint ready-state write-back also adds a `rocket` issue reaction from
@@ -124,7 +126,7 @@ completed an initial Blueprint pass.
 | Item | Status |
 |------|--------|
 | Make `iterwheel-blueprint` installable outside `iterwheel` | Complete. The App is public but not Marketplace-listed. |
-| Install `iterwheel-blueprint` on selected `frankyxhl` repositories | Complete. Installation id is `130696149`; selected repositories are `frankyxhl/alfred`, `frankyxhl/babs`, `frankyxhl/fx_bin`, and `frankyxhl/trinity`. |
+| Install `iterwheel-blueprint` on selected `frankyxhl` repositories | Complete. Installation id is `130696149`; selected repositories are `frankyxhl/alfred`, `frankyxhl/babs`, `frankyxhl/fx_bin`, `frankyxhl/sweeping-monk`, and `frankyxhl/trinity`. |
 | Extend bridge config to multiple installation ids | Complete for `iterwheel-blueprint`: `iterwheel` maps to `130630088`, `frankyxhl` maps to `130696149`. |
 | Add `frankyxhl/trinity` repository webhook | Complete. Webhook id is `619959453`; subscribed events are `issues` and `issue_comment`; latest response is `200 OK`. |
 | Smoke test on `frankyxhl/trinity` | Complete. `/blueprint` on issue #77 first produced the non-ready Blueprint state; after the issue body was completed, the bot updated its comment and applied `blueprint-ready`. |
@@ -132,6 +134,13 @@ completed an initial Blueprint pass.
 | Enable repository webhooks for `frankyxhl/alfred`, `frankyxhl/babs`, and `frankyxhl/fx_bin` | Complete. Webhook ids are `619961538`, `619961554`, and `619961564`; each ping delivery returned `200 OK`. |
 | Add Blueprint labels to `frankyxhl/alfred`, `frankyxhl/babs`, and `frankyxhl/fx_bin` | Complete. Each repository has `blueprint-needed`, `blueprint-ready`, and `blueprint-requests-revision`. |
 | Add `iterwheel/voyager` to Blueprint | Complete. The repository is part of installation `130630088`, has webhook `619976821`, and issue #1 passed title/intake validation. |
+| Make `iterwheel-stack` installable outside `iterwheel` | Complete. The App is public but not Marketplace-listed. |
+| Install `iterwheel-stack` on selected `frankyxhl` repositories | Complete. Installation id is `130716196`; selected repositories are `frankyxhl/alfred`, `frankyxhl/babs`, `frankyxhl/fx_bin`, `frankyxhl/sweeping-monk`, and `frankyxhl/trinity`. |
+| Extend bridge config to multiple installation ids for Stack | Complete for `iterwheel-stack`: `iterwheel` maps to `130630216`, `frankyxhl` maps to `130716196`. |
+| Keep Stack routing issue-only | Complete. Stack ignores `pull_request` events and `/stack` comments on pull request conversations; PR convention checks belong to Countdown. |
+| Upgrade Stack classification to v2 | Complete. Stack now parses explicit `Work Type` / `Stack Area` body fields before using weighted area scoring. |
+| Add Stack labels to rollout repositories | Complete. Each of the seven rollout repositories has 27 Stack labels across type, area, size, risk, and review-state axes. |
+| Add `frankyxhl/sweeping-monk` to Blueprint and Stack | Complete. The repository has webhook `620063000`, all Blueprint/Stack labels, app-specific allow-list entries on Wukong, and smoke test issue #4 passed with `blueprint-ready` plus Stack v2 classification labels. |
 
 
 ## Consequences
@@ -164,15 +173,25 @@ completed an initial Blueprint pass.
 For a new personal repository, perform these steps:
 
 1. Confirm the repository is part of the selected-repository installation for
-   `iterwheel-blueprint`.
-2. Add the repository to `BRIDGE_ALLOWED_REPOSITORIES`.
+   each App being enabled, for example `iterwheel-blueprint` or
+   `iterwheel-stack`.
+2. Add the repository to each enabled App-specific allow-list, such as
+   `BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_BLUEPRINT` or
+   `BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_STACK`. Keep the global
+   `BRIDGE_ALLOWED_REPOSITORIES` narrow unless a route intentionally relies on
+   the fallback allow-list.
 3. Record each new installation id in VOY-1807.
 4. Add a repository webhook on the target repository pointing to
    `https://gh.iterwheel.com/github/webhook`.
-5. Add or verify labels: `blueprint-needed`, `blueprint-ready`, and
-   `blueprint-requests-revision`.
+5. Add or verify labels for the enabled App. Blueprint uses
+   `blueprint-needed`, `blueprint-ready`, and
+   `blueprint-requests-revision`; Stack uses the 27-label
+   `stack-type-*`, `stack-area-*`, `stack-size-*`, `stack-risk-*`, and
+   `stack-needs-review` set.
 6. Add or copy the issue template if Blueprint form-based intake is desired.
-7. Run a `/blueprint` smoke test on a non-critical issue.
+7. Run a smoke test on a non-critical issue. Opening a complete issue should
+   exercise both Blueprint and Stack; `/blueprint` and `/stack` comments can be
+   used for targeted rechecks.
 
 ### Triggers for Revisiting
 
@@ -197,3 +216,7 @@ Write a new ADR if:
 | 2026-05-09 | Added Blueprint ready-state `rocket` issue reaction behavior                                              | Frank Xu + Codex |
 | 2026-05-09 | Standardized Blueprint labels as `blueprint-needed`, `blueprint-ready`, and `blueprint-requests-revision` | Frank Xu + Codex |
 | 2026-05-09 | Tightened Blueprint labels so a checked issue keeps only one Blueprint state label at a time              | Frank Xu + Codex |
+| 2026-05-09 | Expanded Stack to the same six-repository selected rollout scope as Blueprint after sandbox verification  | Frank Xu + Codex |
+| 2026-05-09 | Tightened Stack to issue-only classification; pull request checks remain Countdown scope                  | Frank Xu + Codex |
+| 2026-05-09 | Recorded Stack v2 explicit-field and weighted-area classifier behavior                                   | Frank Xu + Codex |
+| 2026-05-09 | Added `frankyxhl/sweeping-monk` to the Blueprint and Stack selected rollout                              | Frank Xu + Codex |

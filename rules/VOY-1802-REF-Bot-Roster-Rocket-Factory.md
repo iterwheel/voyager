@@ -36,7 +36,7 @@ Each stage maps to a single bot — single responsibility, clean handoff.
 | # | Bot | GitHub Responsibility | Rocket-Stage Metaphor |
 |---|-----|-----------------------|----------------------|
 | 1 | **Blueprint** 📐 | Issue intake and title validation | Mission blueprint: every launch starts from a design |
-| 2 | **Stack** 🛰️ | Issue / PR classification labels | Vehicle stacking: align and assemble each stage |
+| 2 | **Stack** 🛰️ | Issue classification labels | Vehicle stacking: align and assemble each stage |
 | 3 | **Static Fire** 🔥 | CI / test aggregation | Static fire test: prove engines run on the ground |
 | 4 | **Clearance** ✅ | Review status aggregation | Go/No-Go poll: each station confirms readiness |
 | 5 | **Countdown** ⏱️ | PR convention checks and merge gate | T-minus countdown: the final merge gatekeeper |

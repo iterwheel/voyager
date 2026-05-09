@@ -54,7 +54,7 @@ and VOY-1804.
    | GitHub handle | Display name | Primary responsibility |
    |---------------|--------------|------------------------|
    | `iterwheel-blueprint` | Blueprint | Issue intake: validate issue title format, issue templates, completeness, Blueprint labels, priority hints, missing context, and ready-state rocket reactions. |
-   | `iterwheel-stack` | Stack | Work classification: infer and maintain type, area, size, risk, and routing labels from issue/PR metadata and changed files. |
+   | `iterwheel-stack` | Stack | Issue classification: infer and maintain type, area, size, risk, and routing labels from issue title and body. |
    | `iterwheel-staticfire` | Static Fire | CI and test aggregation: read checks, lint, typecheck, test, and workflow results; summarize failures in human-readable form. |
    | `iterwheel-clearance` | Clearance | Review readiness: aggregate approvals, requested changes, unresolved review threads, and bot verdicts. |
    | `iterwheel-countdown` | Countdown | Final merge gate: publish a GO or HOLD verdict after checking PR title/body conventions, CI, review state, branch protection, conflicts, and release constraints. |
@@ -85,8 +85,7 @@ and VOY-1804.
    Stack owns classification labels only. It must not use its labels as
    pass/fail gates, and it must not create labels outside this allow-list.
 
-   Each classified issue or pull request should have exactly one label from
-   each axis:
+   Each classified issue should have exactly one label from each axis:
 
    | Axis | Labels |
    |------|--------|
@@ -96,11 +95,15 @@ and VOY-1804.
    | Risk | `stack-risk-low`, `stack-risk-medium`, `stack-risk-high` |
    | Review | `stack-needs-review` |
 
-   Stack v1 may classify from issue/PR title, body, and pull request diff
-   counts. When Stack has enough confidence, it should apply one label per
-   classification axis, remove `stack-needs-review`, upsert a Stack
-   classification comment, remove its own `eyes` reaction, and add a `rocket`
-   reaction.
+   Stack v2 classifies GitHub issues from issue title and body. It first trusts
+   explicit body fields such as `Stack Type`, `Work Type`, and `Stack Area`,
+   then falls back to weighted keyword signals. Generic words such as `issue`,
+   `PR`, `label`, and `test` must not dominate a long issue body by themselves.
+   It must ignore pull requests, including `/stack` comments on pull request
+   conversations. PR title/body convention checks belong to Countdown. When
+   Stack has enough confidence, it should apply one label per classification
+   axis, remove `stack-needs-review`, upsert a Stack classification comment,
+   remove its own `eyes` reaction, and add a `rocket` reaction.
 
    When Stack cannot classify confidently, it should apply only
    `stack-needs-review`, remove existing `stack-type-*`, `stack-area-*`,
@@ -109,7 +112,24 @@ and VOY-1804.
    add an `eyes` reaction. This is still a request for human classification, not
    a pass/fail gate.
 
-4. **Keep handle rules stable**
+4. **Use the Clearance label standard**
+
+   Clearance owns pull request review-readiness labels only. Its labels are
+   mutually exclusive and should be applied only to pull requests:
+
+   | Label | Meaning |
+   |-------|---------|
+   | `clearance-pending` | Review clearance is not complete yet, for example the PR is draft, has no current-head approval, or only stale approvals. |
+   | `clearance-blocked` | Review clearance is blocked by requested changes or unresolved review threads. |
+   | `clearance-ready` | The PR has at least one current-head approval, no active requested-changes review, and no unresolved review threads. |
+
+   Clearance v1 is deterministic. It verifies GitHub review state and review
+   thread resolution, upserts a Clearance comment, adds `rocket` when
+   `clearance-ready`, and adds `eyes` otherwise. It does not prove that every
+   requested semantic code change was truly fixed; AI-assisted semantic repair
+   verification is a later Clearance v2 responsibility.
+
+5. **Keep handle rules stable**
 
    - Use `iterwheel-` as the GitHub account prefix.
    - Use lowercase ASCII handles.
@@ -117,13 +137,13 @@ and VOY-1804.
    - Do not add extra internal hyphens unless readability requires it.
    - Preserve canonical display names with normal spacing, such as `Static Fire`.
 
-5. **Treat `iterwheel-staticfire` as the handle exception**
+6. **Treat `iterwheel-staticfire` as the handle exception**
 
    The canonical display name remains `Static Fire`, but the GitHub handle is
    `iterwheel-staticfire` rather than `iterwheel-static-fire` to keep the public
    handle shorter and visually cleaner.
 
-6. **Limit initial authority**
+7. **Limit initial authority**
 
    The first-batch accounts may read repository state, post comments, publish
    check/status conclusions, and participate in review workflows. They must not
@@ -134,7 +154,7 @@ and VOY-1804.
    insufficient, but it must write only approved labels from a repo allow-list.
    It should not invent labels or turn classification into a pass/fail gate.
 
-7. **Treat Countdown as advisory until hardened**
+8. **Treat Countdown as advisory until hardened**
 
    `iterwheel-countdown` is the desired final merge gate, but its first
    operating mode is advisory: it may publish `GO` or `HOLD` conclusions, while
@@ -187,3 +207,6 @@ reaction.
 | 2026-05-09 | Tightened Blueprint labels to be mutually exclusive state labels                                                             | Frank Xu + Codex |
 | 2026-05-09 | Added Stack v1 classification label axes and allow-list                                                                      | Frank Xu + Codex |
 | 2026-05-09 | Added Stack low-confidence review flow, status comment, and success `rocket` reaction                                        | Frank Xu + Codex |
+| 2026-05-09 | Tightened Stack scope to issue-only classification; pull requests are handled by Countdown                                   | Frank Xu + Codex |
+| 2026-05-09 | Added Stack v2 explicit `Work Type` / `Stack Area` parsing and weighted area scoring                                         | Frank Xu + Codex |
+| 2026-05-09 | Added Clearance v1 pull request review-readiness label standard                                                             | Frank Xu + Codex |
