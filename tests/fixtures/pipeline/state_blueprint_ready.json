@@ -1,0 +1,8 @@
+{
+  "target_kind": "issue",
+  "target_id": "iterwheel/voyager#42",
+  "stage": "blueprint_ready",
+  "history": [
+    ["blueprint_pending", "blueprint-ready"]
+  ]
+}
