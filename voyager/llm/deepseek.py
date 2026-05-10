@@ -47,6 +47,24 @@ class Message:
         if self.role == "assistant" and self.reasoning_content is not None:
             d["reasoning_content"] = self.reasoning_content
 
+        # Multi-turn tool calling rule: an assistant turn that invoked tools
+        # MUST be forwarded with its tool_calls preserved on subsequent calls.
+        # Otherwise the next `role: "tool"` message references a tool_call_id
+        # that has no matching assistant.tool_calls, and the API rejects the
+        # request (or silently re-invents the call).
+        if self.role == "assistant" and self.tool_calls:
+            d["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.name,
+                        "arguments": json.dumps(tc.arguments),
+                    },
+                }
+                for tc in self.tool_calls
+            ]
+
         return d
 
 

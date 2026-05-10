@@ -121,6 +121,13 @@ Feature: DeepSeek LLM adapter — reasoning, tool calls, and error handling
     Then the request messages include a tool role message with tool_call_id "call_abc123"
     And the AssistantTurn has a non-empty content
 
+  Scenario: Multi-turn assistant turn with tool_calls is forwarded with tool_calls intact
+    Given the DeepSeek API returns a tool-result follow-up response
+    When complete is called with an assistant turn containing tool_calls and a tool result
+    Then the request messages include an assistant message with tool_calls
+    And the first request assistant tool_call has id "call_abc123" name "post_pr_comment"
+    And the first request assistant tool_call arguments JSON includes "pr_number" 42
+
   # ---------------------------------------------------------------------------
   # Error handling
   # ---------------------------------------------------------------------------

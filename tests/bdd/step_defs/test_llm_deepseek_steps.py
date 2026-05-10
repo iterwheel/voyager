@@ -388,6 +388,37 @@ def call_complete_with_tool_result(state: DSState) -> None:
         state.raised = exc
 
 
+@when("complete is called with an assistant turn containing tool_calls and a tool result")
+def call_complete_with_assistant_tool_calls(state: DSState) -> None:
+    from voyager.llm.deepseek import Message, ToolCall  # lazy
+
+    state.client = _build_client(state)
+    messages = [
+        Message(role="user", content="Post a review comment on PR #42."),
+        Message(
+            role="assistant",
+            reasoning_content="I should call post_pr_comment.",
+            content=None,
+            tool_calls=[
+                ToolCall(
+                    id="call_abc123",
+                    name="post_pr_comment",
+                    arguments={"pr_number": 42, "body": "LGTM"},
+                ),
+            ],
+        ),
+        Message(
+            role="tool",
+            tool_call_id="call_abc123",
+            content="Comment posted successfully.",
+        ),
+    ]
+    try:
+        state.result = _run(state.client.complete(messages, thinking=True))
+    except Exception as exc:
+        state.raised = exc
+
+
 # ---------------------------------------------------------------------------
 # Then — request assertions
 # ---------------------------------------------------------------------------
@@ -445,6 +476,46 @@ def request_has_assistant_reasoning(state: DSState) -> None:
     has_reasoning = any(m.get("reasoning_content") not in (None, "") for m in assistant_msgs)
     assert has_reasoning, (
         f"No assistant message with reasoning_content found. Messages: {assistant_msgs}"
+    )
+
+
+@then("the request messages include an assistant message with tool_calls")
+def request_has_assistant_tool_calls(state: DSState) -> None:
+    body = _last_request_body(state)
+    messages = body.get("messages", [])
+    assistant_msgs = [m for m in messages if m.get("role") == "assistant"]
+    assert assistant_msgs, "No assistant messages in request"
+    with_tool_calls = [m for m in assistant_msgs if m.get("tool_calls")]
+    assert with_tool_calls, (
+        f"No assistant message with tool_calls found. Messages: {assistant_msgs}"
+    )
+
+
+@then(parsers.parse('the first request assistant tool_call has id "{tc_id}" name "{tc_name}"'))
+def request_first_assistant_tool_call(state: DSState, tc_id: str, tc_name: str) -> None:
+    body = _last_request_body(state)
+    messages = body.get("messages", [])
+    assistant_msgs = [m for m in messages if m.get("role") == "assistant" and m.get("tool_calls")]
+    assert assistant_msgs, "No assistant message with tool_calls"
+    first = assistant_msgs[0]["tool_calls"][0]
+    assert first.get("id") == tc_id, f"id={first.get('id')!r} != {tc_id!r}"
+    func = first.get("function", {})
+    assert func.get("name") == tc_name, f"function.name={func.get('name')!r} != {tc_name!r}"
+
+
+@then(
+    parsers.parse('the first request assistant tool_call arguments JSON includes "{key}" {value:d}')
+)
+def request_first_assistant_tool_call_args(state: DSState, key: str, value: int) -> None:
+    body = _last_request_body(state)
+    messages = body.get("messages", [])
+    assistant_msgs = [m for m in messages if m.get("role") == "assistant" and m.get("tool_calls")]
+    assert assistant_msgs, "No assistant message with tool_calls"
+    first = assistant_msgs[0]["tool_calls"][0]
+    args_raw = first.get("function", {}).get("arguments", "")
+    args = json.loads(args_raw)
+    assert args.get(key) == value, (
+        f"tool_call.arguments[{key!r}] = {args.get(key)!r}, expected {value}"
     )
 
 
