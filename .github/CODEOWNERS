@@ -1,0 +1,17 @@
+# CODEOWNERS — declare who reviews what.
+# Reference: https://docs.github.com/articles/about-code-owners
+#
+# Replace @YOUR-GITHUB-HANDLE below with your GitHub handle (e.g., @octocat)
+# or team (e.g., @your-org/maintainers), then uncomment the rules you want
+# to enforce. With everything commented, no automatic review is required.
+#
+# Default reviewer for everything:
+# * @YOUR-GITHUB-HANDLE
+#
+# Charter / rules require explicit review:
+# /rules/ @YOUR-GITHUB-HANDLE
+#
+# Workflows / build config:
+# /.github/ @YOUR-GITHUB-HANDLE
+# /pyproject.toml @YOUR-GITHUB-HANDLE
+# /.pre-commit-config.yaml @YOUR-GITHUB-HANDLE
