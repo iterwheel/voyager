@@ -1,0 +1,22 @@
+{
+    "id": "chatcmpl-test-thinking-disabled",
+    "object": "chat.completion",
+    "model": "deepseek-v4-pro",
+    "choices": [
+        {
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "reasoning_content": null,
+                "content": "The capital of France is Paris.",
+                "tool_calls": null
+            },
+            "finish_reason": "stop"
+        }
+    ],
+    "usage": {
+        "prompt_tokens": 20,
+        "completion_tokens": 10,
+        "total_tokens": 30
+    }
+}

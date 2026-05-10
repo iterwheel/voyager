@@ -1,0 +1,22 @@
+{
+    "id": "chatcmpl-test-tool-result-follow-up",
+    "object": "chat.completion",
+    "model": "deepseek-v4-pro",
+    "choices": [
+        {
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "reasoning_content": "The tool returned successfully. The comment was posted. I should confirm this to the user.",
+                "content": "I've posted the comment on PR #42 successfully.",
+                "tool_calls": null
+            },
+            "finish_reason": "stop"
+        }
+    ],
+    "usage": {
+        "prompt_tokens": 110,
+        "completion_tokens": 50,
+        "total_tokens": 160
+    }
+}

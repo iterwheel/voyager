@@ -1,0 +1,22 @@
+{
+    "id": "chatcmpl-test-multi-turn-ok",
+    "object": "chat.completion",
+    "model": "deepseek-v4-pro",
+    "choices": [
+        {
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "reasoning_content": "The user is following up on our previous exchange about France. They want more detail about Paris.",
+                "content": "Paris has a population of approximately 2.1 million in the city proper.",
+                "tool_calls": null
+            },
+            "finish_reason": "stop"
+        }
+    ],
+    "usage": {
+        "prompt_tokens": 80,
+        "completion_tokens": 90,
+        "total_tokens": 170
+    }
+}

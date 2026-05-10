@@ -1,0 +1,31 @@
+{
+    "id": "chatcmpl-test-tool-call",
+    "object": "chat.completion",
+    "model": "deepseek-v4-pro",
+    "choices": [
+        {
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "reasoning_content": "The user wants to post a comment on this pull request. I should call the post_pr_comment tool with the appropriate arguments.",
+                "content": null,
+                "tool_calls": [
+                    {
+                        "id": "call_abc123",
+                        "type": "function",
+                        "function": {
+                            "name": "post_pr_comment",
+                            "arguments": "{\"body\": \"LGTM! This looks good to merge.\", \"pr_number\": 42}"
+                        }
+                    }
+                ]
+            },
+            "finish_reason": "tool_calls"
+        }
+    ],
+    "usage": {
+        "prompt_tokens": 50,
+        "completion_tokens": 60,
+        "total_tokens": 110
+    }
+}

@@ -1,0 +1,22 @@
+{
+    "id": "chatcmpl-test-thinking-enabled",
+    "object": "chat.completion",
+    "model": "deepseek-v4-pro",
+    "choices": [
+        {
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "reasoning_content": "Let me think step by step. The user asked for the capital of France. France is a country in Western Europe. Its capital city is Paris.",
+                "content": "The capital of France is Paris.",
+                "tool_calls": null
+            },
+            "finish_reason": "stop"
+        }
+    ],
+    "usage": {
+        "prompt_tokens": 20,
+        "completion_tokens": 80,
+        "total_tokens": 100
+    }
+}
