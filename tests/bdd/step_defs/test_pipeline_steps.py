@@ -7,7 +7,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from _pytest.stash import StashKey
 from pytest_bdd import given, parsers, scenarios, then, when
+from pytest_bdd.scenario import inject_fixture
+
+_multi_states_key: StashKey[list[dict]] = StashKey()
 
 # CRITICAL: do NOT import from voyager.* at module top level — those modules
 # don't have implementations yet, so top-level imports would crash pytest
@@ -85,26 +89,18 @@ def no_existing_state(target_id: str) -> str:
     parsers.parse('a pipeline state for target "{target_id}" at stage "{stage}"'),
     target_fixture="multi_state_a",
 )
-def pipeline_state_for_target(target_id: str, stage: str) -> dict:
-    return {
-        "target_kind": "issue",
-        "target_id": target_id,
-        "stage": stage,
-        "history": [],
-    }
-
-
-@given(
-    parsers.parse('a pipeline state for target "{target_id2}" at stage "{stage2}"'),
-    target_fixture="multi_state_b",
-)
-def pipeline_state_for_target_b(target_id2: str, stage2: str) -> dict:
-    return {
-        "target_kind": "issue",
-        "target_id": target_id2,
-        "stage": stage2,
-        "history": [],
-    }
+def pipeline_state_for_target(request: pytest.FixtureRequest, target_id: str, stage: str) -> dict:
+    # pytest-bdd matches this step for BOTH "Given" and "And" occurrences of the
+    # same text (Bug 2): the second invocation would also set multi_state_a.
+    # We use a stash-backed accumulator so the second call injects multi_state_b
+    # imperatively and returns the first state unchanged.
+    state = {"target_kind": "issue", "target_id": target_id, "stage": stage, "history": []}
+    states: list[dict] = request.node.stash.setdefault(_multi_states_key, [])
+    states.append(state)
+    if len(states) == 2:
+        inject_fixture(request, "multi_state_b", states[1])
+        return states[0]
+    return state
 
 
 # ---------------------------------------------------------------------------
@@ -183,21 +179,21 @@ def apply_signal_unknown_target(missing_target_id: str, signal: dict) -> dict:
 
 
 @when(
-    parsers.parse("the following signals are applied in order:\n{signals_table}"),
+    "the following signals are applied in order:",
     target_fixture="result",
 )
-def apply_signal_sequence(state: dict, signals_table: str) -> dict:
+def apply_signal_sequence(state: dict, datatable: list[list[str]]) -> dict:
+    # Bug 1 fix: pytest-bdd 8.x passes step.name WITHOUT data table rows.
+    # parsers.parse("...\n{signals_table}") never matches. Use the `datatable`
+    # parameter (populated from step.datatable.raw() by the framework).
     from voyager.pipeline.state_machine import (  # lazy import
         PipelineState,
         Signal,
         advance_pipeline,
     )
 
-    lines = [ln.strip() for ln in signals_table.strip().splitlines() if ln.strip()]
-    # Skip header row (starts with "signal_kind")
-    kinds = [
-        ln.strip("| ").split("|")[0].strip() for ln in lines if not ln.startswith("signal_kind")
-    ]
+    # datatable[0] is the header row ["signal_kind"]; datatable[1:] are data rows.
+    kinds = [row[0] for row in datatable[1:]]
     ps = PipelineState(**state)
     for kind in kinds:
         sig = Signal(kind=kind, target_id=ps.target_id, payload=None)
