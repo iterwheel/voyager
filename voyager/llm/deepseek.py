@@ -71,10 +71,24 @@ class DeepSeekClient:
         self._api_key = api_key
         self._model = model
         self._base_url = base_url
+        self._client: httpx.AsyncClient | None = None
 
     def _async_client(self) -> httpx.AsyncClient:
-        """Return an httpx.AsyncClient. Override in tests to inject a MockTransport."""
-        return httpx.AsyncClient()
+        """Return a per-instance cached httpx.AsyncClient.
+
+        Override in tests to inject MockTransport. Production code reuses the
+        cached client across all complete() calls; the TLS connection pool to
+        api.deepseek.com is shared and connection setup is amortized.
+        """
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient()
+        return self._client
+
+    async def aclose(self) -> None:
+        """Close the cached httpx client. Call on FastAPI lifespan shutdown."""
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
+        self._client = None
 
     def _openai_client(self) -> openai.AsyncOpenAI:
         return openai.AsyncOpenAI(

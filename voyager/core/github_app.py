@@ -23,9 +23,24 @@ class GitHubAppClient:
         self._apps = apps
         self._tokens: dict[str, InstallationToken] = {}
         self._installation_ids: dict[str, str] = {}
+        self._client: httpx.AsyncClient | None = None
 
     def _async_client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(timeout=15)
+        """Return a per-instance cached httpx.AsyncClient.
+
+        Override in tests to inject MockTransport. Production code reuses the
+        cached client across all calls; the TLS connection pool is shared and
+        connection setup is amortized.
+        """
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=15)
+        return self._client
+
+    async def aclose(self) -> None:
+        """Close the cached httpx client. Call on FastAPI lifespan shutdown."""
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
+        self._client = None
 
     def _app_jwt(self, app: Any) -> str:
         if not app.private_key_path.exists():
@@ -64,9 +79,9 @@ class GitHubAppClient:
             "X-GitHub-Api-Version": GITHUB_API_VERSION,
         }
         url = f"{GITHUB_API}/app/installations/{installation_id}/access_tokens"
-        async with self._async_client() as client:
-            response = await client.post(url, headers=headers)
-            response.raise_for_status()
+        client = self._async_client()
+        response = await client.post(url, headers=headers)
+        response.raise_for_status()
         data = response.json()
         expires_at = datetime.fromisoformat(data["expires_at"].replace("Z", "+00:00"))
         self._tokens[cache_key] = InstallationToken(token=data["token"], expires_at=expires_at)
@@ -84,11 +99,11 @@ class GitHubAppClient:
             "X-GitHub-Api-Version": GITHUB_API_VERSION,
         }
         url = f"{GITHUB_API}/repos/{owner}/{name}/installation"
-        async with self._async_client() as client:
-            response = await client.get(url, headers=headers)
-            if response.status_code == 404:
-                return None
-            response.raise_for_status()
+        client = self._async_client()
+        response = await client.get(url, headers=headers)
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
         installation_id = str((response.json() or {}).get("id") or "")
         if installation_id:
             self._installation_ids[cache_key] = installation_id
@@ -110,14 +125,14 @@ class GitHubAppClient:
             "Authorization": f"Bearer {token}",
             "X-GitHub-Api-Version": GITHUB_API_VERSION,
         }
-        async with self._async_client() as client:
-            response = await client.request(
-                method, f"{GITHUB_API}{path}", headers=headers, json=json_body
-            )
-            if response.status_code == 204:
-                return None
-            response.raise_for_status()
-            return response.json()
+        client = self._async_client()
+        response = await client.request(
+            method, f"{GITHUB_API}{path}", headers=headers, json=json_body
+        )
+        if response.status_code == 204:
+            return None
+        response.raise_for_status()
+        return response.json()
 
     async def graphql(
         self,
@@ -133,13 +148,13 @@ class GitHubAppClient:
             "Authorization": f"Bearer {token}",
             "X-GitHub-Api-Version": GITHUB_API_VERSION,
         }
-        async with self._async_client() as client:
-            response = await client.post(
-                f"{GITHUB_API}/graphql",
-                headers=headers,
-                json={"query": query, "variables": variables},
-            )
-            response.raise_for_status()
+        client = self._async_client()
+        response = await client.post(
+            f"{GITHUB_API}/graphql",
+            headers=headers,
+            json={"query": query, "variables": variables},
+        )
+        response.raise_for_status()
         data = response.json()
         if data.get("errors"):
             raise RuntimeError(f"GitHub GraphQL errors: {data['errors']}")
