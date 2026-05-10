@@ -199,6 +199,24 @@ def signed_payload(state: dict, fixture: str, event: str, delivery: str) -> None
 
 @given(
     parsers.parse(
+        'a signed webhook payload "{fixture}" with no event header and delivery "{delivery}"'
+    )
+)
+def signed_payload_no_event(state: dict, fixture: str, delivery: str) -> None:
+    payload = _load_fixture(fixture)
+    body = json.dumps(payload).encode("utf-8")
+    secret = state["secret"]
+    sig = _sign(secret, body)
+    state["request_body"] = body
+    state["request_headers"] = {
+        "X-GitHub-Delivery": delivery,
+        "X-Hub-Signature-256": sig,
+        "Content-Type": "application/json",
+    }
+
+
+@given(
+    parsers.parse(
         'a signed webhook payload "{fixture}" for event "{event}" with no delivery header'
     )
 )
@@ -420,6 +438,33 @@ def response_body_field_empty_list(state: dict, key: str) -> None:
 def response_body_field_is_string(state: dict, key: str, expected: str) -> None:
     body = state["response"].json()
     assert body[key] == expected, f"body[{key!r}] = {body.get(key)!r}, expected {expected!r}"
+
+
+@then(parsers.parse('the response body "{key}" field has "{subkey}" equal to string "{expected}"'))
+def response_body_subfield_string(state: dict, key: str, subkey: str, expected: str) -> None:
+    body = state["response"].json()
+    obj = body.get(key) or {}
+    assert obj.get(subkey) == expected, (
+        f"body[{key!r}][{subkey!r}] = {obj.get(subkey)!r}, expected string {expected!r}"
+    )
+
+
+@then(parsers.parse('the response body "{key}" field has "{subkey}" equal to integer {expected:d}'))
+def response_body_subfield_int(state: dict, key: str, subkey: str, expected: int) -> None:
+    body = state["response"].json()
+    obj = body.get(key) or {}
+    assert obj.get(subkey) == expected, (
+        f"body[{key!r}][{subkey!r}] = {obj.get(subkey)!r}, expected integer {expected}"
+    )
+
+
+@then(parsers.parse('the response body "{key}" field has "{subkey}" greater than {threshold:d}'))
+def response_body_subfield_gt(state: dict, key: str, subkey: str, threshold: int) -> None:
+    body = state["response"].json()
+    obj = body.get(key) or {}
+    val = obj.get(subkey)
+    assert isinstance(val, int), f"body[{key!r}][{subkey!r}] = {val!r}, expected int"
+    assert val > threshold, f"body[{key!r}][{subkey!r}] = {val!r}, expected int > {threshold}"
 
 
 # ---------------------------------------------------------------------------

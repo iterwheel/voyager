@@ -100,6 +100,9 @@ async def github_webhook(
     if not x_github_delivery:
         raise HTTPException(status_code=400, detail="Missing X-GitHub-Delivery")
 
+    if not x_github_event:
+        raise HTTPException(status_code=400, detail="Missing X-GitHub-Event")
+
     try:
         payload = json.loads(raw_body)
     except json.JSONDecodeError as exc:
@@ -129,5 +132,5 @@ async def github_webhook(
         "event": x_github_event,
         "delivery_id": x_github_delivery,
         "routes": _route_summaries(routes),
-        "writebacks": "deferred" if routes else [],
+        "writebacks": {"status": "stub", "scheduled": len(routes)},
     }

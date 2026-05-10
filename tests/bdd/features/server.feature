@@ -122,6 +122,11 @@ Feature: Webhook server — HTTP entry point for GitHub events
     When the webhook is POSTed
     Then the response status is 400
 
+  Scenario: Missing X-GitHub-Event header is rejected with 400
+    Given a signed webhook payload "server_issues_opened" with no event header and delivery "abc-021"
+    When the webhook is POSTed
+    Then the response status is 400
+
   # ---------------------------------------------------------------------------
   # Dispatch routing — response shape
   # ---------------------------------------------------------------------------
@@ -140,17 +145,19 @@ Feature: Webhook server — HTTP entry point for GitHub events
     And the response body "queued" field is false
     And the response body "routes" field is an empty list
 
-  Scenario: Accepted webhook with no routes returns empty writebacks list
+  Scenario: Accepted webhook with no routes reports zero scheduled writebacks
     Given a signed webhook payload "server_unknown_event" for event "release" with delivery "abc-041"
     When the webhook is POSTed
     Then the response status is 200
-    And the response body "writebacks" field is an empty list
+    And the response body "writebacks" field has "status" equal to string "stub"
+    And the response body "writebacks" field has "scheduled" equal to integer 0
 
-  Scenario: Accepted webhook with routes returns deferred writebacks string
+  Scenario: Accepted webhook with routes reports stub writebacks with scheduled count
     Given a signed webhook payload "server_issues_opened" for event "issues" with delivery "abc-042"
     When the webhook is POSTed
     Then the response status is 200
-    And the response body "writebacks" field is the string "deferred"
+    And the response body "writebacks" field has "status" equal to string "stub"
+    And the response body "writebacks" field has "scheduled" greater than 0
 
   # ---------------------------------------------------------------------------
   # Dispatch routing — event-to-bot mapping (issues event)
