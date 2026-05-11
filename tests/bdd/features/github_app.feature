@@ -178,3 +178,15 @@ Feature: GitHub App authentication — JWT and installation token machinery
     And GitHub returns a GraphQL response with errors
     When a GraphQL query is executed
     Then a RuntimeError is raised mentioning "GitHub GraphQL errors"
+
+  # ---------------------------------------------------------------------------
+  # PR reviews pagination (Codex round 3)
+  # ---------------------------------------------------------------------------
+
+  Scenario: pull_request_reviews fetches all pages when GitHub returns >100 reviews
+    Given the app has repository "test-org/my-repo" mapped to installation_id "55544433"
+    And GitHub returns a valid installation token response
+    And GitHub returns 2 pages of PR reviews with 100 then 50 items
+    When pull_request_reviews is called for "test-org/my-repo" PR 42
+    Then pull_request_reviews returned 150 items
+    And the reviews endpoint was called 2 times

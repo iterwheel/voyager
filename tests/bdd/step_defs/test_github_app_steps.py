@@ -171,6 +171,15 @@ def _discovery_response() -> httpx.Response:
     return _json_response(200, _load_fixture("discover_installation_response"))
 
 
+def _json_list_response(status: int, body: list[dict[str, Any]]) -> httpx.Response:
+    """Like _json_response but for JSON-array bodies (e.g. /reviews pagination)."""
+    return httpx.Response(
+        status_code=status,
+        headers={"Content-Type": "application/json"},
+        content=json.dumps(body).encode(),
+    )
+
+
 def _make_recording_transport(
     responses: list[httpx.Response], captured: list[httpx.Request]
 ) -> httpx.MockTransport:
@@ -759,3 +768,56 @@ def key_error_raised(state: ClientState) -> None:
 def jwt_iss_was(state: ClientState, expected_iss: str) -> None:
     claims = (state.result or {}).get("jwt_claims", {})
     assert str(claims.get("iss")) == expected_iss, f"iss={claims.get('iss')!r} != {expected_iss!r}"
+
+
+# ---------------------------------------------------------------------------
+# Given / When / Then — Codex round 3: pull_request_reviews pagination
+# ---------------------------------------------------------------------------
+
+
+@given("GitHub returns 2 pages of PR reviews with 100 then 50 items")
+def mock_paginated_reviews(state: ClientState) -> None:
+    page1 = [
+        {"id": i, "state": "COMMENTED", "submitted_at": "2024-01-01T00:00:00Z"} for i in range(100)
+    ]
+    page2 = [
+        {"id": 100 + i, "state": "APPROVED", "submitted_at": "2024-01-02T00:00:00Z"}
+        for i in range(50)
+    ]
+    existing = getattr(state, "_mock_responses", [])
+    state._mock_responses = [  # type: ignore[attr-defined]
+        *existing,
+        _json_list_response(200, page1),
+        _json_list_response(200, page2),
+    ]
+
+
+@when(
+    parsers.parse('pull_request_reviews is called for "{repo}" PR {pr_number:d}'),
+    target_fixture="reviews_result",
+)
+def call_pull_request_reviews(state: ClientState, repo: str, pr_number: int) -> list[dict]:
+    import asyncio
+
+    responses = getattr(state, "_mock_responses", [])
+    state.client = _build_client(state, responses)
+    return asyncio.get_event_loop().run_until_complete(
+        state.client.pull_request_reviews("test-bot", repo, pr_number)
+    )
+
+
+@then(parsers.parse("pull_request_reviews returned {expected:d} items"))
+def reviews_returned_count(reviews_result: list, expected: int) -> None:
+    assert len(reviews_result) == expected, (
+        f"pull_request_reviews returned {len(reviews_result)} items, expected {expected}"
+    )
+
+
+@then(parsers.parse("the reviews endpoint was called {expected:d} times"))
+def reviews_endpoint_call_count(state: ClientState, expected: int) -> None:
+    review_calls = [r for r in state.captured_requests if "/reviews" in str(r.url)]
+    actual = len(review_calls)
+    urls = [str(r.url) for r in review_calls]
+    assert actual == expected, (
+        f"reviews endpoint called {actual} times, expected {expected}: {urls}"
+    )

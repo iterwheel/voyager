@@ -173,14 +173,33 @@ class GitHubAppClient:
     async def pull_request_reviews(
         self, app_slug: str, repo: str, pull_number: int
     ) -> list[dict[str, Any]]:
+        """Fetch ALL PR reviews, paginating beyond the first 100 records.
+
+        GitHub returns PR reviews paginated; without following pagination, any
+        later-page approval, dismissal, or change-request is missed and
+        evaluate_clearance_snapshot() decides on a stale review history.
+        Codex round 3 P1.
+        """
         owner, name = repo.split("/", 1)
-        payload = await self.request(
-            app_slug,
-            "GET",
-            f"/repos/{owner}/{name}/pulls/{pull_number}/reviews?per_page=100",
-            repository=repo,
-        )
-        return list(payload or [])
+        all_reviews: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            payload = await self.request(
+                app_slug,
+                "GET",
+                f"/repos/{owner}/{name}/pulls/{pull_number}/reviews?per_page=100&page={page}",
+                repository=repo,
+            )
+            items = list(payload or [])
+            all_reviews.extend(items)
+            if len(items) < 100:
+                break
+            page += 1
+            if page > 50:
+                # Safety bound: 5,000 reviews. Past that, something is wrong
+                # upstream and we should not infinite-loop.
+                break
+        return all_reviews
 
     async def request_pull_request_reviewers(
         self,
