@@ -14,7 +14,9 @@ slug = "iterwheel-blueprint"
 app_id = 1234567                                            # int, REQUIRED
 private_key_path = "~/.secrets/iterwheel-blueprint.pem"   # string, REQUIRED. Tilde expanded.
 installation_id = "55544433"                               # optional default install id
-webhook_secret_env = "GITHUB_WEBHOOK_SECRET_BP"            # optional; derived from slug if absent
+# webhook secret env var name is derived from slug:
+#   GITHUB_WEBHOOK_SECRET_ITERWHEEL_BLUEPRINT
+# Set that env var separately (not in this file — secrets stay in env).
 
 [apps.installations]
 "iterwheel/voyager-sandbox" = "55544433"   # optional per-repo overrides
@@ -23,4 +25,4 @@ webhook_secret_env = "GITHUB_WEBHOOK_SECRET_BP"            # optional; derived f
 slug = "iterwheel-stack"
 app_id = 7654321
 private_key_path = "~/.secrets/iterwheel-stack.pem"
-# webhook_secret_env defaults to GITHUB_WEBHOOK_SECRET_ITERWHEEL_STACK
+# webhook secret env: GITHUB_WEBHOOK_SECRET_ITERWHEEL_STACK

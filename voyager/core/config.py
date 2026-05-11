@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -23,12 +23,15 @@ class AppConfig:
     private_key_path: Path
     installation_id: str
     installations: dict[str, str]
-    _webhook_secret_env: str = field(default="", compare=False)
 
     @property
     def webhook_secret_env(self) -> str:
-        if self._webhook_secret_env:
-            return self._webhook_secret_env
+        """Convention-only env var name derived from the slug.
+
+        e.g. slug "iterwheel-blueprint" -> "GITHUB_WEBHOOK_SECRET_ITERWHEEL_BLUEPRINT".
+        Not overridable from TOML; if a future use case needs a custom env name,
+        add the override field back as a backward-compatible addition.
+        """
         normalized = self.slug.upper().replace("-", "_")
         return f"GITHUB_WEBHOOK_SECRET_{normalized}"
 
@@ -62,7 +65,6 @@ def _parse_app(item: dict[str, Any]) -> AppConfig:
 
     installation_id = str(item.get("installation_id", ""))
     installations = {k: str(v) for k, v in (item.get("installations") or {}).items()}
-    webhook_secret_env = item.get("webhook_secret_env", "")
 
     return AppConfig(
         slug=slug,
@@ -70,7 +72,6 @@ def _parse_app(item: dict[str, Any]) -> AppConfig:
         private_key_path=private_key_path,
         installation_id=installation_id,
         installations=installations,
-        _webhook_secret_env=webhook_secret_env,
     )
 
 

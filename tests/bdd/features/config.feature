@@ -26,7 +26,7 @@ Feature: TOML config loader
     When the config is loaded
     Then the "iterwheel-blueprint" app private_key_path does not start with "~"
 
-  Scenario: webhook_secret_env defaults to derived name when absent
+  Scenario: webhook_secret_env is derived from slug name (convention-only)
     Given the TOML config file "default_webhook_secret.toml"
     When the config is loaded
     Then the "iterwheel-blueprint" app webhook_secret_env is "GITHUB_WEBHOOK_SECRET_ITERWHEEL_BLUEPRINT"
