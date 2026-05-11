@@ -54,6 +54,7 @@ class _StubGitHubAppClient:
             "number": PR,
         }
         self.fail_pull_request: bool = False
+        self.fail_resolve: bool = False
         self.resolve_calls: list[tuple[str, str]] = []
         self.create_comment_calls: list[tuple[str, str, int, str]] = []
         self.review_thread_reply_calls: list[tuple[str, str, int, int, str]] = []
@@ -97,6 +98,10 @@ class _StubGitHubAppClient:
         self, app_slug: str, repository: str, thread_id: str
     ) -> dict[str, Any]:
         self.resolve_calls.append((repository, thread_id))
+        if self.fail_resolve:
+            import httpx
+
+            raise httpx.HTTPError("simulated resolveReviewThread mutation failure")
         return self.resolve_response
 
     async def graphql(
@@ -264,6 +269,11 @@ def given_pr_fetch_fails(ctx) -> None:
     ctx["client"].fail_pull_request = True
 
 
+@given("the stub GitHubAppClient fails on the resolveReviewThread mutation")
+def given_resolve_fails(ctx) -> None:
+    ctx["client"].fail_resolve = True
+
+
 # ---------------------------------------------------------------------------
 # When — pipeline invocations
 # ---------------------------------------------------------------------------
@@ -384,6 +394,13 @@ def then_n_inline_replies(ctx, count: int) -> None:
 def then_no_inline_reply(ctx) -> None:
     assert ctx["client"].review_thread_reply_calls == [], (
         f"unexpected in-thread reply calls: {ctx['client'].review_thread_reply_calls}"
+    )
+
+
+@then("the pipeline raised an exception")
+def then_pipeline_raised(ctx) -> None:
+    assert ctx["raised"] is not None, (
+        f"expected pipeline to raise; got automation={ctx.get('automation')!r}"
     )
 
 

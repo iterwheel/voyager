@@ -51,6 +51,14 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     Then the sync actions count is 1
     And no in-thread reply was posted
 
+  Scenario: resolveReviewThread mutation failure suppresses the in-thread reply (Codex PR #9 P2 fix)
+    Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with substantive author reply and isResolved false
+    And the stub GitHubAppClient fails on the resolveReviewThread mutation
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the pipeline raised an exception
+    And exactly 1 resolveReviewThread mutation was invoked
+    And no in-thread reply was posted
+
   Scenario: State C thread with non-substantive reply produces OPEN → blocked
     Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with a short ack reply and isResolved false
     When compute_clearance_automation runs with DRY_RUN true
