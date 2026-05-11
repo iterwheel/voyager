@@ -70,6 +70,8 @@ def should_run_clearance(event: str, payload: dict[str, Any]) -> bool:
         return True
     if event == "pull_request_review" and action in PULL_REQUEST_REVIEW_ACTIONS:
         return True
+    if event == "pull_request_review_comment" and action == "created":
+        return True
     if event == "issue_comment" and action == "created":
         issue = payload.get("issue") or {}
         body = str((payload.get("comment") or {}).get("body") or "")
@@ -109,7 +111,7 @@ def check_targets_from_payload(
 
 
 def clearance_targets_from_payload(event: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
-    if event in {"pull_request", "pull_request_review"}:
+    if event in {"pull_request", "pull_request_review", "pull_request_review_comment"}:
         pull_request = dict(payload.get("pull_request") or {})
         if not pull_request:
             return []
