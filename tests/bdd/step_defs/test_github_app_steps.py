@@ -300,7 +300,7 @@ def prefetch_token(state: ClientState) -> None:
 
     responses: list[httpx.Response] = getattr(state, "_mock_responses", [_token_response()])
     state.client = _build_client(state, responses)
-    asyncio.get_event_loop().run_until_complete(state.client.installation_token("test-bot"))
+    asyncio.run(state.client.installation_token("test-bot"))
 
 
 @given("an installation token with near-expiry has been fetched")
@@ -309,7 +309,7 @@ def prefetch_expiring_token(state: ClientState) -> None:
 
     responses = getattr(state, "_mock_responses", [_expiring_token_response(), _token_response()])
     state.client = _build_client(state, responses)
-    asyncio.get_event_loop().run_until_complete(state.client.installation_token("test-bot"))
+    asyncio.run(state.client.installation_token("test-bot"))
 
 
 @given("GitHub returns a generic 200 JSON response")
@@ -427,9 +427,7 @@ def prefetch_token_for_repo(state: ClientState) -> None:
 
     responses = getattr(state, "_mock_responses", [_discovery_response(), _token_response()])
     state.client = _build_client(state, responses)
-    asyncio.get_event_loop().run_until_complete(
-        state.client.installation_token("test-bot", repository="test-org/new-repo")
-    )
+    asyncio.run(state.client.installation_token("test-bot", repository="test-org/new-repo"))
     state.captured_requests.clear()
 
 
@@ -486,9 +484,7 @@ def request_token(state: ClientState) -> None:
     responses = getattr(state, "_mock_responses", [_token_response()])
     state.client = _build_client(state, responses)
     try:
-        state.result = asyncio.get_event_loop().run_until_complete(
-            state.client.installation_token("test-bot")
-        )
+        state.result = asyncio.run(state.client.installation_token("test-bot"))
     except Exception as exc:
         state.raised = exc
 
@@ -498,9 +494,7 @@ def request_token_again(state: ClientState) -> None:
     import asyncio
 
     try:
-        state.result = asyncio.get_event_loop().run_until_complete(
-            state.client.installation_token("test-bot")
-        )
+        state.result = asyncio.run(state.client.installation_token("test-bot"))
     except Exception as exc:
         state.raised = exc
 
@@ -512,9 +506,7 @@ def request_token_for_repo(state: ClientState, repo: str) -> None:
     responses = getattr(state, "_mock_responses", [_token_response()])
     state.client = _build_client(state, responses)
     try:
-        state.result = asyncio.get_event_loop().run_until_complete(
-            state.client.installation_token("test-bot", repository=repo)
-        )
+        state.result = asyncio.run(state.client.installation_token("test-bot", repository=repo))
     except Exception as exc:
         state.raised = exc
 
@@ -527,7 +519,7 @@ def request_token_no_repo(state: ClientState) -> None:
 
     client = GitHubAppClient(state.apps)
     try:
-        asyncio.get_event_loop().run_until_complete(client.installation_token("test-bot"))
+        asyncio.run(client.installation_token("test-bot"))
     except RuntimeError as exc:
         state.raised = exc
 
@@ -539,9 +531,7 @@ def request_token_no_configured_id_for_repo(state: ClientState, repo: str) -> No
     responses = getattr(state, "_mock_responses", [httpx.Response(404)])
     state.client = _build_client(state, responses)
     try:
-        asyncio.get_event_loop().run_until_complete(
-            state.client.installation_token("test-bot", repository=repo)
-        )
+        asyncio.run(state.client.installation_token("test-bot", repository=repo))
     except RuntimeError as exc:
         state.raised = exc
 
@@ -576,7 +566,7 @@ def request_token_for_app(state: ClientState, app_slug: str) -> None:
             return httpx.AsyncClient(transport=transport, timeout=15)
 
     client = _PatchedClient(state.apps)
-    asyncio.get_event_loop().run_until_complete(client.installation_token(app_slug))
+    asyncio.run(client.installation_token(app_slug))
     # Decode the JWT that was sent so we can assert its iss claim
     if captured_jwts:
         decoded = pyjwt.decode(
@@ -592,7 +582,7 @@ def request_token_again_for_repo(state: ClientState) -> None:
     import asyncio
 
     try:
-        state.result = asyncio.get_event_loop().run_until_complete(
+        state.result = asyncio.run(
             state.client.installation_token("test-bot", repository="test-org/new-repo")
         )
     except Exception as exc:
@@ -611,7 +601,7 @@ def make_get_request(state: ClientState, path: str) -> None:
     responses = getattr(state, "_mock_responses", [_token_response()])
     state.client = _build_client(state, responses)
     try:
-        state.result = asyncio.get_event_loop().run_until_complete(
+        state.result = asyncio.run(
             state.client.request("test-bot", "GET", path, repository="test-org/my-repo")
         )
     except Exception as exc:
@@ -625,7 +615,7 @@ def make_delete_request(state: ClientState, path: str) -> None:
     responses = getattr(state, "_mock_responses", [_token_response()])
     state.client = _build_client(state, responses)
     try:
-        state.result = asyncio.get_event_loop().run_until_complete(
+        state.result = asyncio.run(
             state.client.request("test-bot", "DELETE", path, repository="test-org/my-repo")
         )
     except Exception as exc:
@@ -639,7 +629,7 @@ def execute_graphql(state: ClientState) -> None:
     responses = getattr(state, "_mock_responses", [_token_response()])
     state.client = _build_client(state, responses)
     try:
-        state.result = asyncio.get_event_loop().run_until_complete(
+        state.result = asyncio.run(
             state.client.graphql(
                 "test-bot",
                 "test-org/my-repo",
@@ -801,9 +791,7 @@ def call_pull_request_reviews(state: ClientState, repo: str, pr_number: int) -> 
 
     responses = getattr(state, "_mock_responses", [])
     state.client = _build_client(state, responses)
-    return asyncio.get_event_loop().run_until_complete(
-        state.client.pull_request_reviews("test-bot", repo, pr_number)
-    )
+    return asyncio.run(state.client.pull_request_reviews("test-bot", repo, pr_number))
 
 
 @then(parsers.parse("pull_request_reviews returned {expected:d} items"))
@@ -851,9 +839,7 @@ def call_issue_comments(state: ClientState, repo: str, issue_number: int) -> lis
 
     responses = getattr(state, "_mock_responses", [])
     state.client = _build_client(state, responses)
-    return asyncio.get_event_loop().run_until_complete(
-        state.client.issue_comments("test-bot", repo, issue_number)
-    )
+    return asyncio.run(state.client.issue_comments("test-bot", repo, issue_number))
 
 
 @then(parsers.parse("issue_comments returned {expected:d} items"))

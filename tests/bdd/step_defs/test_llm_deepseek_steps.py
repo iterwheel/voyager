@@ -246,7 +246,17 @@ def mock_malformed_json(state: DSState) -> None:
 
 
 def _run(coro: Any) -> Any:
-    return asyncio.get_event_loop().run_until_complete(coro)
+    """Drive an async coroutine from a sync pytest-bdd step.
+
+    ``asyncio.run`` is the documented replacement for the deprecated
+    ``asyncio.get_event_loop().run_until_complete(...)`` pattern. The latter
+    leaks event-loop state across tests in Python 3.14 — a previous
+    ``asyncio.run`` closes the thread's loop, then ``get_event_loop()`` in a
+    subsequent test returns the closed loop and ``run_until_complete`` errors
+    with "Event loop is closed". GLM-5.1 H4 review flag, expanded to every
+    step-def helper that drives async code.
+    """
+    return asyncio.run(coro)
 
 
 @when(parsers.parse('complete is called with a user message "{text}"'))

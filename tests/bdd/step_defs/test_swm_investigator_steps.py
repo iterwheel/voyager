@@ -283,10 +283,18 @@ def investigation_input_state_c():
 
 @when("DeepSeekInvestigator.investigate is awaited", target_fixture="inv_result")
 def call_investigate(investigator, inv_input):
+    """Drive the async investigator from a sync pytest-bdd step.
+
+    Use ``asyncio.run`` rather than ``asyncio.get_event_loop().run_until_complete``
+    — the latter has been deprecated since Python 3.10 and is being removed
+    in 3.14 (project target). ``asyncio.run`` creates and tears down a fresh
+    event loop per call, which is exactly what we want for an isolated test
+    step. GLM-5.1 H4 review flag.
+    """
     from voyager.bots.clearance.investigator import InvestigationError
 
     try:
-        result = asyncio.get_event_loop().run_until_complete(investigator.investigate(inv_input))
+        result = asyncio.run(investigator.investigate(inv_input))
         return {"decision": result}
     except InvestigationError as e:
         return {"error": e}

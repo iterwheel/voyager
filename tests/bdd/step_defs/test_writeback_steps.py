@@ -312,7 +312,7 @@ def when_apply_writeback(state: WritebackState, repository: str) -> WritebackSta
     old = os.environ.get("DRY_RUN")
     os.environ["DRY_RUN"] = state.dry_run_env
     try:
-        state.result = asyncio.get_event_loop().run_until_complete(
+        state.result = asyncio.run(
             apply_route_writeback(state.client, state.route, repository=repository)
         )
     finally:
@@ -332,7 +332,7 @@ def when_apply_writeback_none_repo(state: WritebackState) -> WritebackState:
     old = os.environ.get("DRY_RUN")
     os.environ["DRY_RUN"] = state.dry_run_env
     try:
-        state.result = asyncio.get_event_loop().run_until_complete(
+        state.result = asyncio.run(
             apply_route_writeback(state.client, state.route, repository=None)
         )
     finally:
@@ -416,7 +416,7 @@ def when_dispatch_writeback(state: WritebackState, repository: str) -> Writeback
     old = os.environ.get("DRY_RUN")
     os.environ["DRY_RUN"] = state.dry_run_env
     try:
-        state.result = asyncio.get_event_loop().run_until_complete(
+        state.result = asyncio.run(
             dispatch_route_writeback(state.client, state.route, repository=repository)
         )
     finally:
@@ -436,7 +436,7 @@ def when_dispatch_writeback_none_repo(state: WritebackState) -> WritebackState:
     old = os.environ.get("DRY_RUN")
     os.environ["DRY_RUN"] = state.dry_run_env
     try:
-        state.result = asyncio.get_event_loop().run_until_complete(
+        state.result = asyncio.run(
             dispatch_route_writeback(state.client, state.route, repository=None)
         )
     finally:
