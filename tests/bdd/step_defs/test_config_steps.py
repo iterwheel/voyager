@@ -57,6 +57,14 @@ def given_nonexistent_path(path: str) -> dict[str, Any]:
     return {"config_path": Path(path), "env_path": None, "config": None, "raised": None}
 
 
+@given(
+    parsers.parse('VOYAGER_CONFIG_PATH is set to nonexistent path "{path}"'),
+    target_fixture="state",
+)
+def given_env_nonexistent(path: str) -> dict[str, Any]:
+    return {"config_path": None, "env_path": path, "config": None, "raised": None}
+
+
 # ---------------------------------------------------------------------------
 # When
 # ---------------------------------------------------------------------------
@@ -89,6 +97,26 @@ def when_load_config_attempt(state: dict[str, Any]) -> dict[str, Any]:
         state["config"] = load_config(state["config_path"])
     except (ValueError, FileNotFoundError) as exc:
         state["raised"] = exc
+    return state
+
+
+@when("the config load is attempted via the env override", target_fixture="state")
+def when_load_config_attempt_env(state: dict[str, Any]) -> dict[str, Any]:
+    from voyager.core.config import load_config  # lazy
+
+    old = os.environ.get("VOYAGER_CONFIG_PATH")
+    if state.get("env_path"):
+        os.environ["VOYAGER_CONFIG_PATH"] = state["env_path"]
+    try:
+        try:
+            state["config"] = load_config()
+        except (ValueError, FileNotFoundError) as exc:
+            state["raised"] = exc
+    finally:
+        if old is None:
+            os.environ.pop("VOYAGER_CONFIG_PATH", None)
+        else:
+            os.environ["VOYAGER_CONFIG_PATH"] = old
     return state
 
 
@@ -140,6 +168,13 @@ def then_file_not_found(state: dict[str, Any]) -> None:
     assert isinstance(exc, FileNotFoundError), (
         f"Expected FileNotFoundError, got {type(exc).__name__}: {exc}"
     )
+
+
+@then(parsers.parse('the error message mentions "{text}"'))
+def then_error_mentions(state: dict[str, Any], text: str) -> None:
+    exc = state["raised"]
+    assert exc is not None, "No exception was raised"
+    assert text in str(exc), f"Expected {text!r} in error message: {exc}"
 
 
 @then(parsers.parse('the "{slug}" app private_key_path does not start with "~"'))

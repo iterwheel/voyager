@@ -8,8 +8,7 @@ from typing import Any
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 
-_SEARCH_ORDER = [
-    lambda: os.environ.get("VOYAGER_CONFIG_PATH"),
+_DEFAULT_SEARCH_ORDER = [
     lambda: str(Path.home() / ".voyager" / "config.toml"),
     lambda: str(Path.cwd() / "voyager.toml"),
     lambda: "/etc/voyager/config.toml",
@@ -77,21 +76,29 @@ def _parse_app(item: dict[str, Any]) -> AppConfig:
 
 def load_config(path: str | Path | None = None) -> VoyagerConfig:
     if path is None:
-        for candidate_fn in _SEARCH_ORDER:
-            candidate = candidate_fn()
-            if candidate and Path(candidate).exists():
-                path = Path(candidate)
-                break
-        if path is None:
-            # Use first non-env candidate that is not None for the error message
-            env_val = os.environ.get("VOYAGER_CONFIG_PATH")
-            if env_val:
-                raise FileNotFoundError(f"VOYAGER_CONFIG_PATH is set but file not found: {env_val}")
-            raise FileNotFoundError(
-                "No voyager config file found. Searched: "
-                + str(Path.home() / ".voyager" / "config.toml")
-                + ", ./voyager.toml, /etc/voyager/config.toml"
-            )
+        env_path = os.environ.get("VOYAGER_CONFIG_PATH")
+        if env_path:
+            # Explicit override — fail fast if it doesn't exist. Codex round 2 P2
+            # (PR #7): silently falling back to the default search order on a
+            # missing override masks operator typos and risks loading a stale
+            # config with different GitHub App IDs / private keys.
+            path = Path(env_path)
+            if not path.exists():
+                raise FileNotFoundError(
+                    f"VOYAGER_CONFIG_PATH is set but file not found: {env_path}"
+                )
+        else:
+            for candidate_fn in _DEFAULT_SEARCH_ORDER:
+                candidate = candidate_fn()
+                if candidate and Path(candidate).exists():
+                    path = Path(candidate)
+                    break
+            if path is None:
+                raise FileNotFoundError(
+                    "No voyager config file found. Searched: "
+                    + str(Path.home() / ".voyager" / "config.toml")
+                    + ", ./voyager.toml, /etc/voyager/config.toml"
+                )
 
     path = Path(path)
     if not path.exists():

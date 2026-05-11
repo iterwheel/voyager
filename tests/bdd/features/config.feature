@@ -45,3 +45,9 @@ Feature: TOML config loader
     Given a nonexistent config path "/tmp/voyager_nonexistent_xyz.toml"
     When the config load is attempted
     Then a FileNotFoundError is raised
+
+  Scenario: VOYAGER_CONFIG_PATH set to a nonexistent path fails fast (no fallback) (Codex round 2 P2)
+    Given VOYAGER_CONFIG_PATH is set to nonexistent path "/tmp/voyager_typo_xyz.toml"
+    When the config load is attempted via the env override
+    Then a FileNotFoundError is raised
+    And the error message mentions "VOYAGER_CONFIG_PATH"
