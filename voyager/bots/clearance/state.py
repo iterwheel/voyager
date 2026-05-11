@@ -37,7 +37,7 @@ def now_utc() -> datetime:
 def _atomic_append_jsonl(path: Path, line: str) -> None:
     """Append one JSONL line under an advisory exclusive lock, fsynced before close.
 
-    Guards two failure modes the bare ``with path.open("a") as f: f.write(...)``
+    Guards three failure modes the bare ``with path.open("a") as f: f.write(...)``
     pattern doesn't cover:
 
     - **Interleaving** — concurrent appenders (webhook background task + poller
@@ -49,15 +49,36 @@ def _atomic_append_jsonl(path: Path, line: str) -> None:
     - **Durability** — a crash between ``write()`` and ``close()`` leaves the
       new line in the kernel page cache. ``fsync`` forces it to disk so a
       restart sees either the full line or none.
+    - **Tail recovery** — if a previous appender crashed after writing some
+      bytes but before writing the trailing ``\\n`` (and before fsync flushed
+      it), the file's last byte is now part of a corrupt half-record. A naive
+      append would concatenate the new payload onto the corrupt tail, merging
+      two records into one invalid line — ``_read_jsonl`` would then reject
+      the whole merged line, silently dropping the new record. Probe the tail
+      after taking the lock; if the last byte isn't ``\\n``, prepend a newline
+      to the payload so the new record starts on a fresh line and the corrupt
+      tail is isolated as a malformed line that ``_read_jsonl`` skips.
 
     The lock is advisory (mandatory locking isn't portable). Every cross-process
-    appender must call this helper or the guarantees break.
+    appender must call this helper or the guarantees break. POSIX only — on
+    Windows this module fails to import because ``fcntl`` is unavailable; the
+    deployment targets are Linux and macOS.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
+    payload = line + "\n"
     with path.open("a") as f:
         fcntl.flock(f.fileno(), fcntl.LOCK_EX)
         try:
-            f.write(line + "\n")
+            size = os.fstat(f.fileno()).st_size
+            if size > 0:
+                # O_APPEND seeks to end on every write, but reading the last
+                # byte needs a separate fd: read-mode at the same path.
+                with path.open("rb") as r:
+                    r.seek(size - 1)
+                    last = r.read(1)
+                if last != b"\n":
+                    payload = "\n" + payload
+            f.write(payload)
             f.flush()
             os.fsync(f.fileno())
         finally:
@@ -92,7 +113,6 @@ class StateStore:
 
     def __init__(self, directory: Path) -> None:
         self.directory = Path(directory)
-        self.notifications_log = self.directory / "notifications.jsonl"
 
     # --- path helpers ---------------------------------------------------------
 

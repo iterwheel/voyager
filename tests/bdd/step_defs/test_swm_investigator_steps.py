@@ -119,6 +119,41 @@ def raw_text_with_brace_pair_preamble() -> str:
     )
 
 
+@given(
+    'raw text where reasoning quotes the author saying "I fixed it." before the verdict JSON',
+    target_fixture="raw_text",
+)
+def raw_text_with_stray_quote_preamble() -> str:
+    """Round-2 regression: a stray double-quote in preamble used to flip the
+    walker into in_string=True forever, silently swallowing the real JSON.
+    """
+    return (
+        'The author said "I fixed it." Here is the verdict.\n'
+        '{"verdict":"RESOLVED","confidence":0.9,"reason":"author confirmed fix","evidence":[]}'
+    )
+
+
+@given(
+    "raw text with no fenced block but evidence containing inline backticks",
+    target_fixture="raw_text",
+)
+def raw_text_with_inline_backticks() -> str:
+    """Round-2 regression (DeepSeek): the fence-strip step ran first and would
+    mangle valid JSON whose evidence string contained literal backticks. The
+    new order tries direct json.loads first, so this round-trips intact.
+    """
+    return (
+        '{"verdict":"RESOLVED","confidence":0.9,"reason":"diff removes logging",'
+        '"evidence":["`print(token)` removed from app.py"]}'
+    )
+
+
+@then(parsers.parse('the extracted dict has evidence containing "{token}"'))
+def extracted_evidence_contains(extracted: dict, token: str) -> None:
+    evidence = extracted.get("evidence") or []
+    assert any(token in item for item in evidence), f"{token!r} not in evidence: {evidence!r}"
+
+
 @when("_extract_json_object is called", target_fixture="extracted")
 def call_extract_json_object(raw_text: str) -> dict:
     from voyager.bots.clearance.investigator import _extract_json_object

@@ -464,10 +464,12 @@ def overlaid_labels_add(overlaid: dict, label: str) -> None:
     assert label in overlaid["result"]["labels"]["add"]
 
 
-@then("the overlaid evaluation confidence reasons include the SWM reason")
-def overlaid_reasons_include_swm(overlaid: dict) -> None:
+@then("the overlaid evaluation confidence reasons include the automation engine reason")
+def overlaid_reasons_include_automation(overlaid: dict) -> None:
     reasons = overlaid["result"]["confidence"]["reasons"]
-    assert any("SWM Clearance engine" in r for r in reasons), f"SWM reason not found: {reasons}"
+    assert any("Clearance automation engine" in r for r in reasons), (
+        f"automation engine reason not found: {reasons}"
+    )
 
 
 @then(parsers.parse('the overlaid evaluation confidence reasons include "{text}"'))

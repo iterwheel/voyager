@@ -318,7 +318,7 @@ Feature: Clearance bot — PR review readiness verification and routing
     And the overlaid evaluation reactions add "eyes"
     And the overlaid evaluation reactions remove "+1"
     And the overlaid evaluation labels add "clearance-pending"
-    And the overlaid evaluation confidence reasons include the SWM reason
+    And the overlaid evaluation confidence reasons include the automation engine reason
 
   Scenario: apply_swm_overlay with status blocked downgrades to clearance_blocked
     Given a ready evaluation and automation with status "blocked" and enabled true

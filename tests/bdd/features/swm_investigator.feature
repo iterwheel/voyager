@@ -28,6 +28,17 @@ Feature: SWM investigator — DeepSeek-backed thread verdict investigation
     When _extract_json_object is called
     Then the extracted dict has verdict "RESOLVED"
 
+  Scenario: Extract JSON from reasoning preamble that contains a stray double-quote
+    Given raw text where reasoning quotes the author saying "I fixed it." before the verdict JSON
+    When _extract_json_object is called
+    Then the extracted dict has verdict "RESOLVED"
+
+  Scenario: Extract JSON whose evidence string contains literal backticks
+    Given raw text with no fenced block but evidence containing inline backticks
+    When _extract_json_object is called
+    Then the extracted dict has verdict "RESOLVED"
+    And the extracted dict has evidence containing "`print(token)`"
+
   # ---------------------------------------------------------------------------
   # _coerce_decision helper
   # ---------------------------------------------------------------------------

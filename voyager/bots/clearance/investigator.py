@@ -32,6 +32,9 @@ _log = logging.getLogger(__name__)
 # warn when the factory builds an investigator targeting it. DeepSeek M3
 # review flag — the confidence threshold was tuned against Pro.
 _KNOWN_PRO_MODELS = frozenset({"deepseek-v4-pro", "deepseek-reasoner"})
+# Recognized Flash-tier models. When the operator picks one of these we know
+# it's intentional; when they pick something *else* we surface a stronger
+# "unknown model" warning in build_investigator_from_env.
 _KNOWN_FLASH_MODELS = frozenset({"deepseek-v4-flash", "deepseek-chat"})
 
 InvestigatorVerdict = Literal["RESOLVED", "OPEN", "NEEDS_HUMAN_JUDGMENT"]
@@ -55,6 +58,18 @@ class ThreadInvestigationInput:
 
 @dataclass(frozen=True)
 class InvestigationDecision:
+    """Coerced verdict the investigator returns to its caller.
+
+    ``raw_text`` preserves the **model's** original output (post-coercion is
+    not reflected). When V4 thinking mode produced ``reasoning_content``, it
+    is appended after the content as ``content\\n\\n--- reasoning ---\\n…`` so
+    downstream auditors can replay the model's chain-of-thought against
+    the final ``verdict`` / ``confidence`` / ``reason`` fields, which may
+    have been downgraded by ``_coerce_decision`` (e.g., RESOLVED below the
+    min_confidence threshold becomes NEEDS_HUMAN_JUDGMENT but ``raw_text``
+    still shows RESOLVED). DeepSeek N3 round-2 review flag.
+    """
+
     verdict: InvestigatorVerdict
     confidence: float
     reason: str
@@ -102,6 +117,13 @@ def _iter_balanced_objects(text: str) -> Iterator[str]:
     ``re.search(r"\\{.*\\}", text, re.S)`` matcher — that pattern would
     match from the first ``{`` to the *last* ``}`` and produce a single
     invalid union of any pair of objects (DeepSeek H1 review flag).
+
+    String-state is only tracked **inside** a ``{...}`` region (``depth > 0``).
+    A bare quote in reasoning preamble (e.g., ``The author said "I fixed it.``)
+    used to flip ``in_string=True`` and never flip back, leaving subsequent
+    braces at the wrong depth and silently swallowing the real verdict object —
+    MiniMax M2.7 N2 + GLM-5.1 §3 round-2 review flagged it as a regression
+    against the prior greedy matcher.
     """
     depth = 0
     start = -1
@@ -116,7 +138,7 @@ def _iter_balanced_objects(text: str) -> Iterator[str]:
             elif ch == '"':
                 in_string = False
             continue
-        if ch == '"':
+        if depth > 0 and ch == '"':
             in_string = True
             continue
         if ch == "{":
@@ -135,28 +157,40 @@ def _iter_balanced_objects(text: str) -> Iterator[str]:
 def _extract_json_object(text: str) -> dict:
     """Extract one JSON object from a possibly-noisy LLM response.
 
-    Strategy:
-      1. Strip fenced code blocks anywhere in the text.
-      2. Try direct ``json.loads`` on the result.
+    Strategy, in order of decreasing assumption:
+      1. Try ``json.loads`` directly on the *un-stripped* text. A model that
+         emitted exactly one JSON object — including ``"evidence":["``code``"]``
+         strings whose values contain literal backticks — parses cleanly and
+         the fence-strip step never runs. DeepSeek N2 round-2 review flag.
+      2. On failure, strip fenced code blocks anywhere and retry ``json.loads``.
+         The fenced-block stripper uses non-greedy matching so two adjacent
+         fenced blocks are not collapsed across.
       3. On failure, walk every top-level balanced ``{...}`` in document
-         order and return the first one that parses as valid JSON. This
-         tolerates both a reasoning preamble containing brace-not-JSON
-         fragments (e.g., ``{a:1, b:2}``) and multi-object outputs.
+         order (over the fence-stripped text) and return the first fragment
+         that parses as valid JSON. This tolerates reasoning preambles that
+         contain brace-not-JSON fragments (e.g., ``{a:1, b:2}``) and
+         multi-object outputs.
 
-    The original ``JSONDecodeError`` from the direct parse is re-raised if
-    no candidate fragment parses — that error preserves the most useful
-    position information for debugging.
+    The original ``JSONDecodeError`` from the direct parse is re-raised if no
+    candidate fragment parses — it preserves the most useful position
+    information for debugging.
     """
-    stripped = _strip_fenced_block(text).strip()
+    text = text.strip()
     try:
-        return dict(json.loads(stripped))
-    except json.JSONDecodeError:
-        for fragment in _iter_balanced_objects(stripped):
+        return dict(json.loads(text))
+    except json.JSONDecodeError as primary_exc:
+        unfenced = _strip_fenced_block(text).strip()
+        if unfenced != text:
+            try:
+                return dict(json.loads(unfenced))
+            except json.JSONDecodeError:
+                pass
+        for fragment in _iter_balanced_objects(unfenced):
             try:
                 return dict(json.loads(fragment))
             except json.JSONDecodeError:
                 continue
-        raise
+        raise primary_exc from None
 
 
 def _coerce_decision(raw: dict, *, min_confidence: float, raw_text: str) -> InvestigationDecision:
@@ -318,14 +352,18 @@ def build_investigator_from_env() -> DeepSeekInvestigator | None:
     # deliberate per-deployment choice. Flash is ~4x cheaper but materially
     # weaker on multi-step semantic reasoning, and the 0.78 min_confidence
     # threshold was calibrated against Pro. Warn loudly when a non-Pro model
-    # is wired up via env so the operator notices in logs.
+    # is wired up via env so the operator notices in logs. The Flash allowlist
+    # lets us tailor the warning: "this is a known Flash, did you mean it?"
+    # vs "we don't recognize this model at all".
     if model not in _KNOWN_PRO_MODELS:
+        tier = "Flash-tier" if model in _KNOWN_FLASH_MODELS else "unrecognized"
         _log.warning(
-            "investigator: VOYAGER_INVESTIGATOR_MODEL=%r is not a known Pro model "
-            "(known Pro: %s). Flash-tier models are weaker at multi-step semantic "
-            "reasoning and the min_confidence=%.2f threshold was tuned against Pro. "
+            "investigator: VOYAGER_INVESTIGATOR_MODEL=%r is a %s model "
+            "(known Pro: %s). The min_confidence=%.2f threshold was tuned against "
+            "Pro, so verdicts may bypass the gate with lower-quality reasoning. "
             "Re-evaluate the threshold or pin to a Pro model.",
             model,
+            tier,
             ", ".join(sorted(_KNOWN_PRO_MODELS)),
             min_confidence,
         )

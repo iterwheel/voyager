@@ -587,3 +587,26 @@ def reopened_line_validates(reopened_payload: str) -> None:
     record = PollRecord.model_validate_json(reopened_payload)
     assert record.repo == REPO
     assert record.pr == PR
+
+
+@given(
+    'polls.jsonl for "owner/repo" PR 49 ends in a corrupt half-line with no trailing newline',
+    target_fixture="corrupt_tail_setup",
+)
+def polls_corrupt_tail_no_newline(store) -> None:
+    """Simulate a crash mid-write: body bytes flushed, trailing newline lost.
+
+    Without tail recovery in _atomic_append_jsonl, the next append would
+    concatenate onto this byte stream, merging into one invalid line that
+    _read_jsonl rejects — the new record would be silently dropped.
+    """
+    polls_path = store._polls_path(REPO, PR)
+    polls_path.parent.mkdir(parents=True, exist_ok=True)
+    with polls_path.open("w") as f:
+        f.write('{"ts": "2026-05-08T12:00:00Z", "repo": "owner/repo", "pr": 49, "head_sha')
+
+
+@when("the poll is appended after the corrupt tail", target_fixture="polls_result")
+def append_after_corrupt_tail(store, corrupt_tail_setup, poll) -> list:
+    store.append_poll(poll)
+    return list(store.read_polls(repo=REPO, pr=PR))

@@ -26,8 +26,12 @@ def apply_swm_overlay(
     updated = dict(evaluation)
     confidence = dict(updated.get("confidence") or {})
     reasons = list(confidence.get("reasons") or [])
-    reason = automation.get("reason") or automation.get("error") or f"SWM status is {swm_status}."
-    reasons.append(f"SWM Clearance engine: {reason}")
+    reason = (
+        automation.get("reason")
+        or automation.get("error")
+        or f"Clearance automation status is {swm_status}."
+    )
+    reasons.append(f"Clearance automation engine: {reason}")
     confidence["reasons"] = reasons
     updated["confidence"] = confidence
 
@@ -35,12 +39,12 @@ def apply_swm_overlay(
         label = CLEARANCE_BLOCKED_LABEL
         updated["status"] = "clearance_blocked"
         updated["conclusion"] = "failure"
-        updated["summary"] = "Clearance is blocked by the SWM engine."
+        updated["summary"] = "Clearance is blocked by the automation engine."
     else:
         label = CLEARANCE_PENDING_LABEL
         updated["status"] = "clearance_pending"
         updated["conclusion"] = "neutral"
-        updated["summary"] = "Clearance is waiting on the SWM engine."
+        updated["summary"] = "Clearance is waiting on the automation engine."
 
     updated["labels"] = {
         "add": [label],
