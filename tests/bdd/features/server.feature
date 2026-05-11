@@ -149,14 +149,14 @@ Feature: Webhook server — HTTP entry point for GitHub events
     Given a signed webhook payload "server_unknown_event" for event "release" with delivery "abc-041"
     When the webhook is POSTed
     Then the response status is 200
-    And the response body "writebacks" field has "status" equal to string "stub"
+    And the response body "writebacks" field has "status" equal to string "queued"
     And the response body "writebacks" field has "scheduled" equal to integer 0
 
-  Scenario: Accepted webhook with routes reports stub writebacks with scheduled count
+  Scenario: Accepted webhook with routes reports queued writebacks with scheduled count
     Given a signed webhook payload "server_issues_opened" for event "issues" with delivery "abc-042"
     When the webhook is POSTed
     Then the response status is 200
-    And the response body "writebacks" field has "status" equal to string "stub"
+    And the response body "writebacks" field has "status" equal to string "queued"
     And the response body "writebacks" field has "scheduled" greater than 0
 
   # ---------------------------------------------------------------------------

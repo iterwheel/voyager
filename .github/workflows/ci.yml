@@ -69,6 +69,11 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
+      # The setup-python runner ships pip 26.0.1, which pip-audit flags
+      # (CVE-2026-3219, CVE-2026-6357 — fixed in pip 26.1+). Upgrade pip
+      # before installing project deps so the audit step doesn't fail on
+      # vulnerabilities in the audit tooling itself.
+      - run: python -m pip install --upgrade pip
       - run: pip install -e ".[dev]"
       - name: bandit (static security analysis)
         run: bandit -c pyproject.toml -r voyager
