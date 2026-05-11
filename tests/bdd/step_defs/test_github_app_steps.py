@@ -821,3 +821,57 @@ def reviews_endpoint_call_count(state: ClientState, expected: int) -> None:
     assert actual == expected, (
         f"reviews endpoint called {actual} times, expected {expected}: {urls}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Given / When / Then — Codex round 5 P2: issue_comments pagination
+# ---------------------------------------------------------------------------
+
+
+@given("GitHub returns 2 pages of issue comments with 100 then 30 items")
+def mock_paginated_issue_comments(state: ClientState) -> None:
+    page1 = [
+        {"id": i, "body": f"comment-{i}", "user": {"login": "alice"}}
+        for i in range(100)
+    ]
+    page2 = [
+        {"id": 100 + i, "body": f"comment-{100 + i}", "user": {"login": "bob"}}
+        for i in range(30)
+    ]
+    existing = getattr(state, "_mock_responses", [])
+    state._mock_responses = [  # type: ignore[attr-defined]
+        *existing,
+        _json_list_response(200, page1),
+        _json_list_response(200, page2),
+    ]
+
+
+@when(
+    parsers.parse('issue_comments is called for "{repo}" issue {issue_number:d}'),
+    target_fixture="comments_result",
+)
+def call_issue_comments(state: ClientState, repo: str, issue_number: int) -> list[dict]:
+    import asyncio
+
+    responses = getattr(state, "_mock_responses", [])
+    state.client = _build_client(state, responses)
+    return asyncio.get_event_loop().run_until_complete(
+        state.client.issue_comments("test-bot", repo, issue_number)
+    )
+
+
+@then(parsers.parse("issue_comments returned {expected:d} items"))
+def comments_returned_count(comments_result: list, expected: int) -> None:
+    assert len(comments_result) == expected, (
+        f"issue_comments returned {len(comments_result)} items, expected {expected}"
+    )
+
+
+@then(parsers.parse("the comments endpoint was called {expected:d} times"))
+def comments_endpoint_call_count(state: ClientState, expected: int) -> None:
+    comment_calls = [r for r in state.captured_requests if "/comments" in str(r.url)]
+    actual = len(comment_calls)
+    urls = [str(r.url) for r in comment_calls]
+    assert actual == expected, (
+        f"comments endpoint called {actual} times, expected {expected}: {urls}"
+    )

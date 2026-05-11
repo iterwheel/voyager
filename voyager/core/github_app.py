@@ -366,14 +366,33 @@ class GitHubAppClient:
     async def issue_comments(
         self, app_slug: str, repo: str, issue_number: int
     ) -> list[dict[str, Any]]:
+        """Fetch ALL issue/PR comments, paginating beyond the first 100 records.
+
+        Without pagination, upsert_issue_comment() searching for an existing
+        bot-marker comment on a busy issue/PR would miss markers on later
+        pages and create a duplicate comment on every Blueprint/Stack/Clearance
+        writeback. Codex round 5 P2.
+        """
         owner, name = repo.split("/", 1)
-        payload = await self.request(
-            app_slug,
-            "GET",
-            f"/repos/{owner}/{name}/issues/{issue_number}/comments?per_page=100",
-            repository=repo,
-        )
-        return list(payload or [])
+        all_comments: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            payload = await self.request(
+                app_slug,
+                "GET",
+                f"/repos/{owner}/{name}/issues/{issue_number}/comments?per_page=100&page={page}",
+                repository=repo,
+            )
+            items = list(payload or [])
+            all_comments.extend(items)
+            if len(items) < 100:
+                break
+            page += 1
+            if page > 50:
+                # Safety bound: 5,000 comments. Past that, something is
+                # wrong upstream and we should not infinite-loop.
+                break
+        return all_comments
 
     async def create_issue_comment(
         self,

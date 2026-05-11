@@ -190,3 +190,11 @@ Feature: GitHub App authentication — JWT and installation token machinery
     When pull_request_reviews is called for "test-org/my-repo" PR 42
     Then pull_request_reviews returned 150 items
     And the reviews endpoint was called 2 times
+
+  Scenario: issue_comments fetches all pages when GitHub returns >100 comments
+    Given the app has repository "test-org/my-repo" mapped to installation_id "55544433"
+    And GitHub returns a valid installation token response
+    And GitHub returns 2 pages of issue comments with 100 then 30 items
+    When issue_comments is called for "test-org/my-repo" issue 42
+    Then issue_comments returned 130 items
+    And the comments endpoint was called 2 times
