@@ -178,7 +178,17 @@ class StateStore:
         yield from sorted(self.directory.glob("*/*/pr-*/box-misses.jsonl"))
 
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+
+
 def default_store(state_dir: Path | None = None) -> StateStore:
-    """Return a StateStore at state_dir, defaulting to ``./state`` relative to cwd."""
-    directory = state_dir or Path("state")
+    """Return a StateStore at ``state_dir``, defaulting to ``<repo_root>/state``.
+
+    The default is anchored to the package install location (resolved via
+    ``__file__``) rather than the current working directory — a chdir during
+    request handling would otherwise silently scatter state across the filesystem.
+    Production should pass an explicit path from the loaded TOML config; the
+    default is for dev/test scaffolding only.
+    """
+    directory = state_dir or _REPO_ROOT / "state"
     return StateStore(directory)

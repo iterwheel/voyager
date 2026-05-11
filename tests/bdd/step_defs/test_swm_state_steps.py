@@ -22,7 +22,7 @@ def _make_poll(
     *, repo: str = REPO, pr: int = PR, status: str = "pending", head_sha: str = "abc1234"
 ):
     from voyager.bots.clearance.models import PollRecord, Status
-    from voyager.core.state import StateStore  # noqa: F401 — imported for module check
+    from voyager.bots.clearance.state import StateStore  # noqa: F401 — imported for module check
 
     return PollRecord(ts=_ts(), repo=repo, pr=pr, head_sha=head_sha, status=Status(status))
 
@@ -58,7 +58,7 @@ def _make_snapshot(
 
 @given("a temporary StateStore", target_fixture="store")
 def temp_state_store(tmp_path: Path):
-    from voyager.core.state import StateStore
+    from voyager.bots.clearance.state import StateStore
 
     return StateStore(tmp_path / "state")
 
