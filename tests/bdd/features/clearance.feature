@@ -40,10 +40,10 @@ Feature: Clearance bot — PR review readiness verification and routing
     When Clearance receives the "pull_request" event
     Then no clearance routes are produced
 
-  Scenario: pull_request_review_comment does not trigger Clearance
+  Scenario: pull_request_review_comment created triggers Clearance (Codex PR #9 P1 fix)
     Given a webhook payload "clearance_pull_request_review_comment"
     When Clearance receives the "pull_request_review_comment" event
-    Then no clearance routes are produced
+    Then exactly one clearance route is produced
 
   Scenario: check_run completed does not trigger Clearance
     Given a webhook payload "clearance_check_run_completed"
