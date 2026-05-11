@@ -1,0 +1,12 @@
+{
+  "action": "created",
+  "comment": {
+    "body": "/STACK"
+  },
+  "issue": {
+    "number": 13,
+    "title": "[Docs]: Update runbook",
+    "html_url": "https://github.test/issues/13",
+    "body": "Refresh the SOP and README documentation."
+  }
+}

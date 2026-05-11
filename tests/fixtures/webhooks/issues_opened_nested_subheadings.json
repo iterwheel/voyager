@@ -1,0 +1,9 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 85,
+    "title": "[Feature]: Add GraphQL rocket scan with Blueprint gate",
+    "html_url": "https://github.test/issues/85",
+    "body": "## Work Type\n\nFeature\n\n## Problem / Goal\n\n### Concern 1\n\nReplace an O(N) REST scan with GraphQL pagination.\n\n### Concern 2\n\nRequire Blueprint readiness before an issue enters agent work.\n\n## Context\n\nThis issue combines two changes in one script and one SOP section.\n\n## Expected Outcome\n\nThe scan returns only issues that have a trusted rocket and Blueprint approval.\n\n## Acceptance Criteria\n\n- [ ] The scan filters for `blueprint-ready`.\n\n## Reproduction Steps / Task Plan\n\n1. Implement the scan.\n2. Run the smoke test.\n\n## Priority\n\nP2\n\n## Requester / Owner\n\n@frankyxhl\n"
+  }
+}

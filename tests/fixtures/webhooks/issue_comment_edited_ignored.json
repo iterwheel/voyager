@@ -1,0 +1,12 @@
+{
+  "action": "edited",
+  "comment": {
+    "body": "/blueprint"
+  },
+  "issue": {
+    "number": 4,
+    "title": "[Task]: Some issue",
+    "html_url": "https://github.test/issues/4",
+    "body": "### Work Type\n\nFeature\n"
+  }
+}

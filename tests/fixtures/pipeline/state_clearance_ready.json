@@ -1,0 +1,12 @@
+{
+  "target_kind": "pull_request",
+  "target_id": "iterwheel/voyager#99",
+  "stage": "clearance_ready",
+  "history": [
+    ["blueprint_pending", "blueprint-ready"],
+    ["blueprint_ready", "stack-classified"],
+    ["stack_classified", "pr-opened"],
+    ["pr_open", "clearance-pending"],
+    ["clearance_pending", "clearance-ready"]
+  ]
+}

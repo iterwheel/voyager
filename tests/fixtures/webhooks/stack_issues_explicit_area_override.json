@@ -1,0 +1,9 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 16,
+    "title": "[Docs]: Document tunnel secret rotation",
+    "html_url": "https://github.test/issues/16",
+    "body": "Stack Area: infra\n\nUpdate the SOP, README, and changelog for Cloudflare tunnel secret rotation.\n"
+  }
+}

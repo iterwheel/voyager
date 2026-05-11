@@ -1,0 +1,12 @@
+{
+  "action": "edited",
+  "issue": {
+    "number": 102,
+    "html_url": "https://github.test/pull/102",
+    "pull_request": {"url": "https://api.github.test/repos/owner/repo/pulls/102"}
+  },
+  "comment": {
+    "user": {"login": "chatgpt-codex-connector[bot]"},
+    "body": "Codex Review: Updated finding after edit."
+  }
+}

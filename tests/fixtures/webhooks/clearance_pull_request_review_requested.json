@@ -1,0 +1,12 @@
+{
+  "action": "review_requested",
+  "pull_request": {
+    "number": 125,
+    "state": "open",
+    "draft": false,
+    "html_url": "https://github.test/pull/125",
+    "base": {"ref": "main"},
+    "head": {"sha": "abc1234"}
+  },
+  "sender": {"login": "author"}
+}

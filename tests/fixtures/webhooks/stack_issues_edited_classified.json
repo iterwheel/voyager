@@ -1,0 +1,9 @@
+{
+  "action": "edited",
+  "issue": {
+    "number": 20,
+    "title": "[Docs]: Update runbook for secret rotation",
+    "html_url": "https://github.test/issues/20",
+    "body": "## Problem / Goal\n\nRefresh the SOP and README documentation for tunnel rotation.\n\n## Acceptance Criteria\n\n- [ ] SOP updated.\n- [ ] README updated.\n"
+  }
+}

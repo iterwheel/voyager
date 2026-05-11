@@ -1,0 +1,15 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 42,
+    "title": "[Task]: Server webhook dispatch smoke test",
+    "html_url": "https://github.test/issues/42",
+    "body": "### Work Type\n\nTask\n\n### Problem / Goal\n\nVerify end-to-end dispatch from POST /github/webhook.\n\n### Context\n\nServer BDD fixture.\n\n### Expected Outcome\n\nRoutes are produced and queued.\n\n### Acceptance Criteria\n\n- [ ] The webhook is accepted.\n- [ ] At least one route is produced.\n\n### Reproduction Steps / Task Plan\n\n1. POST to /github/webhook.\n\n### Priority\n\nP2 - normal\n\n### Requester / Owner\n\n@frankyxhl\n"
+  },
+  "repository": {
+    "full_name": "test-org/test-repo"
+  },
+  "installation": {
+    "id": 55544433
+  }
+}

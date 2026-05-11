@@ -1,0 +1,9 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 12,
+    "title": "Add Blueprint intake template",
+    "html_url": "https://github.test/issues/12",
+    "body": "### Work Type\n\nFeature\n\n### Problem / Goal\n\nCreate the first Blueprint validation loop for structured issue intake.\n\n### Context\n\nThis sandbox repository is used to validate Iterwheel GitHub App routing.\n\n### Expected Outcome\n\nThe bridge records whether each issue is ready for Blueprint processing.\n\n### Acceptance Criteria\n\n- [ ] The issue template captures required intake sections.\n- [ ] The bridge marks complete issues as blueprint_ready.\n\n### Reproduction Steps / Task Plan\n\n1. Create a structured issue.\n2. Receive the GitHub webhook.\n3. Record the Blueprint validation result.\n\n### Priority\n\nP2 - normal\n\n### Requester / Owner\n\n@frankyxhl\n"
+  }
+}

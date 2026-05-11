@@ -1,0 +1,12 @@
+{
+  "action": "deleted",
+  "issue": {
+    "number": 145,
+    "html_url": "https://github.test/pull/145",
+    "pull_request": {"url": "https://api.github.test/repos/owner/repo/pulls/145"}
+  },
+  "reaction": {
+    "content": "eyes",
+    "user": {"login": "chatgpt-codex-connector[bot]"}
+  }
+}

@@ -1,0 +1,22 @@
+{
+    "id": "chatcmpl-test-effort-max",
+    "object": "chat.completion",
+    "model": "deepseek-v4-pro",
+    "choices": [
+        {
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "reasoning_content": "Max effort: Let me deeply consider every angle. The user is asking about geography. France — a nation-state in Western Europe. Its seat of government, largest city, and capital: Paris. Established as capital in 987 CE approximately.",
+                "content": "Max-effort answer: The capital of France is Paris, established as the national capital in the late 10th century.",
+                "tool_calls": null
+            },
+            "finish_reason": "stop"
+        }
+    ],
+    "usage": {
+        "prompt_tokens": 20,
+        "completion_tokens": 280,
+        "total_tokens": 300
+    }
+}

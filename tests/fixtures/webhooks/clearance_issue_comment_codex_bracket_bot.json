@@ -1,0 +1,12 @@
+{
+  "action": "created",
+  "issue": {
+    "number": 103,
+    "html_url": "https://github.test/pull/103",
+    "pull_request": {"url": "https://api.github.test/repos/owner/repo/pulls/103"}
+  },
+  "comment": {
+    "user": {"login": "chatgpt-codex-connector"},
+    "body": "Codex Review: Looks clean, no issues."
+  }
+}

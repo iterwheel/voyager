@@ -1,0 +1,9 @@
+{
+  "action": "opened",
+  "pull_request": {
+    "number": 12,
+    "title": "fix(ci): repair GitHub Actions test workflow",
+    "html_url": "https://github.test/pull/12",
+    "body": "Fix failing workflow permissions."
+  }
+}

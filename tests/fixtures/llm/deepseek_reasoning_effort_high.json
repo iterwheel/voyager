@@ -1,0 +1,22 @@
+{
+    "id": "chatcmpl-test-effort-high",
+    "object": "chat.completion",
+    "model": "deepseek-v4-pro",
+    "choices": [
+        {
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "reasoning_content": "High effort: I'll analyze this carefully. The question is straightforward.",
+                "content": "High-effort answer: The capital of France is Paris.",
+                "tool_calls": null
+            },
+            "finish_reason": "stop"
+        }
+    ],
+    "usage": {
+        "prompt_tokens": 20,
+        "completion_tokens": 120,
+        "total_tokens": 140
+    }
+}

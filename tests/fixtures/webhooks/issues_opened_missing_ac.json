@@ -1,0 +1,9 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 5,
+    "title": "[Task]: Add bridge writeback",
+    "html_url": "https://github.test/issues/5",
+    "body": "### Work Type\n\nFeature\n\n### Problem / Goal\n\nMake Blueprint write labels and comments for incomplete issues.\n\n### Context\n\nThis validates the first GitHub App write-back path.\n\n### Expected Outcome\n\nIncomplete issues receive a clear bot comment.\n\n### Reproduction Steps / Task Plan\n\n1. Open an issue without acceptance criteria.\n2. Trigger Blueprint validation.\n\n### Priority\n\nP2 - normal\n\n### Requester / Owner\n\n@frankyxhl\n"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 88,
+    "title": "[Feature]: Restrict review panels to 2-provider fast-review tier",
+    "html_url": "https://github.test/issues/88",
+    "body": "## Work Type\nRefactor (SOP amendment) - review panels use glm + deepseek only.\n\n## Problem / Goal\nThe orchestrator currently dispatches a four-provider review panel. The slowest\nprovider sets each workflow loop's wall-clock cost. This issue changes the\nautomation policy for plan-review and code-review panels.\n\n## Expected Outcome\n- TRN-1008 SOP text is amended.\n- CHANGELOG is updated.\n- Provider unavailability rules are updated.\n- Review panel examples are updated.\n\n## Acceptance Criteria\n- [ ] Plan-review panel provider list reduced.\n- [ ] Code-review panel provider list reduced.\n- [ ] PASS gate threshold updated.\n- [ ] FailureModes text updated.\n- [ ] Guard Rails text updated.\n- [ ] Threat Model text updated.\n- [ ] Examples updated.\n- [ ] Change History updated.\n- [ ] CHANGELOG entry added.\n"
+  }
+}

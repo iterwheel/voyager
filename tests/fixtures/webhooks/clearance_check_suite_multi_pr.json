@@ -1,0 +1,11 @@
+{
+  "action": "completed",
+  "repository": {"html_url": "https://github.test"},
+  "check_suite": {
+    "conclusion": "success",
+    "pull_requests": [
+      {"number": 125, "base": {"ref": "main"}, "head": {"sha": "abc1234"}},
+      {"number": 126, "base": {"ref": "main"}, "head": {"sha": "def5678"}}
+    ]
+  }
+}

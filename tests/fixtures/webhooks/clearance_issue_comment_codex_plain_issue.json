@@ -1,0 +1,11 @@
+{
+  "action": "created",
+  "issue": {
+    "number": 55,
+    "html_url": "https://github.test/issues/55"
+  },
+  "comment": {
+    "user": {"login": "chatgpt-codex-connector[bot]"},
+    "body": "Codex Review: Looks good."
+  }
+}

@@ -1,0 +1,115 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "iterwheel-voyager"
+version = "0.1.0"
+description = "GitHub bot platform — Iterwheel's rocket factory pipeline"
+requires-python = ">=3.11"
+authors = [{ name = "Iterwheel" }]
+dependencies = [
+    "fastapi>=0.136",
+    "httpx>=0.28",
+    "openai>=2.36",
+    "PyJWT[crypto]>=2.12",
+    "python-dotenv>=1.0",
+    "rich>=13.9",
+    "typer>=0.15",
+    "uvicorn[standard]>=0.46",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.4",
+    "pytest-bdd>=8.1",
+    "pytest-asyncio>=0.25",
+    "pytest-cov>=5.0",
+    "pytest-benchmark>=4.0",
+    "ruff>=0.15",
+    "mypy>=2.0",
+    "bandit[toml]>=1.9",
+    "pip-audit>=2.7",
+    "pre-commit>=4.6",
+]
+
+[project.scripts]
+vyg = "voyager.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["voyager"]
+
+# ============================================================================
+# Tooling
+# ============================================================================
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "N", "RUF", "PT", "C4", "ARG"]
+ignore = [
+    "E501",  # line length handled by formatter
+    "B008",  # FastAPI Depends() pattern uses calls in defaults
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ARG", "PT011"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+no_implicit_optional = true
+check_untyped_defs = true
+strict_equality = true
+exclude = ["tests/"]
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = [
+    "--strict-markers",
+    "-ra",
+    "--showlocals",
+]
+markers = [
+    "bdd: BDD scenario tests (pytest-bdd)",
+    "unit: Unit tests",
+    "integration: End-to-end integration tests",
+    "benchmark: Performance benchmarks (pytest-benchmark)",
+    "slow: Slow tests (deselect with -m 'not slow')",
+]
+
+[tool.coverage.run]
+source = ["voyager"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+    'if __name__ == "__main__":',
+]
+fail_under = 80
+show_missing = true
+
+[tool.bandit]
+exclude_dirs = ["tests"]
+skips = ["B101"]

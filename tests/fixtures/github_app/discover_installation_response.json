@@ -1,0 +1,13 @@
+{
+    "id": 99887766,
+    "account": {
+        "login": "test-org",
+        "type": "Organization"
+    },
+    "app_id": 12345,
+    "target_type": "Organization",
+    "permissions": {
+        "contents": "read",
+        "pull_requests": "write"
+    }
+}

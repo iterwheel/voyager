@@ -1,0 +1,8 @@
+{
+  "action": "completed",
+  "repository": {"html_url": "https://github.test"},
+  "check_suite": {
+    "conclusion": "success",
+    "pull_requests": []
+  }
+}

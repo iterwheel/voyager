@@ -1,0 +1,17 @@
+{
+  "action": "submitted",
+  "review": {
+    "state": "APPROVED",
+    "user": {"login": "reviewer"},
+    "commit_id": "abc1234",
+    "submitted_at": "2026-05-10T10:00:00Z"
+  },
+  "pull_request": {
+    "number": 125,
+    "state": "open",
+    "draft": false,
+    "html_url": "https://github.test/pull/125",
+    "base": {"ref": "main"},
+    "head": {"sha": "abc1234"}
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "action": "published",
+  "release": {
+    "id": 9001,
+    "tag_name": "v1.0.0",
+    "name": "Version 1.0.0"
+  },
+  "repository": {
+    "full_name": "test-org/test-repo"
+  },
+  "installation": {
+    "id": 55544433
+  }
+}

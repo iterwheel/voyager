@@ -1,0 +1,12 @@
+{
+  "action": "opened",
+  "pull_request": {
+    "number": 125,
+    "state": "open",
+    "draft": false,
+    "title": "feat(clearance): add readiness check",
+    "html_url": "https://github.test/pull/125",
+    "base": {"ref": "main"},
+    "head": {"sha": "abc1234"}
+  }
+}

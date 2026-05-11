@@ -1,0 +1,9 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 11,
+    "title": "[Feature]: Add GitHub webhook label classifier",
+    "html_url": "https://github.test/issues/11",
+    "body": "## Problem / Goal\n\nClassify GitHub issues and pull requests so agents can filter work.\n\n## Acceptance Criteria\n\n- [ ] Stack applies type labels.\n- [ ] Stack applies area labels.\n- [ ] Stack applies size labels.\n- [ ] Stack applies risk labels.\n"
+  }
+}

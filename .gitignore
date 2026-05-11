@@ -3,3 +3,38 @@
 *.swo
 .idea/
 .vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Env / secrets
+.env
+.env.local
+.env.*
+!.env.example
+secrets/
+
+# Coverage
+.coverage
+htmlcov/
+.tox/
+
+# Runtime data
+logs/
+runs/
+state/
+sessions/
+*.log
+
+# Build
+dist/
+build/
+*.whl

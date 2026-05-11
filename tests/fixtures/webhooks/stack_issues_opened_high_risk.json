@@ -1,0 +1,9 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 50,
+    "title": "[Feature]: Rotate deploy secrets for production auth tokens",
+    "html_url": "https://github.test/issues/50",
+    "body": "## Problem / Goal\n\nRotate the deploy secrets and production auth tokens after a suspected permission breach.\n\n## Acceptance Criteria\n\n- [ ] All deploy secrets rotated.\n- [ ] Auth tokens regenerated.\n- [ ] Security audit log updated.\n"
+  }
+}

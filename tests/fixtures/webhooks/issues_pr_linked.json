@@ -1,0 +1,15 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 20,
+    "title": "[Task]: PR-linked issue",
+    "html_url": "https://github.test/issues/20",
+    "pull_request": {
+      "url": "https://api.github.test/repos/owner/repo/pulls/20",
+      "html_url": "https://github.test/pull/20",
+      "diff_url": "https://github.test/pull/20.diff",
+      "patch_url": "https://github.test/pull/20.patch"
+    },
+    "body": "### Work Type\n\nFeature\n"
+  }
+}

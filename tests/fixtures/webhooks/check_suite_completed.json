@@ -1,0 +1,8 @@
+{
+  "action": "completed",
+  "check_suite": {
+    "id": 1234,
+    "head_sha": "abc123",
+    "conclusion": "success"
+  }
+}

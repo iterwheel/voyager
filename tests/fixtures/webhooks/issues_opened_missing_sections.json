@@ -1,0 +1,9 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 3,
+    "title": "[Task]: todo",
+    "html_url": "https://github.test/issues/3",
+    "body": "### Problem / Goal\n\ntodo\n"
+  }
+}

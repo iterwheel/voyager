@@ -1,0 +1,9 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 30,
+    "title": "[Task]: Missing body issue",
+    "html_url": "https://github.test/issues/30",
+    "body": null
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "action": "created",
+  "comment": {
+    "body": "/stack"
+  },
+  "issue": {
+    "number": 12,
+    "title": "fix(ci): repair GitHub Actions test workflow",
+    "html_url": "https://github.test/pull/12",
+    "body": "Fix failing workflow permissions.",
+    "pull_request": {
+      "url": "https://api.github.test/repos/test/test/pulls/12"
+    }
+  }
+}

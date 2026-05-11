@@ -1,0 +1,9 @@
+{
+  "action": "closed",
+  "issue": {
+    "number": 7,
+    "title": "[Task]: Closed issue",
+    "html_url": "https://github.test/issues/7",
+    "body": "### Work Type\n\nFeature\n"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "action": "opened",
+  "pull_request": {
+    "number": 14,
+    "title": "fix(webhook): validate pull request titles",
+    "html_url": "https://github.test/pull/14",
+    "head": {"sha": "def456"}
+  }
+}

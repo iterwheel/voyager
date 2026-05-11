@@ -1,0 +1,13 @@
+{
+  "action": "created",
+  "comment": {
+    "body": "Inline finding.",
+    "user": {"login": "reviewer"}
+  },
+  "pull_request": {
+    "number": 125,
+    "html_url": "https://github.test/pull/125",
+    "base": {"ref": "main"},
+    "head": {"sha": "abc1234"}
+  }
+}

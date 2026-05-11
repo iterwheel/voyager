@@ -1,0 +1,9 @@
+{
+  "action": "reopened",
+  "issue": {
+    "number": 21,
+    "title": "[Bug]: Fix webhook handler crashing on empty body",
+    "html_url": "https://github.test/issues/21",
+    "body": "## Problem / Goal\n\nThe webhook handler errors when issue body is null.\n\n## Acceptance Criteria\n\n- [ ] Empty body is handled gracefully.\n"
+  }
+}

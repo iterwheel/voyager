@@ -1,0 +1,10 @@
+{
+    "token": "ghs_test_installation_token_abc123",
+    "expires_at": "2099-12-31T23:59:59Z",
+    "permissions": {
+        "contents": "read",
+        "pull_requests": "write",
+        "issues": "write"
+    },
+    "repository_selection": "selected"
+}

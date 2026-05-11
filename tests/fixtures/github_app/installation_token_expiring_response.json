@@ -1,0 +1,9 @@
+{
+    "token": "ghs_test_expiring_token_xyz789",
+    "expires_at": "2000-01-01T00:00:00Z",
+    "permissions": {
+        "contents": "read",
+        "pull_requests": "write"
+    },
+    "repository_selection": "selected"
+}
