@@ -485,6 +485,35 @@ class GitHubAppClient:
         )
         return dict(result or {})
 
+    async def create_review_thread_reply(
+        self,
+        app_slug: str,
+        repository: str,
+        pull_number: int,
+        comment_id: int,
+        *,
+        body: str,
+    ) -> dict[str, Any]:
+        """POST a reply to a PR review-comment thread.
+
+        GitHub renders the reply inline next to the code the original review
+        comment anchored to, so the Clearance pipeline's Stage 1.5 conclusion
+        comments appear contextually — readers see the verdict alongside the
+        code Codex flagged, not buried in the PR's top-level conversation.
+
+        Uses the REST endpoint
+        ``POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies``.
+        """
+        owner, name = repository.split("/", 1)
+        payload = await self.request(
+            app_slug,
+            "POST",
+            f"/repos/{owner}/{name}/pulls/{pull_number}/comments/{comment_id}/replies",
+            repository=repository,
+            json_body={"body": body},
+        )
+        return dict(payload or {})
+
     async def upsert_issue_comment(
         self,
         app_slug: str,

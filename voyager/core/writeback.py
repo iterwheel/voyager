@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
 import os
 from typing import TYPE_CHECKING, Any
+
+_log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .github_app import GitHubAppClient
@@ -136,6 +139,10 @@ async def dispatch_route_writeback(
                     client, route, repository=repository, store=store
                 )
             except Exception as exc:
+                _log.exception(
+                    "clearance pipeline failed for %s; falling back to error automation",
+                    repository,
+                )
                 automation = {
                     "enabled": True,
                     "status": "error",
@@ -149,6 +156,10 @@ async def dispatch_route_writeback(
                 client, route, repository=repository, automation=automation
             )
         except Exception as exc:
+            _log.exception(
+                "clearance enrichment failed for %s; returning applied=False",
+                repository,
+            )
             return {
                 "applied": False,
                 "reason": f"clearance enrichment failed: {exc.__class__.__name__}: {exc}",

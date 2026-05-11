@@ -198,10 +198,11 @@ async def _maybe_sync_stage_15(
             continue
 
         with contextlib.suppress(Exception):
-            await client.create_issue_comment(
+            await client.create_review_thread_reply(
                 CLEARANCE_AGENT_SLUG,
                 repository,
                 pr,
+                thread.comment_id,
                 body=comment_body,
             )
 
