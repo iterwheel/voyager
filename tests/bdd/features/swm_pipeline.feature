@@ -66,11 +66,33 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     And the automation reason mentions "still OPEN"
     And the sync actions count is 0
 
-  Scenario: State B outdated with code change produces RESOLVED
+  Scenario: State B outdated defers to investigator wave under 7B-1 deterministic-only routing
     Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread that is outdated with no author reply
+    When compute_clearance_automation runs with DRY_RUN true
+    Then the automation status is "blocked"
+    And the sync actions count is 0
+    And the automation reason mentions "still OPEN"
+
+  Scenario: Maintainer reply does NOT trigger Clearance auto-resolution (P1 author-filter)
+    Given the stub PR "iterwheel/sandbox" #49 author is "ryosaeba1985"
+    And the stub PR has 1 Codex thread with a substantive reply from "some-maintainer" and isResolved false
+    When compute_clearance_automation runs with DRY_RUN true
+    Then the automation status is "blocked"
+    And the sync actions count is 0
+
+  Scenario: Stale Codex follow-up does NOT override newer substantive author reply (P2 ordering)
+    Given the stub PR "iterwheel/sandbox" #49 author is "ryosaeba1985"
+    And the stub PR has 1 Codex thread where an older Codex followup precedes a newer substantive author reply
     When compute_clearance_automation runs with DRY_RUN true
     Then the automation status is "ready"
     And the sync actions count is 1
+
+  Scenario: Fresh Codex follow-up overrides earlier substantive author reply (P2 ordering)
+    Given the stub PR "iterwheel/sandbox" #49 author is "ryosaeba1985"
+    And the stub PR has 1 Codex thread where a newer "still not addressed" Codex followup follows a substantive author reply
+    When compute_clearance_automation runs with DRY_RUN true
+    Then the automation status is "blocked"
+    And the sync actions count is 0
 
   # ---------------------------------------------------------------------------
   # State persistence

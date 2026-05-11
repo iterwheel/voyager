@@ -52,6 +52,7 @@ class _StubGitHubAppClient:
             "head": {"sha": "head-sha-abc1234"},
             "title": "Fix the bug",
             "number": PR,
+            "user": {"login": "ryosaeba1985"},  # default PR author for existing scenarios
         }
         self.fail_pull_request: bool = False
         self.fail_resolve: bool = False
@@ -154,6 +155,103 @@ def _codex_thread(
         "line": 10,
         "startLine": None,
         "comments": {"nodes": comments},
+    }
+
+
+def _codex_thread_with_custom_reply(
+    *,
+    reply_author: str,
+    reply_body: str = "Fixed in `parser.py` by adding the null guard before the dereference call.",
+    reply_created_at: str = "2026-05-11T12:30:00Z",
+    is_resolved: bool = False,
+) -> dict[str, Any]:
+    """A Codex thread whose reply is from a configurable author (not the default).
+
+    Used for P1 author-filter coverage: we want to verify that a reply from a
+    non-PR-author is NOT counted as "the author's substantive reply".
+    """
+    return {
+        "id": THREAD_ID,
+        "isResolved": is_resolved,
+        "isOutdated": False,
+        "path": "app.py",
+        "line": 10,
+        "startLine": None,
+        "comments": {
+            "nodes": [
+                {
+                    "databaseId": CODEX_COMMENT_ID,
+                    "author": {"login": "chatgpt-codex-connector"},
+                    "body": "P2: please address this nullable handling.",
+                    "url": "https://example/c/1",
+                    "createdAt": "2026-05-11T12:00:00Z",
+                },
+                {
+                    "databaseId": CODEX_COMMENT_ID + 1,
+                    "author": {"login": reply_author},
+                    "body": reply_body,
+                    "url": "https://example/c/2",
+                    "createdAt": reply_created_at,
+                },
+            ]
+        },
+    }
+
+
+def _codex_thread_ordered(
+    *,
+    followup_after_reply: bool,
+) -> dict[str, Any]:
+    """A Codex thread with an initial comment, an author reply, and a Codex followup.
+
+    When ``followup_after_reply=True``: followup createdAt > author reply createdAt.
+    Per pipeline P2-ordering fix, the followup body IS passed to judge().
+
+    When ``followup_after_reply=False``: followup createdAt < author reply
+    createdAt. The followup body is treated as stale and NOT passed to judge()
+    — judge falls through to State C / substantive-reply logic.
+    """
+    if followup_after_reply:
+        reply_ts = "2026-05-11T12:30:00Z"
+        followup_ts = "2026-05-11T13:00:00Z"
+    else:
+        followup_ts = "2026-05-11T12:30:00Z"
+        reply_ts = "2026-05-11T13:00:00Z"
+
+    return {
+        "id": THREAD_ID,
+        "isResolved": False,
+        "isOutdated": False,
+        "path": "app.py",
+        "line": 10,
+        "startLine": None,
+        "comments": {
+            "nodes": [
+                {
+                    "databaseId": CODEX_COMMENT_ID,
+                    "author": {"login": "chatgpt-codex-connector"},
+                    "body": "P2: please address this nullable handling.",
+                    "url": "https://example/c/1",
+                    "createdAt": "2026-05-11T12:00:00Z",
+                },
+                {
+                    "databaseId": CODEX_COMMENT_ID + 1,
+                    "author": {"login": "ryosaeba1985"},
+                    "body": (
+                        "Fixed in `parser.py` by adding the null guard before the dereference call."
+                    ),
+                    "url": "https://example/c/2",
+                    "createdAt": reply_ts,
+                },
+                {
+                    "databaseId": CODEX_COMMENT_ID + 2,
+                    "author": {"login": "chatgpt-codex-connector"},
+                    "body": "Still not addressed in the latest diff.",
+                    "url": "https://example/c/3",
+                    "createdAt": followup_ts,
+                },
+            ]
+        },
     }
 
 
@@ -272,6 +370,37 @@ def given_pr_fetch_fails(ctx) -> None:
 @given("the stub GitHubAppClient fails on the resolveReviewThread mutation")
 def given_resolve_fails(ctx) -> None:
     ctx["client"].fail_resolve = True
+
+
+@given(parsers.parse('the stub PR "{repo}" #{pr:d} author is "{author_login}"'))
+def given_pr_author(ctx, repo: str, pr: int, author_login: str) -> None:
+    ctx["client"].pr_payload["user"] = {"login": author_login}
+
+
+@given(
+    parsers.parse(
+        'the stub PR has 1 Codex thread with a substantive reply from "{reply_author}" '
+        "and isResolved false"
+    )
+)
+def given_codex_thread_non_author_reply(ctx, reply_author: str) -> None:
+    ctx["client"].threads = [_codex_thread_with_custom_reply(reply_author=reply_author)]
+
+
+@given(
+    "the stub PR has 1 Codex thread where an older Codex followup precedes a "
+    "newer substantive author reply"
+)
+def given_codex_thread_stale_followup(ctx) -> None:
+    ctx["client"].threads = [_codex_thread_ordered(followup_after_reply=False)]
+
+
+@given(
+    'the stub PR has 1 Codex thread where a newer "still not addressed" Codex followup '
+    "follows a substantive author reply"
+)
+def given_codex_thread_fresh_followup(ctx) -> None:
+    ctx["client"].threads = [_codex_thread_ordered(followup_after_reply=True)]
 
 
 # ---------------------------------------------------------------------------
