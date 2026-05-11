@@ -1,0 +1,9 @@
+[[apps]]
+slug = "iterwheel-blueprint"
+app_id = 1234567
+private_key_path = "~/.secrets/iterwheel-blueprint.pem"
+installation_id = "55544433"
+
+[apps.installations]
+"iterwheel/voyager-sandbox" = "55544433"
+"iterwheel" = "66655544"

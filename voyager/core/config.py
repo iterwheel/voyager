@@ -1,34 +1,36 @@
 from __future__ import annotations
 
-import json
 import os
-from dataclasses import dataclass
+import tomllib
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
+
+_SEARCH_ORDER = [
+    lambda: os.environ.get("VOYAGER_CONFIG_PATH"),
+    lambda: str(Path.home() / ".voyager" / "config.toml"),
+    lambda: str(Path.cwd() / "voyager.toml"),
+    lambda: "/etc/voyager/config.toml",
+]
 
 
 @dataclass(frozen=True)
 class AppConfig:
     slug: str
     app_id: str
+    private_key_path: Path
     installation_id: str
     installations: dict[str, str]
+    _webhook_secret_env: str = field(default="", compare=False)
 
     @property
     def webhook_secret_env(self) -> str:
+        if self._webhook_secret_env:
+            return self._webhook_secret_env
         normalized = self.slug.upper().replace("-", "_")
         return f"GITHUB_WEBHOOK_SECRET_{normalized}"
-
-    @property
-    def private_key_path(self) -> Path:
-        configured = os.environ.get(
-            f"GITHUB_PRIVATE_KEY_PATH_{self.slug.upper().replace('-', '_')}"
-        )
-        if configured:
-            return Path(configured).expanduser()
-        return _work_dir() / "secrets" / f"{self.slug}.private-key.pem"
 
     def configured_installation_id_for_repository(self, repository: str | None) -> str | None:
         if not repository:
@@ -37,25 +39,75 @@ class AppConfig:
         return self.installations.get(repository) or self.installations.get(owner) or None
 
 
-def _work_dir() -> Path:
-    return Path(os.environ.get("WORK_DIR", str(Path.home() / "voyager"))).expanduser()
+@dataclass(frozen=True)
+class VoyagerConfig:
+    apps: dict[str, AppConfig]
+    work_dir: Path
 
 
-def load_apps() -> dict[str, AppConfig]:
-    path = Path(
-        os.environ.get("APP_CONFIG_PATH", str(ROOT_DIR / "config" / "apps.json"))
-    ).expanduser()
-    raw = json.loads(path.read_text(encoding="utf-8"))
+def _parse_app(item: dict[str, Any]) -> AppConfig:
+    slug = item.get("slug")
+    if not slug:
+        raise ValueError("Each [[apps]] entry must have a 'slug' field")
+
+    app_id = item.get("app_id")
+    if app_id is None:
+        raise ValueError(f"app_id is required for app {slug!r}")
+
+    raw_key_path = item.get("private_key_path")
+    if not raw_key_path:
+        raise ValueError(f"private_key_path is required for app {slug!r}")
+
+    private_key_path = Path(raw_key_path).expanduser()
+
+    installation_id = str(item.get("installation_id", ""))
+    installations = {k: str(v) for k, v in (item.get("installations") or {}).items()}
+    webhook_secret_env = item.get("webhook_secret_env", "")
+
+    return AppConfig(
+        slug=slug,
+        app_id=str(app_id),
+        private_key_path=private_key_path,
+        installation_id=installation_id,
+        installations=installations,
+        _webhook_secret_env=webhook_secret_env,
+    )
+
+
+def load_config(path: str | Path | None = None) -> VoyagerConfig:
+    if path is None:
+        for candidate_fn in _SEARCH_ORDER:
+            candidate = candidate_fn()
+            if candidate and Path(candidate).exists():
+                path = Path(candidate)
+                break
+        if path is None:
+            # Use first non-env candidate that is not None for the error message
+            env_val = os.environ.get("VOYAGER_CONFIG_PATH")
+            if env_val:
+                raise FileNotFoundError(f"VOYAGER_CONFIG_PATH is set but file not found: {env_val}")
+            raise FileNotFoundError(
+                "No voyager config file found. Searched: "
+                + str(Path.home() / ".voyager" / "config.toml")
+                + ", ./voyager.toml, /etc/voyager/config.toml"
+            )
+
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Voyager config file not found: {path}")
+
+    raw = tomllib.loads(path.read_text(encoding="utf-8"))
+
+    voyager_section = raw.get("voyager") or {}
+    raw_work_dir = voyager_section.get("work_dir", "~/.voyager/state")
+    work_dir = Path(raw_work_dir).expanduser()
+
     apps: dict[str, AppConfig] = {}
-    for item in raw["apps"]:
-        app = AppConfig(
-            slug=item["slug"],
-            app_id=str(item["app_id"]),
-            installation_id=str(item.get("installation_id", "")),
-            installations={key: str(value) for key, value in item.get("installations", {}).items()},
-        )
+    for item in raw.get("apps") or []:
+        app = _parse_app(item)
         apps[app.slug] = app
-    return apps
+
+    return VoyagerConfig(apps=apps, work_dir=work_dir)
 
 
 def public_app_status(apps: dict[str, AppConfig]) -> list[dict[str, Any]]:

@@ -1,0 +1,26 @@
+# Voyager configuration file
+#
+# Default search order:
+#   $VOYAGER_CONFIG_PATH (env)
+#   ~/.voyager/config.toml
+#   ./voyager.toml (cwd)
+#   /etc/voyager/config.toml
+
+[voyager]
+work_dir = "~/.voyager/state"   # optional; default "~/.voyager/state"
+
+[[apps]]
+slug = "iterwheel-blueprint"
+app_id = 1234567                                            # int, REQUIRED
+private_key_path = "~/.secrets/iterwheel-blueprint.pem"   # string, REQUIRED. Tilde expanded.
+installation_id = "55544433"                               # optional default install id
+webhook_secret_env = "GITHUB_WEBHOOK_SECRET_BP"            # optional; derived from slug if absent
+
+[apps.installations]
+"iterwheel/voyager-sandbox" = "55544433"   # optional per-repo overrides
+
+[[apps]]
+slug = "iterwheel-stack"
+app_id = 7654321
+private_key_path = "~/.secrets/iterwheel-stack.pem"
+# webhook_secret_env defaults to GITHUB_WEBHOOK_SECRET_ITERWHEEL_STACK

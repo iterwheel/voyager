@@ -1,0 +1,3 @@
+[[apps]]
+slug = "iterwheel-blueprint"
+private_key_path = "~/.secrets/iterwheel-blueprint.pem"

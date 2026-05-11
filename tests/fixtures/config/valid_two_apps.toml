@@ -1,0 +1,17 @@
+[voyager]
+work_dir = "~/.voyager/state"
+
+[[apps]]
+slug = "iterwheel-blueprint"
+app_id = 1234567
+private_key_path = "~/.secrets/iterwheel-blueprint.pem"
+installation_id = "55544433"
+webhook_secret_env = "GITHUB_WEBHOOK_SECRET_BP"
+
+[apps.installations]
+"iterwheel/voyager-sandbox" = "55544433"
+
+[[apps]]
+slug = "iterwheel-stack"
+app_id = 7654321
+private_key_path = "~/.secrets/iterwheel-stack.pem"
