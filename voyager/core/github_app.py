@@ -280,6 +280,78 @@ class GitHubAppClient:
             cursor = page_info.get("endCursor")
         return threads
 
+    async def resolve_review_thread(
+        self, app_slug: str, repository: str, thread_id: str
+    ) -> dict[str, Any]:
+        """Resolve a GitHub review thread via GraphQL mutation.
+
+        Used by Stage 1.5 of SWM-1101: after the deterministic pipeline judges a
+        thread RESOLVED, the watchdog calls this to sync the GitHub UI state so
+        maintainers see the resolution without manual clicks.
+
+        Callers must verify the thread's current ``isResolved`` state immediately
+        before invoking this mutation — reading ``isResolved`` from a stale cached
+        snapshot and then mutating can silently clobber a maintainer's own manual
+        resolve (or un-resolve) performed in the GitHub UI since the last fetch.
+        Prefer fetching ``pull_request_review_threads`` just before calling this.
+        """
+        query = """
+        mutation ResolveReviewThread($threadId: ID!) {
+          resolveReviewThread(input: {threadId: $threadId}) {
+            thread {
+              id
+              isResolved
+              isOutdated
+              resolvedBy {
+                login
+              }
+            }
+          }
+        }
+        """
+        data = await self.graphql(
+            app_slug,
+            repository,
+            query=query,
+            variables={"threadId": thread_id},
+        )
+        return (((data or {}).get("resolveReviewThread") or {}).get("thread")) or {}
+
+    async def unresolve_review_thread(
+        self, app_slug: str, repository: str, thread_id: str
+    ) -> dict[str, Any]:
+        """Unresolve a GitHub review thread via GraphQL mutation.
+
+        Mirror of ``resolve_review_thread`` for the reverse direction. Used when
+        Stage 1.5 of SWM-1101 determines a previously-resolved thread needs to be
+        re-opened (e.g., maintainer override or follow-up Codex flag).
+
+        Callers must verify the thread's current ``isResolved`` state immediately
+        before invoking this mutation to avoid clobbering a maintainer's manual
+        state change since the last fetch.
+        """
+        query = """
+        mutation UnresolveReviewThread($threadId: ID!) {
+          unresolveReviewThread(input: {threadId: $threadId}) {
+            thread {
+              id
+              isResolved
+              isOutdated
+              resolvedBy {
+                login
+              }
+            }
+          }
+        }
+        """
+        data = await self.graphql(
+            app_slug,
+            repository,
+            query=query,
+            variables={"threadId": thread_id},
+        )
+        return (((data or {}).get("unresolveReviewThread") or {}).get("thread")) or {}
+
     async def add_labels(
         self, app_slug: str, repo: str, issue_number: int, labels: list[str]
     ) -> Any:

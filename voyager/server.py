@@ -22,6 +22,7 @@ app = FastAPI(title="Iterwheel GitHub Bridge")
 _log = logging.getLogger(__name__)
 _recent_writebacks: deque[dict[str, Any]] = deque(maxlen=100)
 _client: Any = None
+_store: Any = None
 
 
 def _get_client() -> Any:
@@ -36,6 +37,26 @@ def _get_client() -> Any:
         cfg = load_config()
         _client = GitHubAppClient(cfg.apps)
         return _client
+    except Exception:
+        return None
+
+
+def _get_store() -> Any:
+    """Return a memoized StateStore, or None if config is unavailable.
+
+    Degrades gracefully to legacy PR-body-only enrichment when config is
+    missing — the pipeline is skipped but the writeback still proceeds.
+    """
+    global _store
+    if _store is not None:
+        return _store
+    try:
+        from voyager.bots.clearance.state import StateStore
+        from voyager.core.config import load_config
+
+        cfg = load_config()
+        _store = StateStore(cfg.work_dir)
+        return _store
     except Exception:
         return None
 
@@ -96,10 +117,13 @@ async def _process_route_writebacks(
         )
         return
 
+    store = _get_store()
     repository: str | None = (payload.get("repository") or {}).get("full_name")
     for route in routes:
         try:
-            result = await dispatch_route_writeback(client, route, repository=repository)
+            result = await dispatch_route_writeback(
+                client, route, repository=repository, store=store
+            )
             _recent_writebacks.append({"delivery_id": delivery_id, "event": event, **result})
         except Exception:
             _log.exception("writeback failed for route %r", route.get("agent"))
