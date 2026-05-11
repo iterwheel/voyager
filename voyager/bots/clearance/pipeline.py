@@ -6,6 +6,12 @@ Phase 7B-1 scope: deterministic classify→judge→persist→Stage-1.5-sync only
 No LLM investigator in this phase — that lands in 7B-3. The ``investigator``
 kwarg is accepted now so 7B-3 does not churn the public signature.
 
+7B-1 limitation — State B (isOutdated) verdicts: under deterministic-only
+routing, State B threads default to OPEN because this phase has no diff
+comparator to verify whether the push actually addressed the Codex concern.
+The investigator wave (7B-3) will add diff verification and may re-judge
+outdated threads as RESOLVED when the diff confirms the fix.
+
 Trigger: webhook-only (no polling cycle). Each call corresponds to one webhook
 delivery processed by ``dispatch_route_writeback``.
 """
@@ -19,7 +25,6 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from voyager.bots.clearance.classify import (
-    ThreadState,
     classify_thread,
     codex_comment_id,
     is_codex_thread,
@@ -62,6 +67,7 @@ def _process_thread(
     repo: str,
     pr: int,
     now: datetime,
+    pr_author_login: str | None = None,
 ) -> tuple[Thread, ThreadSnapshot] | None:
     """Classify, judge, and build Thread + ThreadSnapshot for one Codex thread.
 
@@ -76,14 +82,20 @@ def _process_thread(
         return None
 
     state = classify_thread(thread_dict)
-    reply = latest_author_reply(thread_dict)
+    reply = latest_author_reply(thread_dict, author_login=pr_author_login)
     followup = latest_codex_followup(thread_dict)
+
+    reply_ts = (reply or {}).get("createdAt") or ""
+    followup_ts = (followup or {}).get("createdAt") or ""
+    # Only honour a Codex follow-up if it's newer than the latest author reply.
+    # Otherwise the followup is stale evidence about a prior state.
+    followup_body_for_judge = (followup or {}).get("body") if followup_ts > reply_ts else None
 
     decision = judge(
         classification=state,
         author_reply_body=(reply or {}).get("body"),
-        code_changed=(state == ThreadState.B),
-        codex_followup_body=(followup or {}).get("body"),
+        code_changed=False,  # 7B-1: deferred to investigator wave (7B-3 adds diff verification)
+        codex_followup_body=followup_body_for_judge,
         github_isResolved=bool(thread_dict.get("isResolved")),
     )
 
@@ -102,7 +114,7 @@ def _process_thread(
         github_isResolved=bool(thread_dict.get("isResolved")),
         author_reply_id=(reply or {}).get("databaseId"),
         author_reply_substantive=decision.substantive,
-        code_changed=(state == ThreadState.B),
+        code_changed=None,
     )
 
     snapshot = ThreadSnapshot(
@@ -124,7 +136,7 @@ def _process_thread(
             thread_state=state,
             author_reply_id=(reply or {}).get("databaseId"),
             author_reply_substantive=decision.substantive,
-            code_changed=(state == ThreadState.B),
+            code_changed=None,
             codex_followed_up=bool(followup),
         ),
         github_state=GitHubThreadState(
@@ -288,12 +300,15 @@ async def compute_clearance_automation(
 
     head_sha = (pr_data.get("head") or {}).get("sha") or ""
     pr_title = pr_data.get("title")
+    pr_author_login: str | None = (pr_data.get("user") or {}).get("login") or None
 
     threads: list[Thread] = []
     snapshots: list[ThreadSnapshot] = []
 
     for thread_dict in raw_threads:
-        result = _process_thread(thread_dict, repo=repository, pr=pr_number, now=now)
+        result = _process_thread(
+            thread_dict, repo=repository, pr=pr_number, now=now, pr_author_login=pr_author_login
+        )
         if result is None:
             continue
         thread_model, snapshot = result

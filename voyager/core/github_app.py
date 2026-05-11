@@ -11,6 +11,26 @@ import jwt
 GITHUB_API = "https://api.github.com"
 GITHUB_API_VERSION = "2022-11-28"
 
+_THREAD_COMMENTS_QUERY = """
+query ThreadComments($threadId: ID!, $cursor: String) {
+  node(id: $threadId) {
+    ... on PullRequestReviewThread {
+      comments(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          databaseId
+          author { login }
+          body
+          url
+          createdAt
+          replyTo { databaseId }
+        }
+      }
+    }
+  }
+}
+"""
+
 
 @dataclass
 class InstallationToken:
@@ -239,7 +259,8 @@ class GitHubAppClient:
                   path
                   line
                   startLine
-                  comments(first: 20) {
+                  comments(first: 100) {
+                    pageInfo { hasNextPage endCursor }
                     nodes {
                       databaseId
                       author {
@@ -248,6 +269,7 @@ class GitHubAppClient:
                       body
                       url
                       createdAt
+                      replyTo { databaseId }
                     }
                   }
                 }
@@ -278,6 +300,27 @@ class GitHubAppClient:
             if not page_info.get("hasNextPage"):
                 break
             cursor = page_info.get("endCursor")
+
+        for thread in threads:
+            page_info = (thread.get("comments") or {}).get("pageInfo") or {}
+            if not page_info.get("hasNextPage"):
+                continue
+            cursor = page_info.get("endCursor")
+            while True:
+                data = await self.graphql(
+                    app_slug,
+                    repo,
+                    query=_THREAD_COMMENTS_QUERY,
+                    variables={"threadId": thread["id"], "cursor": cursor},
+                )
+                comments_conn = (((data or {}).get("node") or {}).get("comments")) or {}
+                new_nodes = comments_conn.get("nodes") or []
+                thread.setdefault("comments", {}).setdefault("nodes", []).extend(new_nodes)
+                page_info = comments_conn.get("pageInfo") or {}
+                if not page_info.get("hasNextPage"):
+                    break
+                cursor = page_info.get("endCursor")
+
         return threads
 
     async def resolve_review_thread(
