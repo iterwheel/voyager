@@ -145,3 +145,23 @@ Feature: Rocket Factory Pipeline — orchestration state machine
     When the signal is applied to the pipeline state
     Then the new stage is "clearance_blocked"
     And the transition is recorded in history
+
+  # ---------------------------------------------------------------------------
+  # Cross-target signal contamination guard (Codex P1)
+  # ---------------------------------------------------------------------------
+
+  Scenario: Signal targeting a different target_id is ignored (no cross-target contamination)
+    Given a fresh pipeline target "iterwheel/voyager#42"
+    When a "blueprint-ready" signal for target "iterwheel/voyager#99" is applied
+    Then the stage is unchanged at "blueprint_pending"
+    And history contains 0 transitions
+
+  # ---------------------------------------------------------------------------
+  # force-restart input validation (Codex P2)
+  # ---------------------------------------------------------------------------
+
+  Scenario: force-restart with an invalid restart_to raises ValueError
+    Given a pipeline state "state_stack_classified"
+    And a malformed force-restart signal with restart_to "garbage_stage"
+    When the signal is applied to the pipeline state and may raise
+    Then a ValueError is raised mentioning "invalid restart_to"

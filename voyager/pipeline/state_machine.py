@@ -107,12 +107,26 @@ def advance_pipeline(state: PipelineState, signal: Signal) -> PipelineState:
     Stale signals (source rank < current rank) and already-at-destination
     signals are no-ops — same state object is returned unchanged.
     """
+    # Cross-target contamination guard (Codex P1): signals are scoped to
+    # exactly one target_id. A signal addressed to a different target must
+    # NEVER mutate this state, even silently. Return state unchanged.
+    if signal.target_id != state.target_id:
+        return state
+
     current = state.stage
 
-    # force-restart: always accepted; target stage from payload or default
+    # force-restart: accepted, but restart_to must be a valid Stage value
+    # (Codex P2 — operator typo or malformed signal would otherwise wedge
+    # the pipeline because no subsequent transition can match _TRANSITIONS).
     if signal.kind == "force-restart":
         payload = signal.payload or {}
         restart_to = payload.get("restart_to", Stage.BLUEPRINT_PENDING.value)
+        valid_stages = {s.value for s in Stage}
+        if restart_to not in valid_stages:
+            raise ValueError(
+                f"force-restart: invalid restart_to {restart_to!r}; "
+                f"must be one of {sorted(valid_stages)}"
+            )
         new_history = [*list(state.history), (current, signal.kind)]
         return PipelineState(
             target_kind=state.target_kind,
@@ -162,11 +176,17 @@ def advance_pipeline(state: PipelineState, signal: Signal) -> PipelineState:
 
 
 def advance_pipeline_for_unknown(target_id: str, signal: Signal) -> PipelineState:
-    """Initialise a fresh pipeline state for an unseen *target_id* and apply *signal*."""
+    """Initialise a fresh pipeline state for an unseen *target_id* and apply *signal*.
+
+    The caller's intent here is "initialise this target_id even if the supplied
+    signal carries a different one." Re-target the signal to the new state so
+    the cross-target guard in advance_pipeline() doesn't reject the call.
+    """
     initial = PipelineState(
         target_kind="issue",
         target_id=target_id,
         stage=Stage.BLUEPRINT_PENDING.value,
         history=[],
     )
-    return advance_pipeline(initial, signal)
+    retargeted = Signal(kind=signal.kind, target_id=target_id, payload=signal.payload)
+    return advance_pipeline(initial, retargeted)

@@ -174,6 +174,72 @@ def apply_signal_unknown_target(missing_target_id: str, signal: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# When — Codex P1: cross-target signal (no contamination)
+# ---------------------------------------------------------------------------
+
+
+@when(
+    parsers.parse('a "{kind}" signal for target "{other_target_id}" is applied'),
+    target_fixture="result",
+)
+def apply_cross_target_signal(state: dict, kind: str, other_target_id: str) -> dict:
+    from voyager.pipeline.state_machine import (  # lazy import
+        PipelineState,
+        Signal,
+        advance_pipeline,
+    )
+
+    sig = Signal(kind=kind, target_id=other_target_id, payload=None)
+    return advance_pipeline(PipelineState(**state), sig).__dict__
+
+
+# ---------------------------------------------------------------------------
+# Given / When / Then — Codex P2: invalid force-restart payload raises
+# ---------------------------------------------------------------------------
+
+
+@given(
+    parsers.parse('a malformed force-restart signal with restart_to "{restart_to}"'),
+    target_fixture="signal",
+)
+def malformed_force_restart_signal(state: dict, restart_to: str) -> dict:
+    return {
+        "kind": "force-restart",
+        "target_id": state.get("target_id", "iterwheel/voyager#0"),
+        "payload": {"restart_to": restart_to},
+    }
+
+
+@when(
+    "the signal is applied to the pipeline state and may raise",
+    target_fixture="exception_result",
+)
+def apply_signal_maybe_raise(state: dict, signal: dict) -> dict[str, Any]:
+    from voyager.pipeline.state_machine import (  # lazy import
+        PipelineState,
+        Signal,
+        advance_pipeline,
+    )
+
+    try:
+        ps = PipelineState(**state)
+        sig = Signal(**signal)
+        advance_pipeline(ps, sig)
+        return {"raised": None}
+    except Exception as exc:
+        return {"raised": exc}
+
+
+@then(parsers.parse('a ValueError is raised mentioning "{substring}"'))
+def assert_value_error_raised(exception_result: dict, substring: str) -> None:
+    raised = exception_result.get("raised")
+    assert isinstance(raised, ValueError), (
+        f"Expected ValueError, got {type(raised).__name__ if raised else None}: {raised}"
+    )
+    assert substring in str(raised), f"{substring!r} not in {raised!s}"
+
+
+# ---------------------------------------------------------------------------
 # When — ordered multi-signal walk
 # ---------------------------------------------------------------------------
 
