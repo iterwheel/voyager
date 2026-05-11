@@ -387,6 +387,16 @@ def then_no_inline_reply(ctx) -> None:
     )
 
 
+@then(parsers.parse('the in-thread reply body contains "{token}"'))
+def then_inline_reply_body_contains(ctx, token: str) -> None:
+    calls = ctx["client"].review_thread_reply_calls
+    assert calls, "no in-thread reply was posted; body assertion cannot run"
+    bodies = [body for *_rest, body in calls]
+    assert any(token in body for body in bodies), (
+        f"token {token!r} not in any posted body: {bodies!r}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Then — persistence assertions
 # ---------------------------------------------------------------------------

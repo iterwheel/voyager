@@ -41,6 +41,9 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     And the sync actions count is 1
     And exactly 1 resolveReviewThread mutation was invoked
     And exactly 1 in-thread reply was posted under the Codex review comment
+    And the in-thread reply body contains "RESOLVED"
+    And the in-thread reply body contains "clearance-close-reason"
+    And the in-thread reply body contains "head-sha-abc"
 
   Scenario: DRY_RUN true plans the resolve but posts no in-thread reply
     Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with substantive author reply and isResolved false
