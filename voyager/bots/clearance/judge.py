@@ -46,16 +46,34 @@ def is_substantive_reply(body: str | None) -> bool:
 def codex_followup_reaction(followup_body: str | None) -> str | None:
     """Detect 👍 / 👎 / textual approval signals in a Codex follow-up. Returns
     'positive' / 'negative' / None.
+
+    Negative phrases are checked **first** because positive substrings would
+    otherwise match inside an explicit negation: ``"not addressed"`` contains
+    the substring ``"addressed"``, ``"still not resolved"`` contains the
+    substring ``"resolved"``. Codex automated review on PR #8 flagged this
+    misclassification — a Codex follow-up rejecting the fix was treated as
+    approval and would have produced a wrong RESOLVED verdict downstream.
     """
     if not followup_body:
         return None
     text = followup_body.lower()
     if any(
+        token in text
+        for token in [
+            "not addressed",
+            "not resolved",
+            "still not",
+            "still has",
+            "still ",
+            "concern remains",
+            "👎",
+        ]
+    ):
+        return "negative"
+    if any(
         token in text for token in ["looks good", "no new issues", "addressed", "resolved", "👍"]
     ):
         return "positive"
-    if any(token in text for token in ["still", "not addressed", "concern remains", "👎"]):
-        return "negative"
     return None
 
 

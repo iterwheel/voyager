@@ -112,6 +112,16 @@ Feature: SWM judge — verdict assignment per SWM-1101 decision tree
     When codex_followup_reaction is called
     Then the followup reaction is "negative"
 
+  Scenario: "not addressed" must outrank the positive substring "addressed"
+    Given a Codex follow-up body "This concern is not addressed in the new diff."
+    When codex_followup_reaction is called
+    Then the followup reaction is "negative"
+
+  Scenario: "still not resolved" must outrank the positive substring "resolved"
+    Given a Codex follow-up body "The race condition is still not resolved at HEAD."
+    When codex_followup_reaction is called
+    Then the followup reaction is "negative"
+
   Scenario: Empty Codex follow-up returns None
     Given a None Codex follow-up body
     When codex_followup_reaction is called
