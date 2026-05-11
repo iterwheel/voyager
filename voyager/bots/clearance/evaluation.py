@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, TypedDict, cast
+from typing import Any, TypedDict
 
 from .constants import (
     CLEARANCE_BLOCKED_LABEL,
@@ -178,6 +178,20 @@ def evaluate_clearance_snapshot(snapshot: dict[str, Any]) -> ClearanceEvaluation
         if status == "clearance_ready"
         else {"add": ["eyes"], "remove": ["+1", "rocket"]}
     )
+    review_state: ReviewStateView = {
+        "current_approvals": current_approvals,
+        "stale_approvals": stale_approvals,
+        "blocking_reviewers": blocking_reviewers,
+        "unresolved_thread_count": len(unresolved_threads),
+    }
+    confidence: ConfidenceView = {
+        "reasons": reasons,
+        "semantic_fix_verified": False,
+        "semantic_fix_note": (
+            "Clearance v1 verifies GitHub review state and review-thread resolution; "
+            "it does not prove that every requested semantic code change was fixed."
+        ),
+    }
     result: ClearanceEvaluation = {
         "status": status,
         "conclusion": conclusion,
@@ -187,26 +201,8 @@ def evaluate_clearance_snapshot(snapshot: dict[str, Any]) -> ClearanceEvaluation
         "target_kind": "pull_request",
         "classifier": CLEARANCE_CLASSIFIER_VERSION,
         "head_sha": head_sha,
-        "review_state": cast(
-            ReviewStateView,
-            {
-                "current_approvals": current_approvals,
-                "stale_approvals": stale_approvals,
-                "blocking_reviewers": blocking_reviewers,
-                "unresolved_thread_count": len(unresolved_threads),
-            },
-        ),
-        "confidence": cast(
-            ConfidenceView,
-            {
-                "reasons": reasons,
-                "semantic_fix_verified": False,
-                "semantic_fix_note": (
-                    "Clearance v1 verifies GitHub review state and review-thread resolution; "
-                    "it does not prove that every requested semantic code change was fixed."
-                ),
-            },
-        ),
+        "review_state": review_state,
+        "confidence": confidence,
         "labels": labels,
         "reactions": reactions,
         "summary": (
