@@ -458,3 +458,218 @@ def investigator_model_is(factory_result, model: str) -> None:
 @then("a factory InvestigationError is raised")
 def factory_investigation_error(factory_result) -> None:
     assert "error" in factory_result, f"Expected InvestigationError but got: {factory_result}"
+
+
+# ---------------------------------------------------------------------------
+# DeepSeekInvestigator thinking/reasoning_effort constructor params (7B-2)
+# ---------------------------------------------------------------------------
+
+
+class _RecordingStubClient:
+    """Stub that captures thinking and reasoning_effort kwargs from complete()."""
+
+    def __init__(self, *, response_text: str) -> None:
+        self._response_text = response_text
+        self._model = "stub-model"
+        self.last_thinking: bool | None = None
+        self.last_reasoning_effort: str | None = None
+
+    async def complete(self, messages, *, thinking=True, reasoning_effort=None, **kwargs):
+        from voyager.llm.deepseek import AssistantTurn
+
+        self.last_thinking = thinking
+        self.last_reasoning_effort = reasoning_effort
+        return AssistantTurn(content=self._response_text, reasoning_content=None)
+
+
+@given(
+    "a DeepSeekInvestigator with thinking false",
+    target_fixture="investigator",
+)
+def investigator_thinking_false():
+    from voyager.bots.clearance.investigator import DeepSeekInvestigator
+
+    stub = _RecordingStubClient(response_text=_ok_response("RESOLVED", 0.9))
+    return DeepSeekInvestigator(client=stub, min_confidence=0.8, thinking=False)
+
+
+@given(
+    parsers.parse('a DeepSeekInvestigator with reasoning_effort "{effort}"'),
+    target_fixture="investigator",
+)
+def investigator_with_reasoning_effort(effort: str):
+    from voyager.bots.clearance.investigator import DeepSeekInvestigator
+
+    stub = _RecordingStubClient(response_text=_ok_response("RESOLVED", 0.9))
+    return DeepSeekInvestigator(client=stub, min_confidence=0.8, reasoning_effort=effort)
+
+
+@then("the client was called with thinking disabled")
+def client_called_thinking_disabled(investigator) -> None:
+    assert investigator._client.last_thinking is False, (
+        f"thinking flag was {investigator._client.last_thinking!r}, expected False"
+    )
+
+
+@then(parsers.parse('the client was called with reasoning_effort "{effort}"'))
+def client_called_with_reasoning_effort(investigator, effort: str) -> None:
+    assert investigator._client.last_reasoning_effort == effort, (
+        f"reasoning_effort was {investigator._client.last_reasoning_effort!r}, expected {effort!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# build_investigator_from_profile (7B-2)
+# ---------------------------------------------------------------------------
+
+
+@given(
+    parsers.parse('a Profile named "{name}" with model "{model}" thinking true'),
+    target_fixture="profile",
+)
+def profile_thinking_true(name: str, model: str):
+    from voyager.core.config import Profile
+
+    return Profile(
+        name=name,
+        model=model,
+        thinking=True,
+        reasoning_effort=None,
+        max_diff_chars=20000,
+        min_confidence=0.78,
+    )
+
+
+@given(
+    parsers.parse('a Profile named "{name}" with model "{model}" thinking false'),
+    target_fixture="profile",
+)
+def profile_thinking_false(name: str, model: str):
+    from voyager.core.config import Profile
+
+    return Profile(
+        name=name,
+        model=model,
+        thinking=False,
+        reasoning_effort=None,
+        max_diff_chars=20000,
+        min_confidence=0.78,
+    )
+
+
+@given(
+    parsers.parse(
+        'a Profile named "{name}" with model "{model}" thinking true and reasoning_effort "{effort}"'
+    ),
+    target_fixture="profile",
+)
+def profile_with_reasoning_effort(name: str, model: str, effort: str):
+    from voyager.core.config import Profile
+
+    return Profile(
+        name=name,
+        model=model,
+        thinking=True,
+        reasoning_effort=effort,
+        max_diff_chars=20000,
+        min_confidence=0.78,
+    )
+
+
+@given(
+    parsers.parse(
+        'a Profile named "{name}" with model "{model}" thinking false and max_diff_chars {chars:d}'
+    ),
+    target_fixture="profile",
+)
+def profile_with_max_diff_chars(name: str, model: str, chars: int):
+    from voyager.core.config import Profile
+
+    return Profile(
+        name=name,
+        model=model,
+        thinking=False,
+        reasoning_effort=None,
+        max_diff_chars=chars,
+        min_confidence=0.78,
+    )
+
+
+@given(
+    parsers.parse(
+        'a Profile named "{name}" with model "{model}" thinking false and min_confidence {conf:f}'
+    ),
+    target_fixture="profile",
+)
+def profile_with_min_confidence(name: str, model: str, conf: float):
+    from voyager.core.config import Profile
+
+    return Profile(
+        name=name,
+        model=model,
+        thinking=False,
+        reasoning_effort=None,
+        max_diff_chars=20000,
+        min_confidence=conf,
+    )
+
+
+@when(
+    parsers.parse('build_investigator_from_profile is called with api_key "{key}"'),
+    target_fixture="profile_factory_result",
+)
+def call_build_from_profile(profile, key: str):
+    from voyager.bots.clearance.investigator import build_investigator_from_profile
+
+    return {"investigator": build_investigator_from_profile(profile, api_key=key)}
+
+
+@then("the profile factory result is a DeepSeekInvestigator")
+def profile_factory_is_investigator(profile_factory_result) -> None:
+    from voyager.bots.clearance.investigator import DeepSeekInvestigator
+
+    assert isinstance(profile_factory_result["investigator"], DeepSeekInvestigator)
+
+
+@then(parsers.parse('the profile investigator model is "{model}"'))
+def profile_investigator_model(profile_factory_result, model: str) -> None:
+    inv = profile_factory_result["investigator"]
+    assert inv._client._model == model, (
+        f"investigator model = {inv._client._model!r}, expected {model!r}"
+    )
+
+
+@then("the profile investigator thinking is true")
+def profile_investigator_thinking_true(profile_factory_result) -> None:
+    inv = profile_factory_result["investigator"]
+    assert inv._thinking is True, f"investigator thinking = {inv._thinking!r}, expected True"
+
+
+@then("the profile investigator thinking is false")
+def profile_investigator_thinking_false(profile_factory_result) -> None:
+    inv = profile_factory_result["investigator"]
+    assert inv._thinking is False, f"investigator thinking = {inv._thinking!r}, expected False"
+
+
+@then(parsers.parse('the profile investigator reasoning_effort is "{effort}"'))
+def profile_investigator_reasoning_effort(profile_factory_result, effort: str) -> None:
+    inv = profile_factory_result["investigator"]
+    assert inv._reasoning_effort == effort, (
+        f"investigator reasoning_effort = {inv._reasoning_effort!r}, expected {effort!r}"
+    )
+
+
+@then(parsers.parse("the profile investigator max_diff_chars is {chars:d}"))
+def profile_investigator_max_diff_chars(profile_factory_result, chars: int) -> None:
+    inv = profile_factory_result["investigator"]
+    assert inv.max_diff_chars == chars, (
+        f"investigator max_diff_chars = {inv.max_diff_chars!r}, expected {chars!r}"
+    )
+
+
+@then(parsers.parse("the profile investigator min_confidence is {conf:f}"))
+def profile_investigator_min_confidence(profile_factory_result, conf: float) -> None:
+    inv = profile_factory_result["investigator"]
+    assert abs(inv.min_confidence - conf) < 1e-9, (
+        f"investigator min_confidence = {inv.min_confidence!r}, expected {conf!r}"
+    )
