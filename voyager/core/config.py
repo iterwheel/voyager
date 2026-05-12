@@ -8,7 +8,7 @@ from typing import Any
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 
-_VALID_REASONING_EFFORTS = frozenset({"low", "medium", "high"})
+_VALID_REASONING_EFFORTS = frozenset({"low", "medium", "high", "max"})
 
 _DEFAULT_SEARCH_ORDER = [
     lambda: str(Path.home() / ".voyager" / "config.toml"),

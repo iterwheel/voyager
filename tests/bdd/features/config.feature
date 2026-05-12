@@ -125,6 +125,12 @@ Feature: TOML config loader
     When the config load is attempted
     Then a ValueError is raised mentioning "reasoning_effort"
 
+  Scenario: Profile reasoning_effort "max" parses (DeepSeek V4 max-effort tier, Codex PR #10 P2)
+    Given the TOML config file "profile_reasoning_effort_max.toml"
+    When the config is loaded
+    Then the profiles dict contains profile "pro_max_effort"
+    And profile "pro_max_effort" has reasoning_effort "max"
+
   Scenario: Profile with thinking=false and reasoning_effort raises ValueError (V4 coupling)
     Given the TOML config file "profile_thinking_false_with_effort.toml"
     When the config load is attempted
