@@ -42,9 +42,29 @@ class AppConfig:
 
 
 @dataclass(frozen=True)
+class Profile:
+    """LLM investigator profile — a named bag of params for one verdict-investigation flavor.
+
+    Loaded from ``[profiles.<name>]`` TOML tables. Schema A (user-decided) ships
+    five named profiles: pro / pro_max / pro_fast / flash / flash_fast. The 7B-3
+    investigator wiring will look up profiles by name from ``cfg.profiles`` and
+    use them to construct a ``DeepSeekInvestigator``.
+    """
+
+    name: str
+    model: str
+    thinking: bool
+    reasoning_effort: str | None
+    max_diff_chars: int
+    min_confidence: float
+
+
+@dataclass(frozen=True)
 class VoyagerConfig:
     apps: dict[str, AppConfig]
     work_dir: Path
+    profiles: dict[str, Profile]
+    default_profile: str | None
 
 
 def _parse_app(item: dict[str, Any]) -> AppConfig:
@@ -71,6 +91,34 @@ def _parse_app(item: dict[str, Any]) -> AppConfig:
         private_key_path=private_key_path,
         installation_id=installation_id,
         installations=installations,
+    )
+
+
+def _parse_profile(name: str, item: dict[str, Any]) -> Profile:
+    model = item.get("model")
+    if not model:
+        raise ValueError(f"Profile {name!r}: 'model' is required and must be non-empty")
+
+    if "thinking" not in item:
+        raise ValueError(
+            f"Profile {name!r}: 'thinking' is required (no implicit default — "
+            "DeepSeek's two modes are independently configurable)"
+        )
+    thinking = bool(item["thinking"])
+
+    reasoning_effort_raw = item.get("reasoning_effort")
+    reasoning_effort = str(reasoning_effort_raw) if reasoning_effort_raw is not None else None
+
+    max_diff_chars = int(item["max_diff_chars"]) if "max_diff_chars" in item else 20000
+    min_confidence = float(item["min_confidence"]) if "min_confidence" in item else 0.78
+
+    return Profile(
+        name=name,
+        model=model,
+        thinking=thinking,
+        reasoning_effort=reasoning_effort,
+        max_diff_chars=max_diff_chars,
+        min_confidence=min_confidence,
     )
 
 
@@ -118,7 +166,21 @@ def load_config(path: str | Path | None = None) -> VoyagerConfig:
         app = _parse_app(item)
         apps[app.slug] = app
 
-    return VoyagerConfig(apps=apps, work_dir=work_dir)
+    profiles_section = raw.get("profiles") or {}
+    profiles: dict[str, Profile] = {}
+    for profile_name, profile_data in profiles_section.items():
+        profiles[profile_name] = _parse_profile(profile_name, profile_data)
+
+    default_profile = voyager_section.get("default_profile")
+    if default_profile is not None and default_profile not in profiles:
+        raise ValueError(
+            f"[voyager].default_profile is {default_profile!r} but no "
+            f"[profiles.{default_profile}] section exists"
+        )
+
+    return VoyagerConfig(
+        apps=apps, work_dir=work_dir, profiles=profiles, default_profile=default_profile
+    )
 
 
 def public_app_status(apps: dict[str, AppConfig]) -> list[dict[str, Any]]:

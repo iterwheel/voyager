@@ -23,6 +23,7 @@ import httpx
 import openai
 
 if TYPE_CHECKING:
+    from voyager.core.config import Profile
     from voyager.llm.deepseek import DeepSeekClient
 
 _log = logging.getLogger(__name__)
@@ -280,10 +281,14 @@ class DeepSeekInvestigator:
         client: DeepSeekClient,
         max_diff_chars: int = 20000,
         min_confidence: float = 0.78,
+        thinking: bool = True,
+        reasoning_effort: str | None = None,
     ) -> None:
         self._client = client
         self.max_diff_chars = max_diff_chars
         self.min_confidence = min_confidence
+        self._thinking = thinking
+        self._reasoning_effort = reasoning_effort
 
     async def investigate(self, item: ThreadInvestigationInput) -> InvestigationDecision:
         from voyager.llm.deepseek import Message
@@ -294,7 +299,11 @@ class DeepSeekInvestigator:
             Message(role="user", content=prompt),
         ]
         try:
-            turn = await self._client.complete(messages, thinking=True)
+            turn = await self._client.complete(
+                messages,
+                thinking=self._thinking,
+                reasoning_effort=self._reasoning_effort,
+            )
         except (httpx.HTTPError, openai.APIError, ValueError) as exc:
             # Narrow the catch to integration exceptions — DeepSeekClient
             # normalizes server errors to openai.APIError / httpx.HTTPError /
@@ -380,4 +389,46 @@ def build_investigator_from_env() -> DeepSeekInvestigator | None:
         client=client,
         max_diff_chars=max_diff,
         min_confidence=min_confidence,
+    )
+
+
+def build_investigator_from_profile(
+    profile: Profile,
+    *,
+    api_key: str,
+) -> DeepSeekInvestigator:
+    """Build a DeepSeekInvestigator from a config-loaded Profile.
+
+    The Profile carries all the DeepSeek-specific knobs (model, thinking,
+    reasoning_effort) plus the investigator-level thresholds (max_diff_chars,
+    min_confidence). The ``api_key`` stays a separate parameter — it lives in
+    ``VOYAGER_DEEPSEEK_API_KEY`` and shouldn't be persisted in the TOML config
+    (secrets out of files).
+
+    Phase 7B-3 will use this from the webhook dispatch layer; 7B-2 just exposes
+    the construction path.
+    """
+    if profile.model not in _KNOWN_PRO_MODELS:
+        tier = "a Flash-tier" if profile.model in _KNOWN_FLASH_MODELS else "an unrecognized"
+        _log.warning(
+            "investigator: profile %r uses %s model %r "
+            "(known Pro: %s). The min_confidence=%.2f threshold was tuned against "
+            "Pro, so verdicts may bypass the gate with lower-quality reasoning. "
+            "Re-evaluate the threshold or pin to a Pro model.",
+            profile.name,
+            tier,
+            profile.model,
+            ", ".join(sorted(_KNOWN_PRO_MODELS)),
+            profile.min_confidence,
+        )
+
+    from voyager.llm.deepseek import DeepSeekClient
+
+    client = DeepSeekClient(api_key=api_key, model=profile.model)
+    return DeepSeekInvestigator(
+        client=client,
+        max_diff_chars=profile.max_diff_chars,
+        min_confidence=profile.min_confidence,
+        thinking=profile.thinking,
+        reasoning_effort=profile.reasoning_effort,
     )
