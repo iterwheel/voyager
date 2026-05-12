@@ -97,9 +97,17 @@ def _parse_app(item: dict[str, Any]) -> AppConfig:
 
 
 def _parse_profile(name: str, item: dict[str, Any]) -> Profile:
-    model = item.get("model")
+    model_raw = item.get("model")
+    if not isinstance(model_raw, str):
+        raise ValueError(
+            f"Profile {name!r}: 'model' must be a TOML string, got "
+            f"{type(model_raw).__name__}: {model_raw!r}"
+        )
+    model = model_raw.strip()
     if not model:
-        raise ValueError(f"Profile {name!r}: 'model' is required and must be non-empty")
+        raise ValueError(
+            f"Profile {name!r}: 'model' must be a non-empty string (not whitespace-only)"
+        )
 
     if "thinking" not in item:
         raise ValueError(
@@ -132,11 +140,29 @@ def _parse_profile(name: str, item: dict[str, Any]) -> Profile:
             )
         reasoning_effort = reasoning_effort_raw
 
-    max_diff_chars = int(item["max_diff_chars"]) if "max_diff_chars" in item else 20000
+    if "max_diff_chars" in item:
+        raw_value = item["max_diff_chars"]
+        if isinstance(raw_value, bool) or not isinstance(raw_value, int):
+            raise ValueError(
+                f"Profile {name!r}: 'max_diff_chars' must be a TOML integer, got "
+                f"{type(raw_value).__name__}: {raw_value!r}"
+            )
+        max_diff_chars = raw_value
+    else:
+        max_diff_chars = 20000
     if max_diff_chars <= 0:
         raise ValueError(f"Profile {name!r}: 'max_diff_chars' must be > 0, got {max_diff_chars!r}")
 
-    min_confidence = float(item["min_confidence"]) if "min_confidence" in item else 0.78
+    if "min_confidence" in item:
+        raw_value = item["min_confidence"]
+        if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float)):
+            raise ValueError(
+                f"Profile {name!r}: 'min_confidence' must be a TOML number, got "
+                f"{type(raw_value).__name__}: {raw_value!r}"
+            )
+        min_confidence = float(raw_value)
+    else:
+        min_confidence = 0.78
     if not 0.0 < min_confidence <= 1.0:
         raise ValueError(
             f"Profile {name!r}: 'min_confidence' must be in (0.0, 1.0], got {min_confidence!r}"
