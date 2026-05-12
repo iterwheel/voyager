@@ -163,3 +163,9 @@ Feature: TOML config loader
     Given the TOML config file "default_profile_missing.toml"
     When the config load is attempted
     Then a ValueError is raised mentioning "ghost"
+
+  Scenario: Profile entry as scalar string raises ValueError (schema typo guard)
+    Given the TOML config file "profile_scalar_entry.toml"
+    When the config load is attempted
+    Then a ValueError is raised mentioning "pro"
+    And the error message mentions "must be a TOML table"
