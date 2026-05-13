@@ -339,7 +339,7 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     And the thread effective_severity is "P2"
     And the thread demotion_reason is None
 
-  Scenario: S5 — P1 → P3 (max demotion) when unprotected + required_check_coupling
+  Scenario: S5 — P1 → P2 (single-step demotion) when unprotected + required_check_coupling, ThreadSnapshot also populated
     Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with P1 badge and required_check_coupling body
     And the base branch is "main"
     And the stub branch_protected returns False
@@ -378,3 +378,43 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     When compute_clearance_automation runs with DRY_RUN false
     Then the automation status is "ready"
     And the automation head_sha is "head-sha-abc1234"
+
+  # ---------------------------------------------------------------------------
+  # Wave 7C commit 6: stale-verdict guard in dispatch_route_writeback
+  # ---------------------------------------------------------------------------
+
+  Scenario: G1 fresh — automation.head_sha matches current PR head, writeback proceeds
+    Given a stub automation with head_sha "sha-abc" and status "ready"
+    And the current PR head sha is "sha-abc"
+    When dispatch_route_writeback runs with DRY_RUN false for PR 49 on "iterwheel/sandbox"
+    Then the writeback was not skipped
+    And no stale_verdict_skip log was emitted
+
+  Scenario: G2 stale — automation.head_sha differs from current PR head, writeback is skipped
+    Given a stub automation with head_sha "sha-old" and status "ready"
+    And the current PR head sha is "sha-new"
+    When dispatch_route_writeback runs with DRY_RUN false for PR 49 on "iterwheel/sandbox"
+    Then the dispatch result is skipped with reason "stale_verdict"
+    And the dispatch automation status is "stale_verdict_skip"
+    And a stale_verdict_skip log was emitted with expected_sha "sha-old" and actual_sha "sha-new"
+
+  Scenario: G3 fail-open — client.pull_request raises httpx error, writeback proceeds
+    Given a stub automation with head_sha "sha-abc" and status "ready"
+    And the stub client fails on pull_request with an httpx error
+    When dispatch_route_writeback runs with DRY_RUN false for PR 49 on "iterwheel/sandbox"
+    Then the writeback was not skipped
+    And a stale_guard_failed_fail_open log was emitted
+
+  Scenario: G4 legacy payload — automation has no head_sha key, guard short-circuits
+    Given a stub automation with no head_sha and status "ready"
+    And the current PR head sha is "sha-new"
+    When dispatch_route_writeback runs with DRY_RUN false for PR 49 on "iterwheel/sandbox"
+    Then the writeback was not skipped
+    And no stale_verdict_skip log was emitted
+
+  Scenario: G5 dry-run skip — guard short-circuits when DRY_RUN true, no pull_request fetch
+    Given a stub automation with head_sha "sha-old" and status "ready"
+    And the current PR head sha is "sha-new"
+    When dispatch_route_writeback runs with DRY_RUN true for PR 49 on "iterwheel/sandbox"
+    Then the writeback was not skipped
+    And pull_request was never called

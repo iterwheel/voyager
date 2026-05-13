@@ -80,7 +80,8 @@ async def _process_thread(
     pr_title: str | None,
     now: datetime,
     base_branch: str,
-    client: GitHubAppClient,
+    branch_protected_state: bool,
+    client: GitHubAppClient,  # noqa: ARG001 — kept for future per-thread API calls
     pr_author_login: str | None = None,
     investigator: ThreadInvestigator | None = None,
     get_diff: Callable[[], Awaitable[str]] | None = None,
@@ -115,28 +116,17 @@ async def _process_thread(
     comments_nodes = (thread_dict.get("comments") or {}).get("nodes") or []
     codex_sev, finding_kind = extract_severity_and_kind(comments_nodes)
 
-    # Lazy-fetch branch protection state (REST call per webhook)
-    # Fail-safe to True on any exception so we don't demote on uncertainty
-    try:
-        protected = await client.branch_protected(CLEARANCE_AGENT_SLUG, repo, base_branch)
-    except Exception as exc:
-        _log.warning(
-            "branch_protected fetch failed for %s branch=%s (fail-safe → True): %s",
-            repo,
-            base_branch,
-            exc,
-        )
-        protected = True
-
-    # Evaluate severity demotion
+    # Evaluate severity demotion using the per-webhook branch_protected_state
+    # (already fetched once in compute_clearance_automation; passed in here)
     sev_decision = evaluate_severity(
         codex_severity=codex_sev,
         finding_kind=finding_kind,
-        branch_protected=protected,
+        branch_protected=branch_protected_state,
         base_branch=base_branch,
     )
 
-    # Emit structured log on demotion
+    # Emit structured log on demotion (Codex MVE P3: include base_branch + finding_kind
+    # so operators can grep by branch + correlate demotions to extractor signal)
     if sev_decision.effective_severity != sev_decision.codex_severity:
         _log.info(
             "severity_demoted: %s",
@@ -146,6 +136,8 @@ async def _process_thread(
                     "repo": repo,
                     "pr": pr,
                     "thread_id": thread_dict.get("id"),
+                    "base_branch": base_branch,
+                    "finding_kind": finding_kind,
                     "codex_severity": sev_decision.codex_severity.value,
                     "effective_severity": sev_decision.effective_severity.value,
                     "reason": sev_decision.reason,
@@ -348,7 +340,8 @@ def _compute_status(threads: list[Thread]) -> tuple[Status, str]:
     if nhj:
         n = len(nhj)
         noun = "thread" if n == 1 else "threads"
-        return Status.PENDING, f"{n} Codex review {noun} need human judgment"
+        verb = "needs" if n == 1 else "need"
+        return Status.PENDING, f"{n} Codex review {noun} {verb} human judgment"
 
     open_low = [
         t for t in threads if t.verdict == Verdict.OPEN and t.effective_severity == Severity.P3
@@ -494,6 +487,24 @@ async def compute_clearance_automation(
     pr_author_login: str | None = (pr_data.get("user") or {}).get("login") or None
     base_branch = (pr_data.get("base") or {}).get("ref") or "main"
 
+    # Wave 7C-1 commit 3 + Codex MVE-round P2: hoist branch_protected fetch out of
+    # the per-thread loop. All threads on the same PR share the same base branch,
+    # so calling branch_protected once per webhook (not N times for N threads)
+    # eliminates the N-REST-rate-limit risk Codex flagged. Fail-safe to True on
+    # any exception per VOY-1809 D3 (don't demote on uncertainty).
+    try:
+        branch_protected_state = await client.branch_protected(
+            CLEARANCE_AGENT_SLUG, repository, base_branch
+        )
+    except Exception as exc:
+        _log.warning(
+            "branch_protected fetch failed for %s branch=%s (fail-safe → True): %s",
+            repository,
+            base_branch,
+            exc,
+        )
+        branch_protected_state = True
+
     # Lazy memoized diff fetch — fires GitHub API only when the first
     # State B + code_changed=False thread actually needs it. Gemini's
     # round-3 refinement of D3=B: a webhook where every thread resolves
@@ -520,6 +531,7 @@ async def compute_clearance_automation(
             pr_title=pr_title,
             now=now,
             base_branch=base_branch,
+            branch_protected_state=branch_protected_state,
             client=client,
             pr_author_login=pr_author_login,
             investigator=investigator,

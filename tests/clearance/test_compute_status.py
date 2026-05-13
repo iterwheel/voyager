@@ -154,12 +154,12 @@ _NHJ_CASES = [
     # Scenario 9: single NHJ P2
     (
         [_nhj(Severity.P2)],
-        "1 Codex review thread need human judgment",
+        "1 Codex review thread needs human judgment",
     ),
     # Scenario 10: NHJ + RESOLVED
     (
         [_nhj(Severity.P2), _resolved(Severity.P1)],
-        "1 Codex review thread need human judgment",
+        "1 Codex review thread needs human judgment",
     ),
 ]
 

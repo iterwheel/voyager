@@ -224,12 +224,13 @@ Each impl+test pair (6 pairs total) must pass:
 | Date | Commit | Action | Result | By |
 |------|--------|--------|--------|----|
 | 2026-05-13 | `37d218a` | CHG proposed (this document) | Status: Proposed | Claude Opus 4.7 |
-| | (pending) | Commit 1 — severity evaluator | (held until CHG approved) | |
-| | (pending) | Commit 2 — extractor | | |
-| | (pending) | Commit 3 — pipeline wiring (α) | | |
-| | (pending) | Commit 4 — β aggregation (MVE gate) | | |
-| | (pending) | MVE trinity round | | |
-| | (pending) | Commit 5 — head_sha schema | | |
+| 2026-05-14 | `025206e` | CHG approved (trinity r5 ≥9.0 from all 4 + user approval) | Status: Approved | Frank Xu / Claude |
+| 2026-05-14 | `544b0e8` + `971e62f` | Commit 1 — severity evaluator (impl + 14 tests) | 424 tests pass | Claude Haiku + Sonnet |
+| 2026-05-14 | `19103d7` + `8f596d7` | Commit 2 — extractor (impl + 16 tests) | 440 tests pass | Claude Haiku + Sonnet |
+| 2026-05-14 | `11d9a45` + `54c5b9e` | Commit 3 — pipeline wiring α (impl + 10 BDD). F7 permission verified: VOY-1806 line 87 grants `iterwheel-clearance: Metadata: Read`, which is the only scope required by `GET /repos/.../branches/{branch}` to read `.protected`. Administration permission NOT required. | 450 tests pass; F7 cleared | Claude Haiku + Sonnet |
+| 2026-05-14 | `2efd57a` + `468c32c` | Commit 4 — β aggregation MVE (impl + 11 unit + 5 fixture realism updates) | 461 tests pass; MVE gate enters | Claude Haiku + Sonnet |
+| 2026-05-14 | (this round) | MVE trinity round | PROCEED ≥9.0 from all 4 (Gemini 9.8, DeepSeek 9.1, GLM 9.0, Codex 9.0; average 9.225); 3-way convergent P2s (grammar `need→needs`, S5 title rename, `branch_protected` per-thread→per-webhook memoization) folded into subsequent polish | Claude Opus 4.7 |
+| 2026-05-14 | `426173d` + `974220d` | Commit 5 — head_sha in automation (impl + 3 BDD) | 464 tests pass | Claude Haiku + Sonnet |
 | | (pending) | Commit 6 — stale-verdict guard | | |
 | | (pending) | Final trinity round | | |
 | | (pending) | Push + PR + merge | | |
