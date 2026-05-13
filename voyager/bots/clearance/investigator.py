@@ -79,6 +79,8 @@ class InvestigationDecision:
 
 
 class ThreadInvestigator(Protocol):
+    max_diff_chars: int
+
     async def investigate(self, item: ThreadInvestigationInput) -> InvestigationDecision: ...
 
 

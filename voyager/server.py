@@ -7,7 +7,10 @@ import logging
 import os
 from collections import deque
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from voyager.bots.clearance.investigator import ThreadInvestigator
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 
@@ -78,7 +81,7 @@ def _get_default_profile_name() -> str | None:
     return cast("str | None", _default_profile_name)
 
 
-def _get_investigator() -> Any:
+def _get_investigator() -> ThreadInvestigator | None:
     """Return a memoized ``DeepSeekInvestigator`` built from the default profile, or None.
 
     Returns None when:
@@ -112,7 +115,7 @@ def _get_investigator() -> Any:
                 )
         except Exception:
             _investigator = None
-    return _investigator
+    return cast("ThreadInvestigator | None", _investigator)
 
 
 def _utc_now() -> str:

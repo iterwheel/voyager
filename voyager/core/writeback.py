@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Any
 _log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
+    from voyager.bots.clearance.investigator import ThreadInvestigator
+
     from .github_app import GitHubAppClient
 
 
@@ -101,7 +103,7 @@ async def dispatch_route_writeback(
     repository: str | None,
     store: Any = None,
     default_profile_name: str | None = None,
-    investigator: Any = None,
+    investigator: ThreadInvestigator | None = None,
 ) -> dict[str, Any]:
     """Dispatch a route to the right writeback path.
 

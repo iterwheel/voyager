@@ -113,9 +113,11 @@ async def _process_thread(
     path = thread_dict.get("path") or "unknown"
     line = thread_dict.get("line")
 
-    # Wave 7B-3 D1=B AUGMENT: investigator only fires on State B with
-    # code_changed=False. The code_changed=True path is deterministic
-    # RESOLVED (judge() step 3 source-of-record) and we don't override it.
+    # AUGMENT invariant: gate skips when judge() already returned RESOLVED.
+    # Together with `state == ThreadState.B` this preserves *every* deterministic
+    # RESOLVED path (github_isResolved=true, positive Codex follow-up, future
+    # code_changed=True) without LLM overrule. Do not loosen the gate without
+    # extending the regression set.
     llm_decision: InvestigationDecision | None = None
     if (
         investigator is not None
@@ -129,7 +131,7 @@ async def _process_thread(
                 diff_text,
                 path=path,
                 line=line,
-                max_chars=getattr(investigator, "max_diff_chars", 20000),
+                max_chars=investigator.max_diff_chars,
             )
             comments = (thread_dict.get("comments") or {}).get("nodes") or []
             codex_comment_body = (comments[0].get("body") if comments else None) or ""
@@ -147,15 +149,30 @@ async def _process_thread(
                 heuristic_verdict=decision.verdict.value,
                 heuristic_reason=decision.reason,
             )
-            llm_decision = await investigator.investigate(item)
+            returned = await investigator.investigate(item)
+            try:
+                coerced = Verdict(returned.verdict)
+            except ValueError as exc:
+                raise InvestigationError(
+                    f"investigator returned unknown verdict: {returned.verdict!r}"
+                ) from exc
+            llm_decision = returned
             decision = VerdictDecision(
-                verdict=Verdict(llm_decision.verdict),
+                verdict=coerced,
                 reason=llm_decision.reason,
                 substantive=decision.substantive,
             )
         except InvestigationError as exc:
             _log.warning(
                 "investigator failed for thread %s (falling back to deterministic): %s",
+                thread_dict.get("id"),
+                exc,
+                exc_info=True,
+            )
+        except (httpx.HTTPError, TimeoutError) as exc:
+            _log.warning(
+                "diff fetch / investigator network failure for thread %s "
+                "(falling back to deterministic): %s",
                 thread_dict.get("id"),
                 exc,
                 exc_info=True,
