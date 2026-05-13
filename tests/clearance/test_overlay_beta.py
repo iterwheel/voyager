@@ -452,3 +452,133 @@ def test_r5_p1_resolved_codex_not_counted_in_guard() -> None:
     result = apply_swm_overlay(ev, automation)
     assert result is ev, "guard should preserve evaluation when human thread is unresolved"
     assert result["conclusion"] == "failure"
+
+
+# ---------------------------------------------------------------------------
+# Scenario 6: r6-P1 — clearance_blocked + non-thread blocker coexisting
+# Codex PR head 9f834d3, inline comment 3238070097
+# ---------------------------------------------------------------------------
+
+
+def _blocked_codex_thread_plus_no_approval() -> dict:
+    """Evaluation blocked by 1 P3 Codex thread AND no current-head approval.
+
+    evaluate_clearance_snapshot sets status=clearance_blocked (unresolved threads
+    present) but ALSO appends a non-thread reason for the missing approval.
+    The overlay must NOT clear this to clearance_ready.
+    """
+    ev = _blocked_evaluation()
+    # unresolved_thread_count=1 already set; no current approvals → extra reason
+    ev["confidence"]["reasons"] = [
+        "1 review thread(s) are unresolved.",
+        "No approval on the current PR head.",
+    ]
+    return ev
+
+
+def _blocked_codex_thread_plus_draft() -> dict:
+    """Evaluation blocked by 1 P3 Codex thread AND draft PR."""
+    ev = _blocked_evaluation()
+    ev["confidence"]["reasons"] = [
+        "PR is still draft.",
+        "1 review thread(s) are unresolved.",
+    ]
+    return ev
+
+
+def _blocked_codex_thread_plus_not_open() -> dict:
+    """Evaluation blocked by 1 P3 Codex thread AND PR not open."""
+    ev = _blocked_evaluation()
+    ev["confidence"]["reasons"] = [
+        "PR is not open.",
+        "1 review thread(s) are unresolved.",
+    ]
+    return ev
+
+
+def test_r6_p1_codex_thread_plus_no_approval_preserves_evaluation() -> None:
+    """r6-P1: clearance_blocked with P3 Codex thread + no current-head approval → preserved.
+
+    The live evaluator status is clearance_blocked (unresolved threads present).
+    confidence.reasons also carries 'No approval on the current PR head.'  The
+    previous guard only checked status==clearance_pending, so this mixed case
+    slipped through and the overlay wrongly set conclusion=success.
+    """
+    automation = {
+        "enabled": True,
+        "status": "ready_with_low_priority",
+        "reason": "all blocking threads RESOLVED; 1 low-priority P3 thread still open",
+        "unresolved_codex_thread_count": 1,
+        "sync_actions": [],
+        "sync_actions_count": 0,
+    }
+    ev = _blocked_codex_thread_plus_no_approval()
+    result = apply_swm_overlay(ev, automation)
+    assert result is ev, (
+        "overlay must preserve when clearance_blocked coexists with non-thread blocker"
+    )
+
+
+def test_r6_p1_codex_thread_plus_no_approval_conclusion_unchanged() -> None:
+    """r6-P1: mixed case → conclusion stays failure, not overridden to success."""
+    automation = {
+        "enabled": True,
+        "status": "ready_with_low_priority",
+        "reason": "all blocking threads RESOLVED; 1 low-priority P3 thread still open",
+        "unresolved_codex_thread_count": 1,
+        "sync_actions": [],
+        "sync_actions_count": 0,
+    }
+    ev = _blocked_codex_thread_plus_no_approval()
+    result = apply_swm_overlay(ev, automation)
+    assert result["conclusion"] == "failure"
+
+
+def test_r6_p1_codex_thread_plus_draft_preserves_evaluation() -> None:
+    """r6-P1: clearance_blocked with P3 Codex thread + draft PR → preserved."""
+    automation = {
+        "enabled": True,
+        "status": "ready_with_low_priority",
+        "reason": "all blocking threads RESOLVED; 1 low-priority P3 thread still open",
+        "unresolved_codex_thread_count": 1,
+        "sync_actions": [],
+        "sync_actions_count": 0,
+    }
+    ev = _blocked_codex_thread_plus_draft()
+    result = apply_swm_overlay(ev, automation)
+    assert result is ev
+
+
+def test_r6_p1_codex_thread_plus_not_open_preserves_evaluation() -> None:
+    """r6-P1: clearance_blocked with P3 Codex thread + PR not open → preserved."""
+    automation = {
+        "enabled": True,
+        "status": "ready_with_low_priority",
+        "reason": "all blocking threads RESOLVED; 1 low-priority P3 thread still open",
+        "unresolved_codex_thread_count": 1,
+        "sync_actions": [],
+        "sync_actions_count": 0,
+    }
+    ev = _blocked_codex_thread_plus_not_open()
+    result = apply_swm_overlay(ev, automation)
+    assert result is ev
+
+
+def test_r6_p1_thread_only_still_overrides() -> None:
+    """r6-P1 regression guard: pure thread-only case with unresolved_codex_thread_count still overrides.
+
+    Ensure the new guard doesn't break the existing happy path: exactly 1 reason
+    (the unresolved-threads reason) and unresolved_thread_count == unresolved_codex_thread_count
+    → override fires → conclusion=success.
+    """
+    automation = {
+        "enabled": True,
+        "status": "ready_with_low_priority",
+        "reason": "all blocking threads RESOLVED; 1 low-priority P3 thread still open",
+        "unresolved_codex_thread_count": 1,
+        "sync_actions": [],
+        "sync_actions_count": 0,
+    }
+    ev = _blocked_evaluation()  # 1 reason: "1 review thread(s) are unresolved."
+    result = apply_swm_overlay(ev, automation)
+    assert result["conclusion"] == "success"
