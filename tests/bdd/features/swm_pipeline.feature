@@ -446,3 +446,25 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     When compute_clearance_automation runs with DRY_RUN false
     Then the automation status is "ready"
     And exactly 1 resolveReviewThread mutation was invoked
+
+  # ---------------------------------------------------------------------------
+  # R5-P2: second pre-Stage-1.5 stale guard (race window fix)
+  # ---------------------------------------------------------------------------
+
+  Scenario: R5-P2 race — PR head advances between initial fetch and Stage 1.5; second guard fires
+    Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with substantive author reply and isResolved false
+    And the webhook expected_sha is "sha-webhook"
+    And the stub PR initial head sha is "sha-webhook"
+    And the stub PR head advances on the second pull_request call to "sha-advanced"
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "stale_verdict_skip"
+    And no resolveReviewThread mutation was invoked
+    And a pipeline_stale_verdict_skip log was emitted with expected_sha "sha-webhook" and actual_sha "sha-advanced"
+
+  Scenario: R5-P2 no race — PR head is stable on both fetches, Stage 1.5 runs normally
+    Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with substantive author reply and isResolved false
+    And the webhook expected_sha is "sha-webhook"
+    And the stub PR head is stable at "sha-webhook" on all fetches
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "ready"
+    And exactly 1 resolveReviewThread mutation was invoked

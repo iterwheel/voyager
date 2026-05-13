@@ -344,16 +344,16 @@ def _blocked_with_extra_human_thread() -> dict:
 def test_ready_with_low_priority_non_codex_thread_preserves_evaluation() -> None:
     """β: non-Codex unresolved thread gap → evaluation returned unchanged.
 
-    PR has 1 P3 Codex thread (codex_thread_count=1) plus 1 unresolved human
-    thread.  The live evaluator reports unresolved_thread_count=2.  Because
-    unresolved_thread_count > codex_thread_count, at least one non-Codex thread
-    is open and the overlay must not flip conclusion to success.
+    PR has 1 P3 Codex thread (unresolved_codex_thread_count=1) plus 1 unresolved
+    human thread.  The live evaluator reports unresolved_thread_count=2.  Because
+    unresolved_thread_count > unresolved_codex_thread_count, at least one non-Codex
+    thread is open and the overlay must not flip conclusion to success.
     """
     automation = {
         "enabled": True,
         "status": "ready_with_low_priority",
         "reason": "all blocking threads RESOLVED; 1 low-priority thread still open",
-        "codex_thread_count": 1,
+        "unresolved_codex_thread_count": 1,
         "sync_actions": [],
         "sync_actions_count": 0,
     }
@@ -368,7 +368,7 @@ def test_ready_with_low_priority_non_codex_thread_conclusion_unchanged() -> None
         "enabled": True,
         "status": "ready_with_low_priority",
         "reason": "all blocking threads RESOLVED; 1 low-priority thread still open",
-        "codex_thread_count": 1,
+        "unresolved_codex_thread_count": 1,
         "sync_actions": [],
         "sync_actions_count": 0,
     }
@@ -378,39 +378,77 @@ def test_ready_with_low_priority_non_codex_thread_conclusion_unchanged() -> None
 
 
 def test_ready_with_low_priority_exact_match_allows_override() -> None:
-    """β: unresolved_thread_count == codex_thread_count → all threads are Codex → override fires."""
+    """β: unresolved_thread_count == unresolved_codex_thread_count → all threads are Codex → override fires."""
     automation = {
         "enabled": True,
         "status": "ready_with_low_priority",
         "reason": "all blocking threads RESOLVED; 1 low-priority thread still open",
-        "codex_thread_count": 1,
+        "unresolved_codex_thread_count": 1,
         "sync_actions": [],
         "sync_actions_count": 0,
     }
-    ev = _blocked_evaluation()  # unresolved_thread_count=1, codex_thread_count=1
+    ev = _blocked_evaluation()  # unresolved_thread_count=1, unresolved_codex_thread_count=1
     result = apply_swm_overlay(ev, automation)
     assert result["conclusion"] == "success"
 
 
 def test_ready_with_low_priority_no_codex_count_key_allows_override() -> None:
-    """β: missing codex_thread_count key (old automation dict) → override still fires.
+    """β: missing unresolved_codex_thread_count key (old automation dict) → override still fires.
 
-    When codex_thread_count is absent (defaults to 0), the check
-    unresolved_count > 0 fires only when there are actually unresolved threads
-    that are not Codex. For the thread-only-blocker scenario where the
-    live evaluator's unresolved_thread_count is already 1, the preservation
-    branch would trigger incorrectly. This test uses zero unresolved threads
-    (evaluation status already clearance_ready) to confirm the code path is
-    harmless when the key is absent and no threads are unresolved.
+    When unresolved_codex_thread_count is absent the check is skipped entirely
+    (old automation dict predating this field). This test confirms the success
+    override still fires when the key is absent.
     """
     automation = {
         "enabled": True,
         "status": "ready_with_low_priority",
         "reason": "all blocking threads RESOLVED; 1 low-priority thread still open",
-        # no codex_thread_count key — old automation dict
+        # no unresolved_codex_thread_count key — old automation dict
         "sync_actions": [],
         "sync_actions_count": 0,
     }
     ev = _blocked_evaluation()
     result = apply_swm_overlay(ev, automation)
     assert result["conclusion"] == "success"
+
+
+# ---------------------------------------------------------------------------
+# Scenario 5b: R5-P1 regression — resolved Codex threads must NOT count
+# Codex PR #12 inline comment 3237870559
+# ---------------------------------------------------------------------------
+
+
+def _blocked_with_resolved_codex_and_extra_human_thread() -> dict:
+    """Evaluation for a PR with 2 resolved Codex + 1 P3 OPEN Codex + 1 unresolved human thread.
+
+    The live evaluator sees unresolved_thread_count=2 (1 P3 Codex OPEN + 1 human).
+    The old (buggy) key codex_thread_count=3 (total Codex including resolved ones).
+    The new key unresolved_codex_thread_count=1 (only the P3 OPEN Codex thread).
+    unresolved_thread_count(2) > unresolved_codex_thread_count(1) → guard fires → preserved.
+    """
+    ev = _blocked_evaluation()
+    ev["review_state"]["unresolved_thread_count"] = 2
+    ev["confidence"]["reasons"] = ["2 review thread(s) are unresolved."]
+    return ev
+
+
+def test_r5_p1_resolved_codex_not_counted_in_guard() -> None:
+    """R5-P1: unresolved_codex_thread_count excludes resolved threads.
+
+    2 resolved Codex + 1 P3 OPEN Codex + 1 unresolved human thread.
+    unresolved_codex_thread_count=1 (only the OPEN P3).
+    unresolved_thread_count=2 (P3 Codex + human).
+    2 > 1 → guard fires → evaluation preserved (human thread is still blocking).
+    """
+    automation = {
+        "enabled": True,
+        "status": "ready_with_low_priority",
+        "reason": "all blocking threads RESOLVED; 1 low-priority thread still open",
+        "unresolved_codex_thread_count": 1,  # only the 1 OPEN P3 Codex thread
+        "sync_actions": [],
+        "sync_actions_count": 0,
+    }
+    ev = _blocked_with_resolved_codex_and_extra_human_thread()
+    result = apply_swm_overlay(ev, automation)
+    assert result is ev, "guard should preserve evaluation when human thread is unresolved"
+    assert result["conclusion"] == "failure"

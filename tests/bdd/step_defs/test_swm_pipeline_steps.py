@@ -59,6 +59,7 @@ class _StubGitHubAppClient:
             "number": PR,
             "user": {"login": "ryosaeba1985"},  # default PR author for existing scenarios
         }
+        self.pr_payload_second_fetch: dict[str, Any] | None = None  # R5-P2: second-call head SHA
         self.fail_pull_request: bool = False
         self.fail_pull_request_httpx: bool = False  # Wave 7C-6: raises httpx.HTTPError
         self.pull_request_call_count: int = 0  # Wave 7C-6: tracks guard fetch calls
@@ -93,6 +94,11 @@ class _StubGitHubAppClient:
             import httpx as _httpx
 
             raise _httpx.HTTPError("simulated httpx transport error")
+        # R5-P2: return a different head SHA on the second fetch if configured
+        if self.pull_request_call_count >= 2 and self.pr_payload_second_fetch is not None:
+            payload = dict(self.pr_payload)
+            payload["head"] = self.pr_payload_second_fetch
+            return payload
         return self.pr_payload
 
     async def pull_request_diff(self, app_slug: str, repo: str, pull_number: int) -> str:
@@ -1547,6 +1553,22 @@ def given_stub_pr_head_advanced(ctx, sha: str) -> None:
 @given(parsers.parse('the stub PR current head sha is "{sha}"'))
 def given_stub_pr_current_head_sha(ctx, sha: str) -> None:
     ctx["client"].pr_payload["head"] = {"sha": sha}
+
+
+@given(parsers.parse('the stub PR initial head sha is "{sha}"'))
+def given_stub_pr_initial_head_sha(ctx, sha: str) -> None:
+    ctx["client"].pr_payload["head"] = {"sha": sha}
+
+
+@given(parsers.parse('the stub PR head advances on the second pull_request call to "{sha}"'))
+def given_stub_pr_head_advances_on_second_call(ctx, sha: str) -> None:
+    ctx["client"].pr_payload_second_fetch = {"sha": sha}
+
+
+@given(parsers.parse('the stub PR head is stable at "{sha}" on all fetches'))
+def given_stub_pr_head_stable(ctx, sha: str) -> None:
+    ctx["client"].pr_payload["head"] = {"sha": sha}
+    ctx["client"].pr_payload_second_fetch = None
 
 
 @then(
