@@ -857,3 +857,78 @@ def comments_endpoint_call_count(state: ClientState, expected: int) -> None:
     assert actual == expected, (
         f"comments endpoint called {actual} times, expected {expected}: {urls}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Given / When / Then — Wave 7B-3: pull_request_diff
+# ---------------------------------------------------------------------------
+
+_DIFF_SAMPLE = """\
+diff --git a/app.py b/app.py
+index 1234567..89abcde 100644
+--- a/app.py
++++ b/app.py
+@@ -1,3 +1,4 @@
+ import os
++import sys
+
+ def main():
+"""
+
+
+@given("the GitHub API returns a token then a 200 diff response with a sample PR diff")
+def mock_token_then_diff_200(state: ClientState) -> None:
+    diff_response = httpx.Response(
+        200,
+        headers={"Content-Type": "text/plain"},
+        content=_DIFF_SAMPLE.encode("utf-8"),
+    )
+    existing = getattr(state, "_mock_responses", [])
+    state._mock_responses = [*existing, _token_response(), diff_response]  # type: ignore[attr-defined]
+
+
+@given("the GitHub API returns a token then a 404 not-found response")
+def mock_token_then_404(state: ClientState) -> None:
+    existing = getattr(state, "_mock_responses", [])
+    state._mock_responses = [*existing, _token_response(), httpx.Response(404)]  # type: ignore[attr-defined]
+
+
+@when(parsers.parse('pull_request_diff is called for "{repo}" PR {pr_number:d}'))
+def call_pull_request_diff(state: ClientState, repo: str, pr_number: int) -> None:
+    import asyncio
+
+    responses = getattr(state, "_mock_responses", [])
+    state.client = _build_client(state, responses)
+    try:
+        state.result = asyncio.run(
+            state.client.pull_request_diff("iterwheel-clearance", repo, pr_number)
+        )
+    except Exception as exc:
+        state.raised = exc
+
+
+@when("pull_request_diff is awaited and may raise")
+def call_pull_request_diff_may_raise(state: ClientState) -> None:
+    import asyncio
+
+    responses = getattr(state, "_mock_responses", [])
+    state.client = _build_client(state, responses)
+    try:
+        state.result = asyncio.run(
+            state.client.pull_request_diff("iterwheel-clearance", "iterwheel/voyager-sandbox", 7)
+        )
+    except Exception as exc:
+        state.raised = exc
+
+
+@then(parsers.parse('the returned diff contains "{fragment}"'))
+def diff_contains_fragment(state: ClientState, fragment: str) -> None:
+    assert isinstance(state.result, str), f"Expected str result, got {type(state.result)}"
+    assert fragment in state.result, f"{fragment!r} not found in diff:\n{state.result}"
+
+
+@then(parsers.parse('the captured request URL ends with "{suffix}"'))
+def captured_url_ends_with(state: ClientState, suffix: str) -> None:
+    assert state.captured_requests, "No HTTP requests were captured"
+    last_url = str(state.captured_requests[-1].url)
+    assert last_url.endswith(suffix), f"URL {last_url!r} does not end with {suffix!r}"

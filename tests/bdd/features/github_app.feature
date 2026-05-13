@@ -198,3 +198,26 @@ Feature: GitHub App authentication — JWT and installation token machinery
     When issue_comments is called for "test-org/my-repo" issue 42
     Then issue_comments returned 130 items
     And the comments endpoint was called 2 times
+
+  # ---------------------------------------------------------------------------
+  # pull_request_diff (Wave 7B-3)
+  # ---------------------------------------------------------------------------
+
+  Scenario: pull_request_diff returns the raw unified diff from the v3.diff endpoint
+    Given a test GitHub App with slug "iterwheel-clearance" and app_id "9999"
+    And the app has a valid RSA private key
+    And the app has installation_id "55544433"
+    And the GitHub API returns a token then a 200 diff response with a sample PR diff
+    When pull_request_diff is called for "iterwheel/voyager-sandbox" PR 7
+    Then the returned diff contains "diff --git a/app.py b/app.py"
+    And the returned diff contains "@@ -1,3 +1,4 @@"
+    And the captured request URL ends with "/repos/iterwheel/voyager-sandbox/pulls/7"
+    And the request Accept header is "application/vnd.github.v3.diff"
+
+  Scenario: pull_request_diff raises HTTPStatusError when the PR is missing
+    Given a test GitHub App with slug "iterwheel-clearance" and app_id "9999"
+    And the app has a valid RSA private key
+    And the app has installation_id "55544433"
+    And the GitHub API returns a token then a 404 not-found response
+    When pull_request_diff is awaited and may raise
+    Then an httpx.HTTPStatusError is raised
