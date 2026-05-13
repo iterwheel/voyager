@@ -618,6 +618,7 @@ def _run_pipeline(ctx, *, dry_run: bool | None = None) -> None:
                 repository=REPO,
                 store=ctx["store"],
                 investigator=ctx.get("investigator"),
+                expected_sha=ctx.get("webhook_expected_sha"),
             )
         )
     except Exception as exc:
@@ -1385,7 +1386,14 @@ def _run_dispatch(ctx, *, dry_run: bool, repo: str, pr: int) -> None:
     stub_automation = ctx["stub_automation"]
 
     async def _fake_compute(
-        client, route, *, repository, store=None, default_profile_name=None, investigator=None
+        client,
+        route,
+        *,
+        repository,
+        store=None,
+        default_profile_name=None,
+        investigator=None,
+        expected_sha=None,
     ):
         return stub_automation
 
@@ -1519,3 +1527,46 @@ def then_stale_guard_failed_log(ctx) -> None:
 def then_pull_request_never_called(ctx) -> None:
     count = ctx["client"].pull_request_call_count
     assert count == 0, f"expected pull_request to be called 0 times, got {count}"
+
+
+# ---------------------------------------------------------------------------
+# Fix 2 (Codex P2): pre-mutation stale guard inside compute_clearance_automation
+# ---------------------------------------------------------------------------
+
+
+@given(parsers.parse('the webhook expected_sha is "{sha}"'))
+def given_webhook_expected_sha(ctx, sha: str) -> None:
+    ctx["webhook_expected_sha"] = sha
+
+
+@given(parsers.parse('the stub PR current head sha advanced to "{sha}"'))
+def given_stub_pr_head_advanced(ctx, sha: str) -> None:
+    ctx["client"].pr_payload["head"] = {"sha": sha}
+
+
+@given(parsers.parse('the stub PR current head sha is "{sha}"'))
+def given_stub_pr_current_head_sha(ctx, sha: str) -> None:
+    ctx["client"].pr_payload["head"] = {"sha": sha}
+
+
+@then(
+    parsers.parse(
+        'a pipeline_stale_verdict_skip log was emitted with expected_sha "{expected_sha}"'
+        ' and actual_sha "{actual_sha}"'
+    )
+)
+def then_pipeline_stale_verdict_skip_log(ctx, expected_sha: str, actual_sha: str) -> None:
+    records = ctx.get("captured_logs", [])
+    matched = any("pipeline_stale_verdict_skip" in r.getMessage() for r in records)
+    assert matched, "No pipeline_stale_verdict_skip log found. Records: " + str(
+        [r.getMessage() for r in records]
+    )
+    log_text = " ".join(
+        r.getMessage() for r in records if "pipeline_stale_verdict_skip" in r.getMessage()
+    )
+    assert expected_sha in log_text, (
+        f"expected_sha={expected_sha!r} not found in pipeline_stale_verdict_skip log: {log_text!r}"
+    )
+    assert actual_sha in log_text, (
+        f"actual_sha={actual_sha!r} not found in pipeline_stale_verdict_skip log: {log_text!r}"
+    )

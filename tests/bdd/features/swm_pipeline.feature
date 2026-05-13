@@ -418,3 +418,31 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     When dispatch_route_writeback runs with DRY_RUN true for PR 49 on "iterwheel/sandbox"
     Then the writeback was not skipped
     And pull_request was never called
+
+  # ---------------------------------------------------------------------------
+  # Fix 2 (Codex P2): pre-mutation stale guard inside compute_clearance_automation
+  # ---------------------------------------------------------------------------
+
+  Scenario: P1 pre-mutation stale — expected_sha differs from fresh PR head, Stage 1.5 NOT invoked
+    Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with substantive author reply and isResolved false
+    And the webhook expected_sha is "sha-webhook-old"
+    And the stub PR current head sha advanced to "sha-fresh-new"
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "stale_verdict_skip"
+    And no resolveReviewThread mutation was invoked
+    And no in-thread reply was posted
+    And a pipeline_stale_verdict_skip log was emitted with expected_sha "sha-webhook-old" and actual_sha "sha-fresh-new"
+
+  Scenario: P2 pre-mutation fresh — expected_sha matches fresh PR head, Stage 1.5 runs normally
+    Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with substantive author reply and isResolved false
+    And the webhook expected_sha is "head-sha-abc1234"
+    And the stub PR current head sha is "head-sha-abc1234"
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "ready"
+    And exactly 1 resolveReviewThread mutation was invoked
+
+  Scenario: P3 no expected_sha — pre-mutation guard short-circuits, Stage 1.5 runs normally
+    Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with substantive author reply and isResolved false
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "ready"
+    And exactly 1 resolveReviewThread mutation was invoked

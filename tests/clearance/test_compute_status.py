@@ -140,9 +140,9 @@ _P3_ONLY_CASES = [
 
 @pytest.mark.parametrize(("threads", "expected_reason"), _P3_ONLY_CASES)
 def test_p3_only_open_not_blocking(threads: list[Thread], expected_reason: str) -> None:
-    """Scenarios 7-8: P3-only OPEN threads do NOT block; PR is READY with low-priority note."""
+    """Scenarios 7-8: P3-only OPEN threads do NOT block; PR is READY_WITH_LOW_PRIORITY."""
     status, reason = _compute_status(threads)
-    assert status == Status.READY
+    assert status == Status.READY_WITH_LOW_PRIORITY
     assert reason == expected_reason
 
 
