@@ -30,9 +30,13 @@ def apply_swm_overlay(
 
     if swm_status == "ready_with_low_priority":
         review_state = evaluation.get("review_state") or {}
+        eval_confidence = evaluation.get("confidence") or {}
+        reasons = eval_confidence.get("reasons") or []
+        unresolved_thread_count = review_state.get("unresolved_thread_count", 0)
         has_non_thread_blockers = bool(
             review_state.get("blocking_reviewers")
             or (evaluation.get("status") == "clearance_pending")
+            or (unresolved_thread_count > 0 and len(reasons) > 1)
         )
         if has_non_thread_blockers:
             return evaluation
