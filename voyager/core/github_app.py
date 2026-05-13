@@ -395,6 +395,38 @@ class GitHubAppClient:
         )
         return (((data or {}).get("unresolveReviewThread") or {}).get("thread")) or {}
 
+    async def pull_request_diff(self, app_slug: str, repo: str, pull_number: int) -> str:
+        """Fetch the raw unified diff for a PR.
+
+        Used by the Clearance pipeline's State B investigator path (Wave 7B-3) so the
+        LLM can verify whether the author's push actually addresses the original
+        Codex concern. Returns the diff as a single ``str`` exactly as GitHub
+        serves it via the ``application/vnd.github.v3.diff`` accept header — the
+        same format ``git diff`` produces, with file headers like
+        ``diff --git a/path/file b/path/file`` and ``@@ ... @@`` hunk markers.
+
+        GitHub's REST endpoint ``GET /repos/{owner}/{repo}/pulls/{pull_number}``
+        serves either JSON (default ``Accept: application/vnd.github+json``) or
+        the raw diff text (``Accept: application/vnd.github.v3.diff``). Bypass the
+        shared ``request()`` helper because it sets the JSON Accept header
+        unconditionally and decodes the response as JSON, which would corrupt a
+        diff payload. Use ``installation_token`` + ``_async_client`` directly so we
+        keep the same auth / retry / TLS pool behaviour as every other endpoint
+        on this client.
+        """
+        owner, name = repo.split("/", 1)
+        token = await self.installation_token(app_slug, repository=repo)
+        headers = {
+            "Accept": "application/vnd.github.v3.diff",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": GITHUB_API_VERSION,
+        }
+        url = f"{GITHUB_API}/repos/{owner}/{name}/pulls/{pull_number}"
+        client = self._async_client()
+        response = await client.get(url, headers=headers)
+        response.raise_for_status()
+        return response.text
+
     async def add_labels(
         self, app_slug: str, repo: str, issue_number: int, labels: list[str]
     ) -> Any:
