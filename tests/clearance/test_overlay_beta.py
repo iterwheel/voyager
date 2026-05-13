@@ -1,13 +1,13 @@
 """Regression tests for apply_swm_overlay — β READY_WITH_LOW_PRIORITY path.
 
-Fix 1 (Codex P2 on overlay.py:25): automation status "ready_with_low_priority"
-was previously caught by the early-return guard (swm_status not in
-{"blocked", "pending", "error"}) and discarded, so the live evaluator's
-blocked-by-threads decision stood even though β should have cleared it.
+Fix 1 (Codex P1 on overlay.py:34): automation status "ready_with_low_priority"
+must NOT override the conclusion to success when non-Codex-thread blockers exist
+(draft PR, missing approval, human CHANGES_REQUESTED). The overlay preserves those
+evaluations unchanged and only applies the success override when unresolved review
+threads are the sole blocker.
 
-These tests verify the corrected behaviour: apply_swm_overlay produces a
-success-conclusion evaluation with status="clearance_ok" and the
-clearance-ok label when automation.status is "ready_with_low_priority".
+Fix 2 (Codex P2 on constants.py:24): clearance-ok is not a provisioned GitHub
+label. The β success case now uses clearance-ready instead.
 
 Also verifies that the "all RESOLVED" path (Status.READY plain) still
 no-ops through the overlay (evaluation unchanged).
@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from voyager.bots.clearance.constants import (
     CLEARANCE_LABELS,
-    CLEARANCE_OK_LABEL,
+    CLEARANCE_READY_LABEL,
 )
 from voyager.bots.clearance.overlay import apply_swm_overlay
 
@@ -27,7 +27,7 @@ from voyager.bots.clearance.overlay import apply_swm_overlay
 
 
 def _blocked_evaluation() -> dict:
-    """A minimal evaluation that looks like a live-evaluator 'blocked' result."""
+    """A minimal evaluation blocked only by unresolved review threads."""
     return {
         "status": "clearance_blocked",
         "conclusion": "failure",
@@ -48,7 +48,7 @@ def _blocked_evaluation() -> dict:
         },
         "labels": {
             "add": ["clearance-blocked"],
-            "remove": ["clearance-ready", "clearance-ok", "clearance-pending"],
+            "remove": ["clearance-ready", "clearance-pending"],
         },
         "reactions": {"add": ["eyes"], "remove": ["+1", "rocket"]},
         "pr_url": "https://github.com/example/repo/pull/42",
@@ -64,19 +64,45 @@ def _ready_evaluation() -> dict:
     ev["conclusion"] = "success"
     ev["labels"] = {
         "add": ["clearance-ready"],
-        "remove": ["clearance-ok", "clearance-blocked", "clearance-pending"],
+        "remove": ["clearance-blocked", "clearance-pending"],
     }
     ev["reactions"] = {"add": ["+1"], "remove": ["eyes", "rocket"]}
     return ev
 
 
+def _draft_blocked_evaluation() -> dict:
+    """Evaluation blocked by draft PR (non-Codex-thread blocker)."""
+    ev = _blocked_evaluation()
+    ev["status"] = "clearance_pending"
+    ev["conclusion"] = "neutral"
+    ev["review_state"]["unresolved_thread_count"] = 0
+    ev["confidence"]["reasons"] = ["PR is still draft."]
+    ev["labels"] = {
+        "add": ["clearance-pending"],
+        "remove": ["clearance-ready", "clearance-blocked"],
+    }
+    return ev
+
+
+def _changes_requested_evaluation() -> dict:
+    """Evaluation blocked by human CHANGES_REQUESTED (non-Codex-thread blocker)."""
+    ev = _blocked_evaluation()
+    ev["review_state"]["blocking_reviewers"] = ["alice"]
+    ev["review_state"]["unresolved_thread_count"] = 1
+    ev["confidence"]["reasons"] = [
+        "Changes requested by: @alice.",
+        "1 review thread(s) are unresolved.",
+    ]
+    return ev
+
+
 # ---------------------------------------------------------------------------
-# Scenario 1: ready_with_low_priority → success override
+# Scenario 1: ready_with_low_priority + thread-only blocker → success override
 # ---------------------------------------------------------------------------
 
 
 def test_ready_with_low_priority_produces_success() -> None:
-    """β P3-only case: automation.status=ready_with_low_priority → conclusion=success."""
+    """β thread-only case: automation.status=ready_with_low_priority → conclusion=success."""
     automation = {
         "enabled": True,
         "status": "ready_with_low_priority",
@@ -88,8 +114,8 @@ def test_ready_with_low_priority_produces_success() -> None:
     assert result["conclusion"] == "success"
 
 
-def test_ready_with_low_priority_sets_clearance_ok_status() -> None:
-    """β P3-only case: overlay sets status=clearance_ok."""
+def test_ready_with_low_priority_sets_clearance_ready_status() -> None:
+    """β thread-only case: overlay sets status=clearance_ready (not clearance_ok)."""
     automation = {
         "enabled": True,
         "status": "ready_with_low_priority",
@@ -98,11 +124,11 @@ def test_ready_with_low_priority_sets_clearance_ok_status() -> None:
         "sync_actions_count": 0,
     }
     result = apply_swm_overlay(_blocked_evaluation(), automation)
-    assert result["status"] == "clearance_ok"
+    assert result["status"] == "clearance_ready"
 
 
 def test_ready_with_low_priority_sets_summary_to_automation_reason() -> None:
-    """β P3-only case: overlay sets summary to automation.reason."""
+    """β thread-only case: overlay sets summary to automation.reason."""
     reason = "all blocking threads RESOLVED; 1 low-priority thread still open"
     automation = {
         "enabled": True,
@@ -115,8 +141,8 @@ def test_ready_with_low_priority_sets_summary_to_automation_reason() -> None:
     assert result["summary"] == reason
 
 
-def test_ready_with_low_priority_applies_clearance_ok_label() -> None:
-    """β P3-only case: overlay adds clearance-ok label and removes all others."""
+def test_ready_with_low_priority_applies_clearance_ready_label() -> None:
+    """β thread-only case: overlay adds clearance-ready label and removes all others."""
     automation = {
         "enabled": True,
         "status": "ready_with_low_priority",
@@ -126,16 +152,16 @@ def test_ready_with_low_priority_applies_clearance_ok_label() -> None:
     }
     result = apply_swm_overlay(_blocked_evaluation(), automation)
     labels = result["labels"]
-    assert CLEARANCE_OK_LABEL in labels["add"]
+    assert CLEARANCE_READY_LABEL in labels["add"]
     for label in CLEARANCE_LABELS:
-        if label != CLEARANCE_OK_LABEL:
+        if label != CLEARANCE_READY_LABEL:
             assert label in labels["remove"], (
                 f"expected {label!r} in labels['remove'] but got {labels['remove']!r}"
             )
 
 
 def test_ready_with_low_priority_sets_positive_reaction() -> None:
-    """β P3-only case: overlay sets +1 reaction (not eyes)."""
+    """β thread-only case: overlay sets +1 reaction (not eyes)."""
     automation = {
         "enabled": True,
         "status": "ready_with_low_priority",
@@ -149,7 +175,7 @@ def test_ready_with_low_priority_sets_positive_reaction() -> None:
 
 
 def test_ready_with_low_priority_fallback_reason_when_none() -> None:
-    """β P3-only case: overlay builds fallback reason when automation.reason is absent."""
+    """β thread-only case: overlay builds fallback reason when automation.reason is absent."""
     automation = {
         "enabled": True,
         "status": "ready_with_low_priority",
@@ -159,6 +185,51 @@ def test_ready_with_low_priority_fallback_reason_when_none() -> None:
     result = apply_swm_overlay(_blocked_evaluation(), automation)
     assert result["conclusion"] == "success"
     assert "ready_with_low_priority" in result["summary"]
+
+
+# ---------------------------------------------------------------------------
+# Scenario 1b: ready_with_low_priority + non-thread blockers → pass-through
+# ---------------------------------------------------------------------------
+
+
+def test_ready_with_low_priority_draft_pr_preserves_evaluation() -> None:
+    """β: draft PR is a non-thread blocker → evaluation returned unchanged."""
+    automation = {
+        "enabled": True,
+        "status": "ready_with_low_priority",
+        "reason": "all blocking threads RESOLVED; 1 low-priority thread still open",
+        "sync_actions": [],
+        "sync_actions_count": 0,
+    }
+    ev = _draft_blocked_evaluation()
+    result = apply_swm_overlay(ev, automation)
+    assert result is ev
+
+
+def test_ready_with_low_priority_changes_requested_preserves_evaluation() -> None:
+    """β: human CHANGES_REQUESTED is a non-thread blocker → evaluation returned unchanged."""
+    automation = {
+        "enabled": True,
+        "status": "ready_with_low_priority",
+        "reason": "all blocking threads RESOLVED; 1 low-priority thread still open",
+        "sync_actions": [],
+        "sync_actions_count": 0,
+    }
+    ev = _changes_requested_evaluation()
+    result = apply_swm_overlay(ev, automation)
+    assert result is ev
+
+
+def test_ready_with_low_priority_changes_requested_conclusion_unchanged() -> None:
+    """β: human CHANGES_REQUESTED → conclusion stays failure, not overridden to success."""
+    automation = {
+        "enabled": True,
+        "status": "ready_with_low_priority",
+        "reason": "all blocking threads RESOLVED",
+    }
+    ev = _changes_requested_evaluation()
+    result = apply_swm_overlay(ev, automation)
+    assert result["conclusion"] == "failure"
 
 
 # ---------------------------------------------------------------------------
