@@ -259,3 +259,41 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     When client.resolve_review_thread is awaited for "PRRT_abc123"
     Then the returned thread has isResolved true
     And the recorded GraphQL variables include threadId "PRRT_abc123"
+
+  # ---------------------------------------------------------------------------
+  # Wave 7B-3 hardening #5: investigator failure-mode contract
+  # ---------------------------------------------------------------------------
+
+  Scenario: State B + InvestigationError → automation has investigator_error_* fields
+    Given the stub PR "iterwheel/sandbox" #49 has 1 outdated Codex thread at path "app.py" line 10
+    And a fake investigator that raises InvestigationError "LLM quota exceeded"
+    And the stub client returns a sample diff for "app.py"
+    When compute_clearance_automation runs with investigator
+    Then the automation status is "blocked"
+    And the automation investigator_error_count is 1
+    And the automation investigator_error_thread_ids contains "PRRT_codex_alpha"
+    And the automation investigator_error_reason contains "LLM quota exceeded"
+    And the snapshot evidence llm_error for thread "PRRT_codex_alpha" contains "LLM quota exceeded"
+
+  Scenario: 2 State B threads both fail → investigator_error_count is 2
+    Given the stub PR "iterwheel/sandbox" #49 has 2 outdated Codex threads at different paths
+    And a fake investigator that raises InvestigationError for all threads "network error"
+    And the stub client returns a sample diff covering both paths
+    When compute_clearance_automation runs with investigator
+    Then the automation investigator_error_count is 2
+    And the automation investigator_error_thread_ids contains "PRRT_codex_alpha"
+    And the automation investigator_error_thread_ids contains "PRRT_codex_beta"
+
+  Scenario: Happy path (no failures) → investigator_error_* fields absent
+    Given the stub PR "iterwheel/sandbox" #49 has 1 outdated Codex thread at path "app.py" line 10
+    And a fake investigator returning verdict "RESOLVED" confidence 0.95 reason "Fix confirmed in diff"
+    And the stub client returns a sample diff for "app.py"
+    When compute_clearance_automation runs with investigator
+    Then the automation has no investigator_error_fields
+
+  Scenario: httpx fallback — Evidence.llm_error is set on the failed thread
+    Given the stub PR "iterwheel/sandbox" #49 has 1 outdated Codex thread at path "app.py" line 10
+    And a fake investigator returning verdict "RESOLVED" confidence 0.95 reason "Would fire if diff fetched"
+    And the stub client raises httpx.HTTPStatusError on pull_request_diff
+    When compute_clearance_automation runs with investigator
+    Then the snapshot evidence llm_error for thread "PRRT_codex_alpha" contains "500"

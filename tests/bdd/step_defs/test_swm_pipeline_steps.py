@@ -1042,3 +1042,90 @@ def then_investigator_different_excerpts(ctx) -> None:
     assert excerpt_0 != excerpt_1, (
         f"expected different diff excerpts per thread but both are:\n{excerpt_0!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Wave 7B-3 hardening #5: investigator failure-mode contract — Given steps
+# ---------------------------------------------------------------------------
+
+
+@given(
+    parsers.parse('a fake investigator that raises InvestigationError for all threads "{message}"')
+)
+def given_fake_investigator_error_multi(ctx, message: str) -> None:
+    """A _FakeInvestigator that raises InvestigationError on every call."""
+    from voyager.bots.clearance.investigator import InvestigationError
+
+    class _AlwaysErrorInvestigator:
+        max_diff_chars = 20000
+
+        def __init__(self, msg: str) -> None:
+            self._msg = msg
+            self.calls: list[Any] = []
+
+        async def investigate(self, item: Any) -> Any:
+            self.calls.append(item)
+            raise InvestigationError(self._msg)
+
+    ctx["investigator"] = _AlwaysErrorInvestigator(message)
+
+
+# ---------------------------------------------------------------------------
+# Wave 7B-3 hardening #5: investigator failure-mode contract — Then steps
+# ---------------------------------------------------------------------------
+
+
+@then(parsers.parse("the automation investigator_error_count is {count:d}"))
+def then_automation_investigator_error_count(ctx, count: int) -> None:
+    auto = ctx["automation"]
+    assert auto is not None, f"raised={ctx.get('raised')}"
+    assert "investigator_error_count" in auto, (
+        f"investigator_error_count absent from automation keys: {list(auto.keys())}"
+    )
+    assert auto["investigator_error_count"] == count, (
+        f"investigator_error_count={auto['investigator_error_count']!r}, expected {count}"
+    )
+
+
+@then(parsers.parse('the automation investigator_error_thread_ids contains "{thread_id}"'))
+def then_automation_investigator_error_thread_ids_contains(ctx, thread_id: str) -> None:
+    auto = ctx["automation"]
+    assert auto is not None, f"raised={ctx.get('raised')}"
+    ids = auto.get("investigator_error_thread_ids", [])
+    assert thread_id in ids, f"thread_id {thread_id!r} not in investigator_error_thread_ids={ids!r}"
+
+
+@then(parsers.parse('the automation investigator_error_reason contains "{substring}"'))
+def then_automation_investigator_error_reason_contains(ctx, substring: str) -> None:
+    auto = ctx["automation"]
+    assert auto is not None, f"raised={ctx.get('raised')}"
+    reason = auto.get("investigator_error_reason") or ""
+    assert substring in reason, (
+        f"substring {substring!r} not in investigator_error_reason={reason!r}"
+    )
+
+
+@then("the automation has no investigator_error_fields")
+def then_automation_has_no_investigator_error_fields(ctx) -> None:
+    auto = ctx["automation"]
+    assert auto is not None, f"raised={ctx.get('raised')}"
+    for key in (
+        "investigator_error_count",
+        "investigator_error_thread_ids",
+        "investigator_error_reason",
+    ):
+        assert key not in auto, f"expected {key!r} to be absent, but found value {auto[key]!r}"
+
+
+@then(
+    parsers.parse('the snapshot evidence llm_error for thread "{thread_id}" contains "{substring}"')
+)
+def then_snapshot_evidence_llm_error_contains(ctx, thread_id: str, substring: str) -> None:
+    snap = ctx["store"].read_thread(REPO, PR, thread_id)
+    assert snap is not None, f"no snapshot found for thread_id={thread_id!r}"
+    llm_error = snap.evidence.llm_error
+    assert llm_error is not None, "expected evidence.llm_error to be set, got None"
+    assert llm_error != "", f"expected evidence.llm_error to be non-empty, got {llm_error!r}"
+    assert substring.lower() in llm_error.lower(), (
+        f"substring {substring!r} not in evidence.llm_error={llm_error!r}"
+    )
