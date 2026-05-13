@@ -3,7 +3,7 @@
 **Applies to:** VOY project (voyager clearance bot)
 **Last updated:** 2026-05-13
 **Last reviewed:** 2026-05-13
-**Status:** Proposed
+**Status:** Approved
 **Date:** 2026-05-13
 **Scheduled:** ASAP (pending CHG approval; implementation begins commit-by-commit on the same branch)
 **Requested by:** Frank Xu (via session 2026-05-13)
@@ -215,7 +215,7 @@ Each impl+test pair (6 pairs total) must pass:
 ## Approval
 
 - [x] Final CHG trinity review pass: ≥9.0 from all 4 reviewers (Codex 9.4 / GLM 9.3 / DeepSeek 9.15 / Gemini 10.0 — round 5, 2026-05-13)
-- [ ] Approved by: Frank Xu on <date>
+- [x] Approved by: Frank Xu on 2026-05-14
 
 ---
 
@@ -275,3 +275,4 @@ Commit 3 (α work — populate `Thread.effective_severity` + `demotion_reason`) 
 | 2026-05-13 | Initial proposal — Wave 7C scope, decisions D1-D6, β architecture lock, 6-commit sequence | Claude Opus 4.7 |
 | 2026-05-13 | Round-3 format fixes: added `Scheduled` + `Related` frontmatter; restructured Impact section into 5 COR-1101 subheadings; added `Testing / Verification`, `Execution Log`, `Post-Change Review`, `Deferrals` standalone sections; restored β-split rationale paragraph (per GLM r3 P1+P2+P3 + Gemini r3 P1) | Claude Opus 4.7 |
 | 2026-05-13 | Round-4 polish: harmonized reviewer-set to 4 reviewers (GLM+Codex+DeepSeek+Gemini) across both cadence sections (DeepSeek r4 P2); added `stale_guard_fail_open` observability counter + structured log (Codex r4 P2); promoted F7 permission check to explicit commit-3 merge gate (Codex r4 P2); softened test-count acceptance criterion + relabeled Approval section to "Final CHG trinity round" (Codex r4 P3) | Claude Opus 4.7 |
+| 2026-05-14 | Round-5 trinity verification: all 4 reviewers ≥9.0 (Codex 9.4, GLM 9.3, DeepSeek 9.15, Gemini 10.0, average 9.46). Zero remaining findings. CHG approved by Frank Xu; Status moved to Approved. Implementation begins commit-by-commit. | Claude Opus 4.7 |
