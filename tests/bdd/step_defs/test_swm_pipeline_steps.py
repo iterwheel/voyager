@@ -1306,3 +1306,20 @@ def then_severity_demoted_log(ctx) -> None:
     assert matched, "No 'severity_demoted' log record found. Records: " + str(
         [r.getMessage() for r in records]
     )
+
+
+# ---------------------------------------------------------------------------
+# Wave 7C commit 5: head_sha in automation dict
+# ---------------------------------------------------------------------------
+
+
+@then(parsers.parse('the automation head_sha is "{sha}"'))
+def then_automation_head_sha(ctx, sha: str) -> None:
+    auto = ctx["automation"]
+    assert auto is not None, f"raised={ctx.get('raised')}"
+    assert "head_sha" in auto, (
+        f"head_sha absent from automation keys: {list(auto.keys())}"
+    )
+    assert auto["head_sha"] == sha, (
+        f"automation head_sha={auto['head_sha']!r}, expected {sha!r}"
+    )

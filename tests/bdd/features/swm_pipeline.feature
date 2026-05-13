@@ -356,3 +356,25 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     Then the thread codex_severity is "P1"
     And the thread effective_severity is "P1"
     And the thread demotion_reason is None
+
+  # ---------------------------------------------------------------------------
+  # Wave 7C commit 5: head_sha in automation dict
+  # ---------------------------------------------------------------------------
+
+  Scenario: Happy path — automation dict contains head_sha with the PR's head SHA value
+    Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with substantive author reply and isResolved false
+    When compute_clearance_automation runs with DRY_RUN true
+    Then the automation status is "ready"
+    And the automation head_sha is "head-sha-abc1234"
+
+  Scenario: No Codex threads — automation dict still contains head_sha
+    Given the stub PR "iterwheel/sandbox" #49 has no review threads
+    When compute_clearance_automation runs
+    Then the automation status is "ready"
+    And the automation head_sha is "head-sha-abc1234"
+
+  Scenario: No Codex threads (DRY_RUN false) — automation head_sha always emitted
+    Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread already isResolved
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "ready"
+    And the automation head_sha is "head-sha-abc1234"
