@@ -113,9 +113,7 @@ def build_thread_conclusion_comment(
         verifier = "Clearance deterministic verifier"
     confidence = thread.llm_confidence or (evidence.llm_confidence if evidence else None)
     confidence_line = f"\n- Confidence: `{confidence:.2f}`" if confidence is not None else ""
-    location = _sanitize_markdown(
-        f"{thread.path}:{thread.line}" if thread.line else thread.path
-    )
+    location = _sanitize_markdown(f"{thread.path}:{thread.line}" if thread.line else thread.path)
     marker_name = (
         close_reason_marker(thread, head_sha=head_sha)
         if resolved
