@@ -1,0 +1,13 @@
+[voyager]
+work_dir = "~/.voyager/state"
+
+[[apps]]
+slug = "iterwheel-blueprint"
+app_id = 1234567
+private_key_path = "~/.secrets/iterwheel-blueprint.pem"
+installation_id = "55544433"
+
+[profiles.broken]
+model = "deepseek-v4-pro"
+thinking = true
+min_confidence = "0.5"

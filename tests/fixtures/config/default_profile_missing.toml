@@ -1,0 +1,11 @@
+[voyager]
+work_dir = "~/.voyager/state"
+default_profile = "ghost"
+
+[[apps]]
+slug = "iterwheel-blueprint"
+app_id = 1234567
+private_key_path = "~/.secrets/iterwheel-blueprint.pem"
+installation_id = "55544433"
+
+# no [profiles.ghost] section → should raise ValueError

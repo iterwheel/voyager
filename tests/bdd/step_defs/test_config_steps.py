@@ -231,3 +231,89 @@ def then_installations_key(state: dict[str, Any], slug: str, key: str, value: st
     assert app.installations[key] == value, (
         f"installations[{key!r}] = {app.installations[key]!r}, expected {value!r}"
     )
+
+
+@then(parsers.parse("the profiles dict has {count:d} entries"))
+def then_profiles_count(state: dict[str, Any], count: int) -> None:
+    cfg = state["config"]
+    assert cfg is not None, "Config was not loaded"
+    assert len(cfg.profiles) == count, (
+        f"Expected {count} profiles, got {len(cfg.profiles)}: {list(cfg.profiles)}"
+    )
+
+
+@then(parsers.parse('the profiles dict contains profile "{name}"'))
+def then_profiles_has_name(state: dict[str, Any], name: str) -> None:
+    cfg = state["config"]
+    assert name in cfg.profiles, f"Profile {name!r} not in profiles: {list(cfg.profiles)}"
+
+
+@then(parsers.parse('profile "{name}" has model "{model}"'))
+def then_profile_model(state: dict[str, Any], name: str, model: str) -> None:
+    cfg = state["config"]
+    assert cfg.profiles[name].model == model, (
+        f"profile {name!r} model = {cfg.profiles[name].model!r}, expected {model!r}"
+    )
+
+
+@then(parsers.parse('profile "{name}" has thinking true'))
+def then_profile_thinking_true(state: dict[str, Any], name: str) -> None:
+    cfg = state["config"]
+    assert cfg.profiles[name].thinking is True, (
+        f"profile {name!r} thinking = {cfg.profiles[name].thinking!r}, expected True"
+    )
+
+
+@then(parsers.parse('profile "{name}" has thinking false'))
+def then_profile_thinking_false(state: dict[str, Any], name: str) -> None:
+    cfg = state["config"]
+    assert cfg.profiles[name].thinking is False, (
+        f"profile {name!r} thinking = {cfg.profiles[name].thinking!r}, expected False"
+    )
+
+
+@then(parsers.parse('profile "{name}" has reasoning_effort None'))
+def then_profile_reasoning_effort_none(state: dict[str, Any], name: str) -> None:
+    cfg = state["config"]
+    assert cfg.profiles[name].reasoning_effort is None, (
+        f"profile {name!r} reasoning_effort = {cfg.profiles[name].reasoning_effort!r}, expected None"
+    )
+
+
+@then(parsers.parse('profile "{name}" has reasoning_effort "{effort}"'))
+def then_profile_reasoning_effort(state: dict[str, Any], name: str, effort: str) -> None:
+    cfg = state["config"]
+    assert cfg.profiles[name].reasoning_effort == effort, (
+        f"profile {name!r} reasoning_effort = {cfg.profiles[name].reasoning_effort!r}, expected {effort!r}"
+    )
+
+
+@then(parsers.parse('profile "{name}" has max_diff_chars {chars:d}'))
+def then_profile_max_diff_chars(state: dict[str, Any], name: str, chars: int) -> None:
+    cfg = state["config"]
+    assert cfg.profiles[name].max_diff_chars == chars, (
+        f"profile {name!r} max_diff_chars = {cfg.profiles[name].max_diff_chars!r}, expected {chars!r}"
+    )
+
+
+@then(parsers.parse('profile "{name}" has min_confidence {conf:f}'))
+def then_profile_min_confidence(state: dict[str, Any], name: str, conf: float) -> None:
+    cfg = state["config"]
+    actual = cfg.profiles[name].min_confidence
+    assert abs(actual - conf) < 1e-9, (
+        f"profile {name!r} min_confidence = {actual!r}, expected {conf!r}"
+    )
+
+
+@then(parsers.parse('the default_profile is "{name}"'))
+def then_default_profile(state: dict[str, Any], name: str) -> None:
+    cfg = state["config"]
+    assert cfg.default_profile == name, (
+        f"default_profile = {cfg.default_profile!r}, expected {name!r}"
+    )
+
+
+@then("the default_profile is None")
+def then_default_profile_none(state: dict[str, Any]) -> None:
+    cfg = state["config"]
+    assert cfg.default_profile is None, f"default_profile = {cfg.default_profile!r}, expected None"

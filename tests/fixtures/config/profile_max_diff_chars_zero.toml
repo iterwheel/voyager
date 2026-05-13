@@ -1,0 +1,14 @@
+[voyager]
+work_dir = "~/.voyager/state"
+
+[[apps]]
+slug = "iterwheel-blueprint"
+app_id = 1234567
+private_key_path = "~/.secrets/iterwheel-blueprint.pem"
+installation_id = "55544433"
+
+[profiles.bad]
+model = "deepseek-v4-pro"
+thinking = true
+# 0 would truncate every diff to empty — investigator gets no evidence. Must be > 0.
+max_diff_chars = 0

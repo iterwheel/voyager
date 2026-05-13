@@ -1,0 +1,38 @@
+[voyager]
+work_dir = "~/.voyager/state"
+default_profile = "pro"
+
+[[apps]]
+slug = "iterwheel-blueprint"
+app_id = 1234567
+private_key_path = "~/.secrets/iterwheel-blueprint.pem"
+installation_id = "55544433"
+
+[apps.installations]
+"iterwheel/voyager-sandbox" = "55544433"
+
+[profiles.pro]
+model = "deepseek-v4-pro"
+thinking = true
+
+[profiles.pro_max]
+model = "deepseek-v4-pro"
+thinking = true
+reasoning_effort = "high"
+max_diff_chars = 40000
+min_confidence = 0.85
+
+[profiles.pro_fast]
+model = "deepseek-v4-pro"
+thinking = false
+
+[profiles.flash]
+model = "deepseek-v4-flash"
+thinking = false
+min_confidence = 0.85
+
+[profiles.flash_fast]
+model = "deepseek-v4-flash"
+thinking = false
+max_diff_chars = 8000
+min_confidence = 0.90

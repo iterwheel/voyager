@@ -8,6 +8,8 @@ from typing import Any
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 
+_VALID_REASONING_EFFORTS = frozenset({"low", "medium", "high", "max"})
+
 _DEFAULT_SEARCH_ORDER = [
     lambda: str(Path.home() / ".voyager" / "config.toml"),
     lambda: str(Path.cwd() / "voyager.toml"),
@@ -42,9 +44,29 @@ class AppConfig:
 
 
 @dataclass(frozen=True)
+class Profile:
+    """LLM investigator profile — a named bag of params for one verdict-investigation flavor.
+
+    Loaded from ``[profiles.<name>]`` TOML tables. Schema A (user-decided) ships
+    five named profiles: pro / pro_max / pro_fast / flash / flash_fast. The 7B-3
+    investigator wiring will look up profiles by name from ``cfg.profiles`` and
+    use them to construct a ``DeepSeekInvestigator``.
+    """
+
+    name: str
+    model: str
+    thinking: bool
+    reasoning_effort: str | None
+    max_diff_chars: int
+    min_confidence: float
+
+
+@dataclass(frozen=True)
 class VoyagerConfig:
     apps: dict[str, AppConfig]
     work_dir: Path
+    profiles: dict[str, Profile]
+    default_profile: str | None
 
 
 def _parse_app(item: dict[str, Any]) -> AppConfig:
@@ -71,6 +93,102 @@ def _parse_app(item: dict[str, Any]) -> AppConfig:
         private_key_path=private_key_path,
         installation_id=installation_id,
         installations=installations,
+    )
+
+
+def _parse_profile(name: str, item: dict[str, Any]) -> Profile:
+    if not isinstance(item, dict):
+        raise ValueError(
+            f"Profile {name!r}: must be a TOML table (e.g., '[profiles.{name}]'), "
+            f"got {type(item).__name__}: {item!r}. "
+            "A scalar value under [profiles] is most likely a schema typo — "
+            "use '[profiles.<name>]' to define a profile table."
+        )
+    model_raw = item.get("model")
+    if not isinstance(model_raw, str):
+        raise ValueError(
+            f"Profile {name!r}: 'model' must be a TOML string, got "
+            f"{type(model_raw).__name__}: {model_raw!r}"
+        )
+    model = model_raw.strip()
+    if not model:
+        raise ValueError(
+            f"Profile {name!r}: 'model' must be a non-empty string (not whitespace-only)"
+        )
+
+    if "thinking" not in item:
+        raise ValueError(
+            f"Profile {name!r}: 'thinking' is required (no implicit default — make the choice explicit; "
+            "note 'reasoning_effort' is only meaningful when thinking is true)"
+        )
+    thinking_raw = item["thinking"]
+    if not isinstance(thinking_raw, bool):
+        raise ValueError(
+            f"Profile {name!r}: 'thinking' must be a TOML boolean (true/false), "
+            f"got {type(thinking_raw).__name__}: {thinking_raw!r}. "
+            "TOML strings 'true'/'false' are coerced incorrectly by Python's bool() — "
+            "use bare TOML booleans without quotes."
+        )
+    thinking = thinking_raw
+
+    reasoning_effort_raw = item.get("reasoning_effort")
+    if reasoning_effort_raw is None:
+        reasoning_effort: str | None = None
+    else:
+        if not isinstance(reasoning_effort_raw, str):
+            raise ValueError(
+                f"Profile {name!r}: 'reasoning_effort' must be a string, "
+                f"got {type(reasoning_effort_raw).__name__}: {reasoning_effort_raw!r}"
+            )
+        if reasoning_effort_raw not in _VALID_REASONING_EFFORTS:
+            raise ValueError(
+                f"Profile {name!r}: 'reasoning_effort' must be one of "
+                f"{sorted(_VALID_REASONING_EFFORTS)!r}, got {reasoning_effort_raw!r}"
+            )
+        reasoning_effort = reasoning_effort_raw
+
+    if "max_diff_chars" in item:
+        raw_value = item["max_diff_chars"]
+        if isinstance(raw_value, bool) or not isinstance(raw_value, int):
+            raise ValueError(
+                f"Profile {name!r}: 'max_diff_chars' must be a TOML integer, got "
+                f"{type(raw_value).__name__}: {raw_value!r}"
+            )
+        max_diff_chars = raw_value
+    else:
+        max_diff_chars = 20000
+    if max_diff_chars <= 0:
+        raise ValueError(f"Profile {name!r}: 'max_diff_chars' must be > 0, got {max_diff_chars!r}")
+
+    if "min_confidence" in item:
+        raw_value = item["min_confidence"]
+        if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float)):
+            raise ValueError(
+                f"Profile {name!r}: 'min_confidence' must be a TOML number, got "
+                f"{type(raw_value).__name__}: {raw_value!r}"
+            )
+        min_confidence = float(raw_value)
+    else:
+        min_confidence = 0.78
+    if not 0.0 < min_confidence <= 1.0:
+        raise ValueError(
+            f"Profile {name!r}: 'min_confidence' must be in (0.0, 1.0], got {min_confidence!r}"
+        )
+
+    if reasoning_effort is not None and thinking is False:
+        raise ValueError(
+            f"Profile {name!r}: 'reasoning_effort' is only meaningful when "
+            "'thinking' is true (DeepSeek V4 silently nullifies reasoning_effort "
+            "when thinking is disabled). Either set thinking=true or drop reasoning_effort."
+        )
+
+    return Profile(
+        name=name,
+        model=model,
+        thinking=thinking,
+        reasoning_effort=reasoning_effort,
+        max_diff_chars=max_diff_chars,
+        min_confidence=min_confidence,
     )
 
 
@@ -118,7 +236,21 @@ def load_config(path: str | Path | None = None) -> VoyagerConfig:
         app = _parse_app(item)
         apps[app.slug] = app
 
-    return VoyagerConfig(apps=apps, work_dir=work_dir)
+    profiles_section = raw.get("profiles") or {}
+    profiles: dict[str, Profile] = {}
+    for profile_name, profile_data in profiles_section.items():
+        profiles[profile_name] = _parse_profile(profile_name, profile_data)
+
+    default_profile = voyager_section.get("default_profile")
+    if default_profile is not None and default_profile not in profiles:
+        raise ValueError(
+            f"[voyager].default_profile is {default_profile!r} but no "
+            f"[profiles.{default_profile}] section exists"
+        )
+
+    return VoyagerConfig(
+        apps=apps, work_dir=work_dir, profiles=profiles, default_profile=default_profile
+    )
 
 
 def public_app_status(apps: dict[str, AppConfig]) -> list[dict[str, Any]]:

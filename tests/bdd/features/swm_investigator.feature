@@ -141,3 +141,58 @@ Feature: SWM investigator — DeepSeek-backed thread verdict investigation
     Given VOYAGER_INVESTIGATOR_ENABLED is "1" and VOYAGER_DEEPSEEK_API_KEY is missing
     When build_investigator_from_env is called
     Then a factory InvestigationError is raised
+
+  # ---------------------------------------------------------------------------
+  # DeepSeekInvestigator — thinking + reasoning_effort constructor params (7B-2)
+  # ---------------------------------------------------------------------------
+
+  Scenario: DeepSeekInvestigator defaults thinking to True (backward compat)
+    Given a recording DeepSeekClient stub that returns a RESOLVED verdict
+    And an investigation input for a state C thread
+    When DeepSeekInvestigator.investigate is awaited
+    Then the client was called with thinking enabled
+
+  Scenario: DeepSeekInvestigator constructed with thinking=False passes False to client
+    Given a DeepSeekInvestigator with thinking false
+    And an investigation input for a state C thread
+    When DeepSeekInvestigator.investigate is awaited
+    Then the client was called with thinking disabled
+
+  Scenario: DeepSeekInvestigator constructed with reasoning_effort passes it to client
+    Given a DeepSeekInvestigator with reasoning_effort "high"
+    And an investigation input for a state C thread
+    When DeepSeekInvestigator.investigate is awaited
+    Then the client was called with reasoning_effort "high"
+
+  # ---------------------------------------------------------------------------
+  # build_investigator_from_profile (7B-2)
+  # ---------------------------------------------------------------------------
+
+  Scenario: build_investigator_from_profile builds investigator from pro profile
+    Given a Profile named "pro" with model "deepseek-v4-pro" thinking true
+    When build_investigator_from_profile is called with api_key "test-key"
+    Then the profile factory result is a DeepSeekInvestigator
+    And the profile investigator model is "deepseek-v4-pro"
+    And the profile investigator thinking is true
+
+  Scenario: build_investigator_from_profile builds investigator from flash profile
+    Given a Profile named "flash" with model "deepseek-v4-flash" thinking false
+    When build_investigator_from_profile is called with api_key "test-key"
+    Then the profile factory result is a DeepSeekInvestigator
+    And the profile investigator thinking is false
+
+  Scenario: build_investigator_from_profile propagates reasoning_effort from profile
+    Given a Profile named "pro_max" with model "deepseek-v4-pro" thinking true and reasoning_effort "high"
+    When build_investigator_from_profile is called with api_key "test-key"
+    Then the profile factory result is a DeepSeekInvestigator
+    And the profile investigator reasoning_effort is "high"
+
+  Scenario: build_investigator_from_profile propagates max_diff_chars from profile
+    Given a Profile named "flash_fast" with model "deepseek-v4-flash" thinking false and max_diff_chars 8000
+    When build_investigator_from_profile is called with api_key "test-key"
+    Then the profile investigator max_diff_chars is 8000
+
+  Scenario: build_investigator_from_profile propagates min_confidence from profile
+    Given a Profile named "flash_fast" with model "deepseek-v4-flash" thinking false and min_confidence 0.90
+    When build_investigator_from_profile is called with api_key "test-key"
+    Then the profile investigator min_confidence is 0.90

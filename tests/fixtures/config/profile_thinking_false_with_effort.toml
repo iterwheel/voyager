@@ -1,0 +1,16 @@
+[voyager]
+work_dir = "~/.voyager/state"
+
+[[apps]]
+slug = "iterwheel-blueprint"
+app_id = 1234567
+private_key_path = "~/.secrets/iterwheel-blueprint.pem"
+installation_id = "55544433"
+
+[profiles.bad]
+model = "deepseek-v4-pro"
+# DeepSeek V4 silently nullifies reasoning_effort when thinking is disabled —
+# the two are coupled, not independent. _parse_profile must reject the combo
+# so operators don't ship misleading config.
+thinking = false
+reasoning_effort = "high"

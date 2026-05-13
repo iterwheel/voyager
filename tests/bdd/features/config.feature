@@ -56,3 +56,122 @@ Feature: TOML config loader
     Given VOYAGER_CONFIG_PATH is set to a tilde path resolving to a valid config
     When the config is loaded without an explicit path
     Then the apps dict has 2 entries
+
+  # ---------------------------------------------------------------------------
+  # Profile parsing (7B-2)
+  # ---------------------------------------------------------------------------
+
+  Scenario: Load TOML with five named profiles
+    Given the TOML config file "valid_with_profiles.toml"
+    When the config is loaded
+    Then the profiles dict has 5 entries
+    And the profiles dict contains profile "pro"
+    And the profiles dict contains profile "pro_max"
+    And the profiles dict contains profile "pro_fast"
+    And the profiles dict contains profile "flash"
+    And the profiles dict contains profile "flash_fast"
+
+  Scenario: Profile fields parse correctly for pro
+    Given the TOML config file "valid_with_profiles.toml"
+    When the config is loaded
+    Then profile "pro" has model "deepseek-v4-pro"
+    And profile "pro" has thinking true
+    And profile "pro" has reasoning_effort None
+    And profile "pro" has max_diff_chars 20000
+    And profile "pro" has min_confidence 0.78
+
+  Scenario: Profile fields parse correctly for pro_max
+    Given the TOML config file "valid_with_profiles.toml"
+    When the config is loaded
+    Then profile "pro_max" has model "deepseek-v4-pro"
+    And profile "pro_max" has thinking true
+    And profile "pro_max" has reasoning_effort "high"
+    And profile "pro_max" has max_diff_chars 40000
+    And profile "pro_max" has min_confidence 0.85
+
+  Scenario: Profile fields parse correctly for flash_fast
+    Given the TOML config file "valid_with_profiles.toml"
+    When the config is loaded
+    Then profile "flash_fast" has model "deepseek-v4-flash"
+    And profile "flash_fast" has thinking false
+    And profile "flash_fast" has reasoning_effort None
+    And profile "flash_fast" has max_diff_chars 8000
+    And profile "flash_fast" has min_confidence 0.90
+
+  Scenario: default_profile is parsed from voyager section
+    Given the TOML config file "valid_with_profiles.toml"
+    When the config is loaded
+    Then the default_profile is "pro"
+
+  Scenario: Config without profiles section has empty profiles dict
+    Given the TOML config file "valid_two_apps.toml"
+    When the config is loaded
+    Then the profiles dict has 0 entries
+    And the default_profile is None
+
+  Scenario: Profile missing model raises ValueError
+    Given the TOML config file "profile_missing_model.toml"
+    When the config load is attempted
+    Then a ValueError is raised mentioning "model"
+
+  Scenario: Profile thinking as string raises ValueError (TOML bool coercion guard)
+    Given the TOML config file "profile_thinking_string.toml"
+    When the config load is attempted
+    Then a ValueError is raised mentioning "thinking"
+    And the error message mentions "boolean"
+
+  Scenario: Profile reasoning_effort outside allowlist raises ValueError
+    Given the TOML config file "profile_reasoning_effort_invalid.toml"
+    When the config load is attempted
+    Then a ValueError is raised mentioning "reasoning_effort"
+
+  Scenario: Profile reasoning_effort "max" parses (DeepSeek V4 max-effort tier, Codex PR #10 P2)
+    Given the TOML config file "profile_reasoning_effort_max.toml"
+    When the config is loaded
+    Then the profiles dict contains profile "pro_max_effort"
+    And profile "pro_max_effort" has reasoning_effort "max"
+
+  Scenario: Profile with thinking=false and reasoning_effort raises ValueError (V4 coupling)
+    Given the TOML config file "profile_thinking_false_with_effort.toml"
+    When the config load is attempted
+    Then a ValueError is raised mentioning "reasoning_effort"
+    And the error message mentions "thinking"
+
+  Scenario: Profile min_confidence at 0.0 raises ValueError (out of range)
+    Given the TOML config file "profile_min_confidence_out_of_range.toml"
+    When the config load is attempted
+    Then a ValueError is raised mentioning "min_confidence"
+
+  Scenario: Profile max_diff_chars at 0 raises ValueError (out of range)
+    Given the TOML config file "profile_max_diff_chars_zero.toml"
+    When the config load is attempted
+    Then a ValueError is raised mentioning "max_diff_chars"
+
+  Scenario: Profile model as integer raises ValueError (type guard N1)
+    Given the TOML config file "profile_model_int.toml"
+    When the config load is attempted
+    Then a ValueError is raised mentioning "model"
+    And the error message mentions "int"
+
+  Scenario: Profile max_diff_chars as boolean raises ValueError (type guard N2)
+    Given the TOML config file "profile_max_diff_chars_bool.toml"
+    When the config load is attempted
+    Then a ValueError is raised mentioning "max_diff_chars"
+    And the error message mentions "bool"
+
+  Scenario: Profile min_confidence as string raises ValueError (type guard N3)
+    Given the TOML config file "profile_min_confidence_string.toml"
+    When the config load is attempted
+    Then a ValueError is raised mentioning "min_confidence"
+    And the error message mentions "str"
+
+  Scenario: default_profile referencing nonexistent profile raises ValueError
+    Given the TOML config file "default_profile_missing.toml"
+    When the config load is attempted
+    Then a ValueError is raised mentioning "ghost"
+
+  Scenario: Profile entry as scalar string raises ValueError (schema typo guard)
+    Given the TOML config file "profile_scalar_entry.toml"
+    When the config load is attempted
+    Then a ValueError is raised mentioning "pro"
+    And the error message mentions "must be a TOML table"
