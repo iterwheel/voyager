@@ -37,13 +37,13 @@ def apply_swm_overlay(
         if has_non_thread_blockers:
             return evaluation
         # Preserve when the live evaluator sees more unresolved threads than the
-        # automation engine counted as Codex threads — the gap is non-Codex
-        # (human reviewer) threads that β must NOT clear.
-        # Only applies when codex_thread_count is present; absent key means an
-        # old automation dict that predates this field — skip the check.
-        if "codex_thread_count" in automation:
+        # automation engine counted as unresolved Codex threads — the gap is
+        # non-Codex (human reviewer) threads that β must NOT clear.
+        # Only applies when unresolved_codex_thread_count is present; absent key
+        # means an old automation dict that predates this field — skip the check.
+        if "unresolved_codex_thread_count" in automation:
             unresolved_count = review_state.get("unresolved_thread_count", 0)
-            if unresolved_count > automation["codex_thread_count"]:
+            if unresolved_count > automation["unresolved_codex_thread_count"]:
                 return evaluation
         reason = automation.get("reason") or f"Clearance automation status is {swm_status}."
         updated["status"] = "clearance_ready"

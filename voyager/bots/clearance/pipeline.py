@@ -555,9 +555,10 @@ async def compute_clearance_automation(
 
     status, reason = _compute_status(threads)
 
-    # Pre-mutation stale guard: if the caller supplied the webhook-time head SHA
-    # and the freshly fetched PR head has already advanced, skip Stage 1.5 writes
-    # so we don't apply verdicts computed against a superseded commit.
+    # Pre-mutation stale guard (first check): if the caller supplied the
+    # webhook-time head SHA and the freshly fetched PR head has already advanced,
+    # skip Stage 1.5 writes so we don't apply verdicts computed against a
+    # superseded commit.
     if expected_sha and head_sha and head_sha != expected_sha:
         _log.info(
             "pipeline_stale_verdict_skip: %s",
@@ -580,6 +581,47 @@ async def compute_clearance_automation(
             "dry_run": dry_run,
             "head_sha": head_sha,
         }
+
+    # Pre-mutation stale guard (second check): re-fetch the PR head right before
+    # Stage 1.5 to close the race window between the initial fetch and the
+    # resolveReviewThread mutations. The investigator and classify steps can take
+    # non-trivial time; the head may have advanced since.  Skip when expected_sha
+    # is None (check_suite events) — same logic as the first guard above.
+    if expected_sha:
+        try:
+            pr_data_fresh = await client.pull_request(CLEARANCE_AGENT_SLUG, repository, pr_number)
+            head_sha_fresh = (pr_data_fresh.get("head") or {}).get("sha") or ""
+        except Exception as exc:
+            _log.warning(
+                "pre-stage-1.5 stale re-fetch failed (fail-open, proceeding): %s",
+                exc,
+            )
+            head_sha_fresh = head_sha
+        if head_sha_fresh and head_sha_fresh != expected_sha:
+            _log.info(
+                "pipeline_stale_verdict_skip: %s",
+                json.dumps(
+                    {
+                        "event": "pipeline_stale_verdict_skip",
+                        "repo": repository,
+                        "pr": pr_number,
+                        "expected_sha": expected_sha,
+                        "actual_sha": head_sha_fresh,
+                    }
+                ),
+            )
+            return {
+                "enabled": True,
+                "status": "stale_verdict_skip",
+                "reason": (
+                    f"head advanced from {expected_sha} to {head_sha_fresh} "
+                    "during processing; Stage 1.5 skipped"
+                ),
+                "sync_actions": [],
+                "sync_actions_count": 0,
+                "dry_run": dry_run,
+                "head_sha": head_sha_fresh,
+            }
 
     sync_actions = await _maybe_sync_stage_15(
         client=client,
@@ -630,7 +672,7 @@ async def compute_clearance_automation(
         "sync_actions_count": len(sync_actions),
         "dry_run": dry_run,
         "head_sha": head_sha,
-        "codex_thread_count": len(threads),
+        "unresolved_codex_thread_count": sum(1 for t in threads if t.verdict != Verdict.RESOLVED),
     }
     if investigator_failures:
         result_dict["investigator_error_count"] = len(investigator_failures)
