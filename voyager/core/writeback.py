@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import TYPE_CHECKING, Any
+
+import httpx
 
 _log = logging.getLogger(__name__)
 
@@ -10,6 +13,8 @@ if TYPE_CHECKING:
     from voyager.bots.clearance.investigator import ThreadInvestigator
 
     from .github_app import GitHubAppClient
+
+CLEARANCE_AGENT_SLUG = "iterwheel-clearance"  # voyager clearance bot App
 
 
 def dry_run_enabled() -> bool:
@@ -137,6 +142,9 @@ async def dispatch_route_writeback(
         # module top would create a tight coupling and complicate test mocking.
         from voyager.bots.clearance import enrich_clearance_route
 
+        validation = route.get("validation") or {}
+        pr_number = validation.get("pr_number")
+
         automation: dict[str, Any] | None = None
         if store is not None:
             from voyager.bots.clearance.pipeline import compute_clearance_automation
@@ -162,6 +170,62 @@ async def dispatch_route_writeback(
                     "sync_actions": [],
                     "sync_actions_count": 0,
                 }
+
+        # Wave 7C-2 stale-verdict guard (VOY-1809 commit 6).
+        # If the verdict was computed against a head_sha that differs from the
+        # PR's CURRENT head, the verdict is stale (a concurrent webhook
+        # advanced the head). Skip writeback to prevent applying an outdated
+        # verdict. Per VOY-1809 D4 + D5.
+        expected_sha = (automation or {}).get("head_sha")  # .get() per F8 legacy tolerance
+        if expected_sha and not dry_run_enabled() and pr_number is not None:
+            try:
+                pull = await client.pull_request(CLEARANCE_AGENT_SLUG, repository, int(pr_number))
+                actual_sha = (pull.get("head") or {}).get("sha") or ""
+                if actual_sha and actual_sha != expected_sha:
+                    _log.info(
+                        "stale_verdict_skip: %s",
+                        json.dumps(
+                            {
+                                "event": "stale_verdict_skip",
+                                "repo": repository,
+                                "pr": pr_number,
+                                "expected_sha": expected_sha,
+                                "actual_sha": actual_sha,
+                            }
+                        ),
+                    )
+                    stale_automation = dict(automation or {})
+                    # Note: automation.status="stale_verdict_skip" is un-enumerated vs
+                    # the Status enum. Downstream consumers must tolerate unknown
+                    # values (per VOY-1809 F6).
+                    stale_automation["status"] = "stale_verdict_skip"
+                    return {
+                        "ok": True,
+                        "skipped": "stale_verdict",
+                        "automation": stale_automation,
+                    }
+            except (httpx.HTTPError, TimeoutError) as exc:
+                # Codex MVE-round P2: fail-open observability — log + counter event
+                # so persistent API instability surfaces.
+                _log.warning(
+                    "stale_guard: REST fetch failed for %s PR=%s; emitting fail-open log + counter, "
+                    "proceeding with writeback: %s",
+                    repository,
+                    pr_number,
+                    exc,
+                )
+                _log.info(
+                    "stale_guard_failed_fail_open: %s",
+                    json.dumps(
+                        {
+                            "event": "stale_guard_failed_fail_open",
+                            "repo": repository,
+                            "pr": pr_number,
+                            "expected_sha": expected_sha,
+                            "error": str(exc),
+                        }
+                    ),
+                )
 
         try:
             enriched = await enrich_clearance_route(
