@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -932,3 +933,83 @@ def captured_url_ends_with(state: ClientState, suffix: str) -> None:
     assert state.captured_requests, "No HTTP requests were captured"
     last_url = str(state.captured_requests[-1].url)
     assert last_url.endswith(suffix), f"URL {last_url!r} does not end with {suffix!r}"
+
+
+# ---------------------------------------------------------------------------
+# Given / When / Then — Wave 7C-3: branch_protected
+# ---------------------------------------------------------------------------
+
+
+@given("the GitHub API returns a token then a branch response with protected true")
+def mock_token_then_branch_protected_true(state: ClientState) -> None:
+    branch_response = _json_response(200, {"name": "main", "protected": True})
+    existing = getattr(state, "_mock_responses", [])
+    state._mock_responses = [*existing, _token_response(), branch_response]  # type: ignore[attr-defined]
+
+
+@given("the GitHub API returns a token then a branch response with protected false")
+def mock_token_then_branch_protected_false(state: ClientState) -> None:
+    branch_response = _json_response(200, {"name": "main", "protected": False})
+    existing = getattr(state, "_mock_responses", [])
+    state._mock_responses = [*existing, _token_response(), branch_response]  # type: ignore[attr-defined]
+
+
+@given("the GitHub API returns a token then a 404 branch response")
+def mock_token_then_branch_404(state: ClientState) -> None:
+    existing = getattr(state, "_mock_responses", [])
+    state._mock_responses = [*existing, _token_response(), httpx.Response(404)]  # type: ignore[attr-defined]
+
+
+@given("the GitHub API returns a token then a 500 branch response")
+def mock_token_then_branch_500(state: ClientState) -> None:
+    existing = getattr(state, "_mock_responses", [])
+    state._mock_responses = [*existing, _token_response(), httpx.Response(500)]  # type: ignore[attr-defined]
+
+
+@when(parsers.parse('branch_protected is called for "{repo}" branch "{branch}"'))
+def call_branch_protected(state: ClientState, repo: str, branch: str) -> None:
+    import asyncio
+    import logging
+
+    responses = getattr(state, "_mock_responses", [])
+    state.client = _build_client(state, responses)
+    state._warning_log: list[str] = []  # type: ignore[attr-defined]
+
+    handler = _CapturingHandler(state._warning_log)  # type: ignore[attr-defined]
+    logger = logging.getLogger("voyager.core.github_app")
+    logger.addHandler(handler)
+    try:
+        state.result = asyncio.run(
+            state.client.branch_protected("iterwheel-clearance", repo, branch)
+        )
+    except Exception as exc:
+        state.raised = exc
+    finally:
+        logger.removeHandler(handler)
+
+
+class _CapturingHandler(logging.Handler):
+    """Capture WARNING-and-above log records."""
+
+    def __init__(self, sink: list[str]) -> None:
+        super().__init__(level=logging.WARNING)
+        self._sink = sink
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self._sink.append(self.format(record))
+
+
+@then("branch_protected returned True")
+def branch_protected_true(state: ClientState) -> None:
+    assert state.result is True, f"Expected True, got {state.result!r}"
+
+
+@then("branch_protected returned False")
+def branch_protected_false(state: ClientState) -> None:
+    assert state.result is False, f"Expected False, got {state.result!r}"
+
+
+@then("a warning was logged")
+def warning_was_logged(state: ClientState) -> None:
+    warnings = getattr(state, "_warning_log", [])
+    assert warnings, "Expected at least one WARNING log entry, got none"

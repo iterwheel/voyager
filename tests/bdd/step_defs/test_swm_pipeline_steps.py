@@ -19,6 +19,7 @@ Stubs:
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,7 @@ class _StubGitHubAppClient:
         self.threads: list[dict[str, Any]] = []
         self.pr_payload: dict[str, Any] = {
             "head": {"sha": "head-sha-abc1234"},
+            "base": {"ref": "main"},
             "title": "Fix the bug",
             "number": PR,
             "user": {"login": "ryosaeba1985"},  # default PR author for existing scenarios
@@ -69,6 +71,10 @@ class _StubGitHubAppClient:
             "isOutdated": False,
             "resolvedBy": {"login": "iterwheel-clearance[bot]"},
         }
+
+        # Wave 7C-3: branch_protected stub controls
+        self._branch_protected_result: bool = True
+        self._branch_protected_raise: BaseException | None = None
 
     # Wave 7B-3: pull_request_diff — optional diff text + call counter for
     # lazy-memoize scenarios. When diff_raise is set, pull_request_diff raises
@@ -87,6 +93,11 @@ class _StubGitHubAppClient:
         if self.diff_raise is not None:
             raise self.diff_raise
         return self.diff_text
+
+    async def branch_protected(self, app_slug: str, repo: str, branch: str) -> bool:
+        if self._branch_protected_raise is not None:
+            raise self._branch_protected_raise
+        return self._branch_protected_result
 
     async def pull_request_review_threads(
         self, app_slug: str, repo: str, pr: int
@@ -440,6 +451,7 @@ def ctx(tmp_path: Path):
         "automation": None,
         "raised": None,
         "investigator": None,  # Wave 7B-3: set by Given steps for investigator scenarios
+        "captured_logs": [],  # Wave 7C-3: warning/info logs captured during pipeline run
     }
 
 
@@ -565,6 +577,17 @@ def _route_for_pr(pr: int) -> dict[str, Any]:
     }
 
 
+class _CapturingHandler(logging.Handler):
+    """Capture log records at DEBUG and above."""
+
+    def __init__(self, sink: list[logging.LogRecord]) -> None:
+        super().__init__(level=logging.DEBUG)
+        self._sink = sink
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self._sink.append(record)
+
+
 def _run_pipeline(ctx, *, dry_run: bool | None = None) -> None:
     from voyager.bots.clearance.pipeline import compute_clearance_automation
 
@@ -573,6 +596,13 @@ def _run_pipeline(ctx, *, dry_run: bool | None = None) -> None:
         os.environ["DRY_RUN"] = "true"
     elif dry_run is False:
         os.environ["DRY_RUN"] = "false"
+
+    log_records: list[logging.LogRecord] = []
+    handler = _CapturingHandler(log_records)
+    pipeline_logger = logging.getLogger("voyager.bots.clearance.pipeline")
+    old_level = pipeline_logger.level
+    pipeline_logger.setLevel(logging.DEBUG)
+    pipeline_logger.addHandler(handler)
     try:
         ctx["automation"] = asyncio.run(
             compute_clearance_automation(
@@ -586,6 +616,9 @@ def _run_pipeline(ctx, *, dry_run: bool | None = None) -> None:
     except Exception as exc:
         ctx["raised"] = exc
     finally:
+        pipeline_logger.removeHandler(handler)
+        pipeline_logger.setLevel(old_level)
+        ctx["captured_logs"] = log_records
         if old is None:
             os.environ.pop("DRY_RUN", None)
         else:
@@ -1128,4 +1161,148 @@ def then_snapshot_evidence_llm_error_contains(ctx, thread_id: str, substring: st
     assert llm_error != "", f"expected evidence.llm_error to be non-empty, got {llm_error!r}"
     assert substring.lower() in llm_error.lower(), (
         f"substring {substring!r} not in evidence.llm_error={llm_error!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Wave 7C-3: severity evaluator wiring — helpers + Given / Then steps
+# ---------------------------------------------------------------------------
+
+# Codex comment body with P1 badge + required_check_coupling cue
+# (contains "required", "check", and "paths-ignore")
+_P1_COUPLING_BODY = (
+    "![P1 Badge](https://img.shields.io/badge/P1-critical-red)\n"
+    "This workflow uses `required` status checks that are excluded via `paths-ignore`.\n"
+    "The `check` runs will be skipped for changes to docs/ and the branch protection\n"
+    "rule requires them — this coupling means a failing check can silently bypass.\n"
+)
+
+# P2 badge, no coupling cue
+_P2_NO_COUPLING_BODY = "**P2**: Nullable dereference on line 42 — guard before calling `.value`.\n"
+
+# No badge at all
+_NO_BADGE_BODY = (
+    "The function does not handle empty input — add an early return for the empty-list case.\n"
+)
+
+
+def _severity_codex_thread(
+    *,
+    thread_id: str = THREAD_ID,
+    comment_body: str,
+    is_resolved: bool = False,
+    is_outdated: bool = False,
+    author_reply_body: str | None = None,
+) -> dict[str, Any]:
+    """Build a Codex thread with a configurable first-comment body for severity extraction."""
+    comments: list[dict[str, Any]] = [
+        {
+            "databaseId": CODEX_COMMENT_ID,
+            "author": {"login": "chatgpt-codex-connector"},
+            "body": comment_body,
+            "url": "https://example/c/1",
+            "createdAt": "2026-05-11T12:00:00Z",
+        }
+    ]
+    if author_reply_body is not None:
+        comments.append(
+            {
+                "databaseId": CODEX_COMMENT_ID + 1,
+                "author": {"login": "ryosaeba1985"},
+                "body": author_reply_body,
+                "url": "https://example/c/2",
+                "createdAt": "2026-05-11T12:30:00Z",
+            }
+        )
+    return {
+        "id": thread_id,
+        "isResolved": is_resolved,
+        "isOutdated": is_outdated,
+        "path": "app.py",
+        "line": 10,
+        "startLine": None,
+        "comments": {"nodes": comments},
+    }
+
+
+@given(
+    'the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with P1 badge and required_check_coupling body'
+)
+def given_p1_coupling_thread(ctx) -> None:
+    ctx["client"].threads = [_severity_codex_thread(comment_body=_P1_COUPLING_BODY)]
+
+
+@given('the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with no severity badge')
+def given_no_badge_thread(ctx) -> None:
+    ctx["client"].threads = [_severity_codex_thread(comment_body=_NO_BADGE_BODY)]
+
+
+@given('the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with P2 badge and no coupling cue')
+def given_p2_no_coupling_thread(ctx) -> None:
+    ctx["client"].threads = [_severity_codex_thread(comment_body=_P2_NO_COUPLING_BODY)]
+
+
+@given(parsers.parse('the base branch is "{branch}"'))
+def given_base_branch(ctx, branch: str) -> None:
+    ctx["client"].pr_payload["base"] = {"ref": branch}
+
+
+@given("the stub branch_protected returns False")
+def given_branch_not_protected(ctx) -> None:
+    ctx["client"]._branch_protected_result = False
+
+
+@given("the stub branch_protected returns True")
+def given_branch_protected(ctx) -> None:
+    ctx["client"]._branch_protected_result = True
+
+
+@given("the stub branch_protected raises a transport error")
+def given_branch_protected_raises(ctx) -> None:
+    import httpx
+
+    ctx["client"]._branch_protected_raise = httpx.HTTPError("simulated transport error")
+
+
+@then(parsers.parse('the thread codex_severity is "{expected}"'))
+def then_thread_codex_severity(ctx, expected: str) -> None:
+    t = _first_thread(ctx)
+    assert t.codex_severity.value == expected, (
+        f"thread.codex_severity={t.codex_severity!r}, expected {expected!r}"
+    )
+
+
+@then(parsers.parse('the thread effective_severity is "{expected}"'))
+def then_thread_effective_severity(ctx, expected: str) -> None:
+    t = _first_thread(ctx)
+    assert t.effective_severity.value == expected, (
+        f"thread.effective_severity={t.effective_severity!r}, expected {expected!r}"
+    )
+
+
+@then(parsers.parse('the thread demotion_reason contains "{substring}"'))
+def then_thread_demotion_reason_contains(ctx, substring: str) -> None:
+    t = _first_thread(ctx)
+    reason = t.demotion_reason or ""
+    assert substring in reason, f"thread.demotion_reason={reason!r} does not contain {substring!r}"
+
+
+@then("the thread demotion_reason is None")
+def then_thread_demotion_reason_none(ctx) -> None:
+    t = _first_thread(ctx)
+    assert t.demotion_reason is None, (
+        f"expected thread.demotion_reason=None, got {t.demotion_reason!r}"
+    )
+
+
+@then("a severity_demoted log was emitted")
+def then_severity_demoted_log(ctx) -> None:
+    records = ctx.get("captured_logs", [])
+    matched = any(
+        "severity_demoted" in (record.getMessage())
+        for record in records
+        if record.levelno >= logging.INFO
+    )
+    assert matched, "No 'severity_demoted' log record found. Records: " + str(
+        [r.getMessage() for r in records]
     )

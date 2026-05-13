@@ -221,3 +221,41 @@ Feature: GitHub App authentication — JWT and installation token machinery
     And the GitHub API returns a token then a 404 not-found response
     When pull_request_diff is awaited and may raise
     Then an httpx.HTTPStatusError is raised
+
+  # ---------------------------------------------------------------------------
+  # branch_protected (Wave 7C-3)
+  # ---------------------------------------------------------------------------
+
+  Scenario: B1 — branch_protected returns True when GitHub reports protected=true
+    Given a test GitHub App with slug "iterwheel-clearance" and app_id "9999"
+    And the app has a valid RSA private key
+    And the app has installation_id "55544433"
+    And the GitHub API returns a token then a branch response with protected true
+    When branch_protected is called for "iterwheel/voyager-sandbox" branch "main"
+    Then branch_protected returned True
+
+  Scenario: B2 — branch_protected returns False when GitHub reports protected=false
+    Given a test GitHub App with slug "iterwheel-clearance" and app_id "9999"
+    And the app has a valid RSA private key
+    And the app has installation_id "55544433"
+    And the GitHub API returns a token then a branch response with protected false
+    When branch_protected is called for "iterwheel/voyager-sandbox" branch "main"
+    Then branch_protected returned False
+
+  Scenario: B3 — branch_protected returns True (fail-safe) on 404
+    Given a test GitHub App with slug "iterwheel-clearance" and app_id "9999"
+    And the app has a valid RSA private key
+    And the app has installation_id "55544433"
+    And the GitHub API returns a token then a 404 branch response
+    When branch_protected is called for "iterwheel/voyager-sandbox" branch "main"
+    Then branch_protected returned True
+    And a warning was logged
+
+  Scenario: B4 — branch_protected returns True (fail-safe) on 500
+    Given a test GitHub App with slug "iterwheel-clearance" and app_id "9999"
+    And the app has a valid RSA private key
+    And the app has installation_id "55544433"
+    And the GitHub API returns a token then a 500 branch response
+    When branch_protected is called for "iterwheel/voyager-sandbox" branch "main"
+    Then branch_protected returned True
+    And a warning was logged

@@ -297,3 +297,62 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     And the stub client raises httpx.HTTPStatusError on pull_request_diff
     When compute_clearance_automation runs with investigator
     Then the snapshot evidence llm_error for thread "PRRT_codex_alpha" contains "500"
+
+  # ---------------------------------------------------------------------------
+  # Wave 7C-3: severity evaluator wiring
+  # ---------------------------------------------------------------------------
+
+  Scenario: S1 — P1 badge + required_check_coupling cue + unprotected base branch demotes to P2
+    Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with P1 badge and required_check_coupling body
+    And the base branch is "main"
+    And the stub branch_protected returns False
+    When compute_clearance_automation runs with DRY_RUN true
+    Then the thread codex_severity is "P1"
+    And the thread effective_severity is "P2"
+    And the thread demotion_reason contains "main has no branch protection"
+    And a severity_demoted log was emitted
+
+  Scenario: S2 — P1 badge + required_check_coupling cue + protected base branch does NOT demote
+    Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with P1 badge and required_check_coupling body
+    And the base branch is "main"
+    And the stub branch_protected returns True
+    When compute_clearance_automation runs with DRY_RUN true
+    Then the thread codex_severity is "P1"
+    And the thread effective_severity is "P1"
+    And the thread demotion_reason is None
+
+  Scenario: S3 — No severity badge → codex_severity P3, effective P3, no demotion
+    Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with no severity badge
+    And the base branch is "main"
+    And the stub branch_protected returns False
+    When compute_clearance_automation runs with DRY_RUN true
+    Then the thread codex_severity is "P3"
+    And the thread effective_severity is "P3"
+    And the thread demotion_reason is None
+
+  Scenario: S4 — P2 badge but no required_check_coupling cue → P2 effective, no demotion
+    Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with P2 badge and no coupling cue
+    And the base branch is "main"
+    And the stub branch_protected returns False
+    When compute_clearance_automation runs with DRY_RUN true
+    Then the thread codex_severity is "P2"
+    And the thread effective_severity is "P2"
+    And the thread demotion_reason is None
+
+  Scenario: S5 — P1 → P3 (max demotion) when unprotected + required_check_coupling
+    Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with P1 badge and required_check_coupling body
+    And the base branch is "main"
+    And the stub branch_protected returns False
+    When compute_clearance_automation runs with DRY_RUN true
+    Then the thread codex_severity is "P1"
+    And the thread effective_severity is "P2"
+    And the thread demotion_reason contains "main has no branch protection"
+
+  Scenario: S6 — branch_protected REST fails → fail-safe protected=True → no demotion
+    Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with P1 badge and required_check_coupling body
+    And the base branch is "main"
+    And the stub branch_protected raises a transport error
+    When compute_clearance_automation runs with DRY_RUN true
+    Then the thread codex_severity is "P1"
+    And the thread effective_severity is "P1"
+    And the thread demotion_reason is None
