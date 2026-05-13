@@ -25,6 +25,7 @@ _client: Any = None
 _store: Any = None
 _SENTINEL: Any = object()
 _default_profile_name: Any = _SENTINEL
+_investigator: Any = _SENTINEL
 
 
 def _get_client() -> Any:
@@ -75,6 +76,43 @@ def _get_default_profile_name() -> str | None:
         except Exception:
             _default_profile_name = None
     return cast("str | None", _default_profile_name)
+
+
+def _get_investigator() -> Any:
+    """Return a memoized ``DeepSeekInvestigator`` built from the default profile, or None.
+
+    Returns None when:
+    - ``cfg.default_profile`` is unset
+    - ``cfg.default_profile`` doesn't resolve to a known profile (already
+      validated at config load, but defensive)
+    - ``VOYAGER_DEEPSEEK_API_KEY`` env var is empty/missing
+    - any exception during construction
+
+    Returning None keeps the bridge running deterministically — pipeline's
+    AUGMENT rule (Wave 7B-3 D1=B) means State B + code_changed=True still
+    resolves via judge() without an investigator; State B + code_changed=False
+    falls back to the pre-investigator OPEN verdict. Same degradation
+    semantics as ``_get_store`` returning None: feature off, no crash.
+    """
+    global _investigator
+    if _investigator is _SENTINEL:
+        try:
+            from voyager.bots.clearance.investigator import build_investigator_from_profile
+            from voyager.core.config import load_config
+
+            cfg = load_config()
+            name = cfg.default_profile
+            api_key = os.environ.get("VOYAGER_DEEPSEEK_API_KEY", "")
+            if not name or name not in cfg.profiles or not api_key:
+                _investigator = None
+            else:
+                _investigator = build_investigator_from_profile(
+                    cfg.profiles[name],
+                    api_key=api_key,
+                )
+        except Exception:
+            _investigator = None
+    return _investigator
 
 
 def _utc_now() -> str:
@@ -136,6 +174,7 @@ async def _process_route_writebacks(
     store = _get_store()
     repository: str | None = (payload.get("repository") or {}).get("full_name")
     default_profile_name = _get_default_profile_name()
+    investigator = _get_investigator()
     for route in routes:
         try:
             result = await dispatch_route_writeback(
@@ -144,6 +183,7 @@ async def _process_route_writebacks(
                 repository=repository,
                 store=store,
                 default_profile_name=default_profile_name,
+                investigator=investigator,
             )
             _recent_writebacks.append({"delivery_id": delivery_id, "event": event, **result})
         except Exception:

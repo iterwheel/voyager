@@ -100,7 +100,8 @@ async def dispatch_route_writeback(
     *,
     repository: str | None,
     store: Any = None,
-    default_profile_name: str | None = None,  # reserved for Phase 7B-3 investigator dispatch
+    default_profile_name: str | None = None,
+    investigator: Any = None,
 ) -> dict[str, Any]:
     """Dispatch a route to the right writeback path.
 
@@ -116,9 +117,8 @@ async def dispatch_route_writeback(
     as ``automation=`` to ``enrich_clearance_route``. When ``store`` is None,
     legacy PR-body-only enrichment runs unchanged.
 
-    The ``default_profile_name`` kwarg is reserved for Phase 7B-3 investigator
-    dispatch; it is forwarded to ``compute_clearance_automation`` but not yet
-    consumed there.
+    The ``investigator`` kwarg is forwarded to ``compute_clearance_automation``
+    for the Wave 7B-3 LLM investigator path.
 
     Codex round 1 P1 (PR #7).
     """
@@ -146,6 +146,7 @@ async def dispatch_route_writeback(
                     repository=repository,
                     store=store,
                     default_profile_name=default_profile_name,
+                    investigator=investigator,
                 )
             except Exception as exc:
                 _log.exception(
