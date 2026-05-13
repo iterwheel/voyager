@@ -583,6 +583,7 @@ async def compute_clearance_automation(
         "sync_actions": [a.model_dump() for a in sync_actions],
         "sync_actions_count": len(sync_actions),
         "dry_run": dry_run,
+        "head_sha": head_sha,
     }
     if investigator_failures:
         result_dict["investigator_error_count"] = len(investigator_failures)
