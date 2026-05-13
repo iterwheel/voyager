@@ -71,9 +71,11 @@ class _StubGitHubAppClient:
         }
 
     # Wave 7B-3: pull_request_diff — optional diff text + call counter for
-    # lazy-memoize scenarios.
+    # lazy-memoize scenarios. When diff_raise is set, pull_request_diff raises
+    # that exception instead of returning diff_text.
     diff_text: str = ""
     diff_call_count: int = 0
+    diff_raise: BaseException | None = None
 
     async def pull_request(self, app_slug: str, repo: str, pr: int) -> dict[str, Any]:
         if self.fail_pull_request:
@@ -82,6 +84,8 @@ class _StubGitHubAppClient:
 
     async def pull_request_diff(self, app_slug: str, repo: str, pull_number: int) -> str:
         self.diff_call_count += 1
+        if self.diff_raise is not None:
+            raise self.diff_raise
         return self.diff_text
 
     async def pull_request_review_threads(
@@ -360,6 +364,32 @@ index abc1234..def5678 100644
 +    if user is None:
 +        return None
 +    return invalidate_token(user)
+"""
+
+# Unified diff covering both app.py (line 10) and lib/utils.py (line 5).
+# Used by Scenario C to prove investigator receives different excerpts per path.
+_SAMPLE_DIFF_TWO_PATHS = """\
+diff --git a/app.py b/app.py
+index abc1234..def5678 100644
+--- a/app.py
++++ b/app.py
+@@ -8,6 +8,10 @@ def login(user):
+     token = generate_token(user)
+     return token
++def logout(user):
++    if user is None:
++        return None
++    return invalidate_token(user)
+diff --git a/lib/utils.py b/lib/utils.py
+index 111aaaa..222bbbb 100644
+--- a/lib/utils.py
++++ b/lib/utils.py
+@@ -3,4 +3,8 @@ def helper():
+     pass
++def safe_divide(a, b):
++    if b == 0:
++        raise ValueError("division by zero")
++    return a / b
 """
 
 
@@ -842,6 +872,59 @@ def given_stub_records_diff_calls(ctx) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Wave 7B-3: new exception-path + multi-path Given steps
+# ---------------------------------------------------------------------------
+
+
+@given("the stub client raises httpx.HTTPStatusError on pull_request_diff")
+def given_stub_diff_raises_httpx(ctx) -> None:
+    import httpx
+
+    ctx["client"].diff_raise = httpx.HTTPStatusError(
+        "server 500",
+        request=httpx.Request("GET", "https://example.com/diff"),
+        response=httpx.Response(500),
+    )
+
+
+@given(parsers.parse('a fake investigator returning unknown verdict "{verdict}"'))
+def given_fake_investigator_unknown_verdict(ctx, verdict: str) -> None:
+    from voyager.bots.clearance.investigator import InvestigationDecision
+
+    decision = InvestigationDecision(
+        verdict=verdict,  # type: ignore[arg-type]
+        confidence=0.9,
+        reason="Unknown verdict test",
+        evidence=[],
+        raw_text=None,
+    )
+    ctx["investigator"] = _FakeInvestigator([decision])
+
+
+@given('the stub PR "iterwheel/sandbox" #49 has 2 outdated Codex threads at different paths')
+def given_two_outdated_threads_different_paths(ctx) -> None:
+    ctx["client"].threads = [
+        _outdated_codex_thread(
+            thread_id="PRRT_codex_alpha",
+            path="app.py",
+            line=10,
+            codex_comment_id=CODEX_COMMENT_ID,
+        ),
+        _outdated_codex_thread(
+            thread_id="PRRT_codex_beta",
+            path="lib/utils.py",
+            line=5,
+            codex_comment_id=CODEX_COMMENT_ID + 10,
+        ),
+    ]
+
+
+@given("the stub client returns a sample diff covering both paths")
+def given_stub_diff_both_paths(ctx) -> None:
+    ctx["client"].diff_text = _SAMPLE_DIFF_TWO_PATHS
+
+
+# ---------------------------------------------------------------------------
 # Wave 7B-3: When — pipeline with investigator
 # ---------------------------------------------------------------------------
 
@@ -946,4 +1029,16 @@ def then_diff_called_once(ctx, count: int) -> None:
 def then_diff_called_n_times(ctx, count: int) -> None:
     assert ctx["client"].diff_call_count == count, (
         f"expected pull_request_diff called {count}x, got {ctx['client'].diff_call_count}"
+    )
+
+
+@then("the investigator received different diff excerpts for each thread")
+def then_investigator_different_excerpts(ctx) -> None:
+    inv = ctx.get("investigator")
+    assert inv is not None, "no investigator configured in ctx"
+    assert len(inv.calls) == 2, f"expected 2 investigator calls, got {len(inv.calls)}"
+    excerpt_0 = inv.calls[0].diff_excerpt
+    excerpt_1 = inv.calls[1].diff_excerpt
+    assert excerpt_0 != excerpt_1, (
+        f"expected different diff excerpts per thread but both are:\n{excerpt_0!r}"
     )

@@ -185,6 +185,39 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     Then the pipeline trigger is "webhook+investigator+stage1.5-sync"
 
   # ---------------------------------------------------------------------------
+  # Wave 7B-3: new exception-path coverage (P1 httpx, P2 ValueError, Gemini gap)
+  # ---------------------------------------------------------------------------
+
+  Scenario: httpx.HTTPError on pull_request_diff — falls back to deterministic OPEN, automation not "error"
+    Given the stub PR "iterwheel/sandbox" #49 has 1 outdated Codex thread at path "app.py" line 10
+    And a fake investigator returning verdict "RESOLVED" confidence 0.95 reason "Would fire if diff fetched"
+    And the stub client raises httpx.HTTPStatusError on pull_request_diff
+    When compute_clearance_automation runs with investigator
+    Then the thread verdict is "OPEN"
+    And the thread llm_verdict is None
+    And the automation status is "blocked"
+    And the pipeline trigger is "webhook"
+
+  Scenario: Investigator returns unknown verdict string — falls back to deterministic OPEN via ValueError
+    Given the stub PR "iterwheel/sandbox" #49 has 1 outdated Codex thread at path "app.py" line 10
+    And a fake investigator returning unknown verdict "MAYBE"
+    And the stub client returns a sample diff for "app.py"
+    When compute_clearance_automation runs with investigator
+    Then the thread verdict is "OPEN"
+    And the thread llm_verdict is None
+    And the automation status is "blocked"
+    And the pipeline trigger is "webhook"
+
+  Scenario: Two State B threads on different paths — diff fetched once, investigator called twice with different excerpts
+    Given the stub PR "iterwheel/sandbox" #49 has 2 outdated Codex threads at different paths
+    And a fake investigator returning verdict "OPEN" confidence 0.80 reason "Not fixed" for each thread
+    And the stub client returns a sample diff covering both paths
+    When compute_clearance_automation runs with investigator
+    Then pull_request_diff was called 1 time
+    And the investigator was called 2 times
+    And the investigator received different diff excerpts for each thread
+
+  # ---------------------------------------------------------------------------
   # State persistence
   # ---------------------------------------------------------------------------
 
