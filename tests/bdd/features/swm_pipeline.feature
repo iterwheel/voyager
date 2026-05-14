@@ -419,6 +419,14 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     Then the writeback was not skipped
     And pull_request was never called
 
+  Scenario: G6 pipeline-stale-skip terminal — automation.status already stale_verdict_skip from pipeline, dispatch skips before enrichment even when head_sha would match
+    Given a stub automation with head_sha "sha-current" and status "stale_verdict_skip"
+    And the current PR head sha is "sha-current"
+    When dispatch_route_writeback runs with DRY_RUN false for PR 49 on "iterwheel/sandbox"
+    Then the dispatch result is skipped with reason "stale_verdict"
+    And the dispatch automation status is "stale_verdict_skip"
+    And a writeback_skipped_stale_verdict log was emitted
+
   # ---------------------------------------------------------------------------
   # Fix 2 (Codex P2): pre-mutation stale guard inside compute_clearance_automation
   # ---------------------------------------------------------------------------

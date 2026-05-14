@@ -1529,6 +1529,15 @@ def then_stale_guard_failed_log(ctx) -> None:
     )
 
 
+@then("a writeback_skipped_stale_verdict log was emitted")
+def then_writeback_skipped_stale_verdict_log(ctx) -> None:
+    records = ctx.get("dispatch_logs", [])
+    matched = any("writeback_skipped_stale_verdict" in r.getMessage() for r in records)
+    assert matched, "No writeback_skipped_stale_verdict log found. Records: " + str(
+        [r.getMessage() for r in records]
+    )
+
+
 @then("pull_request was never called")
 def then_pull_request_never_called(ctx) -> None:
     count = ctx["client"].pull_request_call_count
