@@ -175,3 +175,50 @@ Feature: TOML config loader
     When the config load is attempted
     Then a ValueError is raised mentioning "pro"
     And the error message mentions "must be a TOML table"
+
+  # ---------------------------------------------------------------------------
+  # [voyager].deepseek_api_key field (load_config is pure — no env mutation;
+  # consumers combine cfg.deepseek_api_key with os.environ themselves).
+  # Trinity round 0 retired the env-mutation path (4/4 reviewer SRP/test-leak).
+  # ---------------------------------------------------------------------------
+
+  Scenario: [voyager].deepseek_api_key populates cfg.deepseek_api_key
+    Given VOYAGER_DEEPSEEK_API_KEY is not set in env
+    And the TOML config file "voyager_section_with_api_key.toml"
+    When the config is loaded
+    Then the config.deepseek_api_key is "sk-toml-fixture-value"
+    And VOYAGER_DEEPSEEK_API_KEY env var is unset
+
+  Scenario: load_config does not mutate VOYAGER_DEEPSEEK_API_KEY when env is already set
+    Given VOYAGER_DEEPSEEK_API_KEY is set in env to "sk-env-preexisting"
+    And the TOML config file "voyager_section_with_api_key.toml"
+    When the config is loaded
+    Then the config.deepseek_api_key is "sk-toml-fixture-value"
+    And VOYAGER_DEEPSEEK_API_KEY env var equals "sk-env-preexisting"
+
+  Scenario: Config without [voyager].deepseek_api_key leaves field None (env-isolated)
+    Given VOYAGER_DEEPSEEK_API_KEY is not set in env
+    And the TOML config file "valid_two_apps.toml"
+    When the config is loaded
+    Then the config.deepseek_api_key is None
+    And VOYAGER_DEEPSEEK_API_KEY env var is unset
+
+  Scenario: Whitespace-only [voyager].deepseek_api_key is treated as None
+    Given VOYAGER_DEEPSEEK_API_KEY is not set in env
+    And the TOML config file "voyager_section_api_key_whitespace.toml"
+    When the config is loaded
+    Then the config.deepseek_api_key is None
+    And VOYAGER_DEEPSEEK_API_KEY env var is unset
+
+  Scenario: [voyager].deepseek_api_key as integer raises ValueError
+    Given the TOML config file "voyager_section_api_key_int.toml"
+    When the config load is attempted
+    Then a ValueError is raised mentioning "deepseek_api_key"
+    And the error message mentions "string"
+
+  Scenario: Loading config twice with different deepseek_api_key values reflects the latest TOML
+    Given VOYAGER_DEEPSEEK_API_KEY is not set in env
+    And the TOML config file "voyager_section_with_api_key.toml"
+    When the config is loaded then loaded again with "valid_two_apps.toml"
+    Then the second config.deepseek_api_key is None
+    And VOYAGER_DEEPSEEK_API_KEY env var is unset

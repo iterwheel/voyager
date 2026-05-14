@@ -1,0 +1,64 @@
+# Voyager config template — copy to one of the loader's default paths and edit.
+#
+# Loader search order (voyager/core/config.py):
+#   1. $VOYAGER_CONFIG_PATH env override
+#   2. ~/.voyager/config.toml
+#   3. ./voyager.toml
+#   4. /etc/voyager/config.toml
+#
+# The real config is machine-local and gitignored. Only this template ships
+# in the repo.
+
+[voyager]
+work_dir = "~/.voyager/state"
+
+# Optional: default investigator profile name (must match a [profiles.*] key below).
+default_profile = "flash"
+
+# Optional: DeepSeek API key. Read by the investigator at request time.
+# Precedence (12-factor): if VOYAGER_DEEPSEEK_API_KEY is exported in the shell,
+# the env wins; otherwise the value here is used. load_config() does NOT
+# mutate os.environ — consumers combine cfg + env explicitly.
+#
+# To enable: uncomment the line below and replace with a real key.
+# The line is commented out by default so an unedited copy of this template
+# does not silently ship a placeholder string to the DeepSeek API.
+#
+# Note on storage: this file is the plaintext-at-rest tier — chmod 600 the
+# real config.toml. For shared/multi-tenant hosts, prefer the env var and
+# leave this field unset.
+# deepseek_api_key = "sk-replace-with-real-key"
+
+
+# --- GitHub Apps ---------------------------------------------------------
+# One [[apps]] block per installed App. Webhook secrets are NOT stored
+# here — they live in env vars named GITHUB_WEBHOOK_SECRET_<SLUG_UPPER>
+# (e.g., GITHUB_WEBHOOK_SECRET_ITERWHEEL_CLEARANCE).
+
+[[apps]]
+slug = "iterwheel-clearance"
+app_id = "REPLACE_ME_APP_ID"
+private_key_path = "~/.voyager/secrets/iterwheel-clearance.pem"
+installation_id = "REPLACE_ME_INSTALLATION_ID"
+
+[apps.installations]
+# Optional per-repo or per-owner installation overrides:
+#   "iterwheel/voyager-sandbox" = "130630338"
+#   "iterwheel" = "130630338"
+
+
+# --- Investigator profiles -----------------------------------------------
+# Named param bundles for DeepSeek verdict investigation. Schema A (five
+# profiles) suggested; pick the ones you need.
+
+[profiles.flash]
+model = "deepseek-v4-flash"
+thinking = false
+min_confidence = 0.85
+
+[profiles.pro]
+model = "deepseek-v4-pro"
+thinking = true
+reasoning_effort = "medium"
+max_diff_chars = 20000
+min_confidence = 0.78

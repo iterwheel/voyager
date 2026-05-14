@@ -88,7 +88,12 @@ def _get_investigator() -> ThreadInvestigator | None:
     - ``cfg.default_profile`` is unset
     - ``cfg.default_profile`` doesn't resolve to a known profile (already
       validated at config load, but defensive)
-    - ``VOYAGER_DEEPSEEK_API_KEY`` env var is empty/missing
+    - No api_key resolvable. Resolution distinguishes "env unset" from
+      "env explicitly empty": if ``VOYAGER_DEEPSEEK_API_KEY`` is set in
+      ``os.environ`` (even to ``""``), that value wins — an empty value
+      means the operator intentionally cleared the key, and the TOML
+      fallback is NOT consulted. Only when the env var is truly absent
+      does ``cfg.deepseek_api_key`` apply.
     - any exception during construction
 
     Returning None keeps the bridge running deterministically — pipeline's
@@ -105,7 +110,12 @@ def _get_investigator() -> ThreadInvestigator | None:
 
             cfg = load_config()
             name = cfg.default_profile
-            api_key = os.environ.get("VOYAGER_DEEPSEEK_API_KEY", "")
+            # 12-factor: env wins. Distinguish unset (None → fall through to
+            # TOML) from explicit-empty ("" → operator intent to disable;
+            # do NOT consult TOML). os.environ.get returns None for unset
+            # and "" for `export VAR=""`.
+            env_value = os.environ.get("VOYAGER_DEEPSEEK_API_KEY")
+            api_key = env_value if env_value is not None else (cfg.deepseek_api_key or "")
             if not name or name not in cfg.profiles or not api_key:
                 _investigator = None
             else:

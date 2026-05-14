@@ -61,12 +61,20 @@ class Profile:
     min_confidence: float
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class VoyagerConfig:
+    """Top-level voyager configuration.
+
+    Marked ``kw_only=True`` so future optional fields can be added without
+    breaking existing instantiations on field-order grounds. All current
+    callers already use keyword arguments.
+    """
+
     apps: dict[str, AppConfig]
     work_dir: Path
     profiles: dict[str, Profile]
     default_profile: str | None
+    deepseek_api_key: str | None = None
 
 
 def _parse_app(item: dict[str, Any]) -> AppConfig:
@@ -248,8 +256,30 @@ def load_config(path: str | Path | None = None) -> VoyagerConfig:
             f"[profiles.{default_profile}] section exists"
         )
 
+    deepseek_api_key_raw = voyager_section.get("deepseek_api_key")
+    if deepseek_api_key_raw is None:
+        deepseek_api_key: str | None = None
+    else:
+        if not isinstance(deepseek_api_key_raw, str):
+            raise ValueError(
+                f"[voyager].deepseek_api_key must be a string, got "
+                f"{type(deepseek_api_key_raw).__name__}: {deepseek_api_key_raw!r}"
+            )
+        # Empty / whitespace-only strings are treated as "field absent" rather
+        # than as an error, matching how operators typically toggle the key
+        # by clearing the value rather than deleting the line.
+        deepseek_api_key = deepseek_api_key_raw.strip() or None
+
+    # Pure factory: no os.environ mutation. Consumers that need env-over-config
+    # precedence (12-factor) combine cfg.deepseek_api_key with os.environ at
+    # the call site — see voyager/server.py:_get_investigator.
+
     return VoyagerConfig(
-        apps=apps, work_dir=work_dir, profiles=profiles, default_profile=default_profile
+        apps=apps,
+        work_dir=work_dir,
+        profiles=profiles,
+        default_profile=default_profile,
+        deepseek_api_key=deepseek_api_key,
     )
 
 

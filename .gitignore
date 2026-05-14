@@ -22,6 +22,11 @@ venv/
 !.env.example
 secrets/
 
+# Machine-local config (operators ship config.example.toml only)
+config.toml
+voyager.toml
+!config.example.toml
+
 # Coverage
 .coverage
 htmlcov/

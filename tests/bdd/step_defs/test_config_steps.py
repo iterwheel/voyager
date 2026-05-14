@@ -65,6 +65,21 @@ def given_env_nonexistent(path: str) -> dict[str, Any]:
     return {"config_path": None, "env_path": path, "config": None, "raised": None}
 
 
+@given("VOYAGER_DEEPSEEK_API_KEY is not set in env", target_fixture="state")
+def given_deepseek_env_unset(monkeypatch, state: dict[str, Any]) -> dict[str, Any]:
+    monkeypatch.delenv("VOYAGER_DEEPSEEK_API_KEY", raising=False)
+    return state
+
+
+@given(
+    parsers.parse('VOYAGER_DEEPSEEK_API_KEY is set in env to "{value}"'),
+    target_fixture="state",
+)
+def given_deepseek_env_set(monkeypatch, state: dict[str, Any], value: str) -> dict[str, Any]:
+    monkeypatch.setenv("VOYAGER_DEEPSEEK_API_KEY", value)
+    return state
+
+
 @given(
     "VOYAGER_CONFIG_PATH is set to a tilde path resolving to a valid config",
     target_fixture="state",
@@ -162,6 +177,19 @@ def when_load_config_no_path(state: dict[str, Any]) -> dict[str, Any]:
             os.environ.pop("VOYAGER_CONFIG_PATH", None)
         else:
             os.environ["VOYAGER_CONFIG_PATH"] = old
+    return state
+
+
+@when(
+    parsers.parse('the config is loaded then loaded again with "{filename}"'),
+    target_fixture="state",
+)
+def when_load_config_twice(state: dict[str, Any], filename: str) -> dict[str, Any]:
+    """Two-shot loader for the 'load twice — second wins, no env mutation' regression."""
+    from voyager.core.config import load_config  # lazy
+
+    state["config"] = load_config(state["config_path"])
+    state["second_config"] = load_config(FIXTURES_DIR / filename)
     return state
 
 
@@ -317,3 +345,43 @@ def then_default_profile(state: dict[str, Any], name: str) -> None:
 def then_default_profile_none(state: dict[str, Any]) -> None:
     cfg = state["config"]
     assert cfg.default_profile is None, f"default_profile = {cfg.default_profile!r}, expected None"
+
+
+@then(parsers.parse('the config.deepseek_api_key is "{value}"'))
+def then_deepseek_api_key(state: dict[str, Any], value: str) -> None:
+    cfg = state["config"]
+    assert cfg.deepseek_api_key == value, (
+        f"config.deepseek_api_key = {cfg.deepseek_api_key!r}, expected {value!r}"
+    )
+
+
+@then("the config.deepseek_api_key is None")
+def then_deepseek_api_key_none(state: dict[str, Any]) -> None:
+    cfg = state["config"]
+    assert cfg.deepseek_api_key is None, (
+        f"config.deepseek_api_key = {cfg.deepseek_api_key!r}, expected None"
+    )
+
+
+@then(parsers.parse('VOYAGER_DEEPSEEK_API_KEY env var equals "{value}"'))
+def then_deepseek_env_equals(value: str) -> None:
+    actual = os.environ.get("VOYAGER_DEEPSEEK_API_KEY")
+    assert actual == value, f"VOYAGER_DEEPSEEK_API_KEY = {actual!r}, expected {value!r}"
+
+
+@then("VOYAGER_DEEPSEEK_API_KEY env var is unset")
+def then_deepseek_env_unset() -> None:
+    actual = os.environ.get("VOYAGER_DEEPSEEK_API_KEY")
+    assert actual is None, (
+        f"VOYAGER_DEEPSEEK_API_KEY = {actual!r}, expected unset — "
+        "load_config must not mutate os.environ (trinity round 0 P1)"
+    )
+
+
+@then("the second config.deepseek_api_key is None")
+def then_second_deepseek_api_key_none(state: dict[str, Any]) -> None:
+    cfg = state.get("second_config")
+    assert cfg is not None, "second_config was not loaded — check the When step"
+    assert cfg.deepseek_api_key is None, (
+        f"second config.deepseek_api_key = {cfg.deepseek_api_key!r}, expected None"
+    )

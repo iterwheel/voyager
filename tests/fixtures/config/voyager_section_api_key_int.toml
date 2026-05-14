@@ -1,0 +1,9 @@
+[voyager]
+work_dir = "~/.voyager/state"
+deepseek_api_key = 12345
+
+[[apps]]
+slug = "iterwheel-clearance"
+app_id = 3646538
+private_key_path = "~/.voyager/secrets/iterwheel-clearance.pem"
+installation_id = "130630338"
