@@ -11,38 +11,14 @@ and downstream callers can still inspect the full thread for additional signal.
 
 from __future__ import annotations
 
-import os
 from enum import StrEnum
 
+from .constants import is_codex_login
+
+# Kept as module-level aliases so existing import sites continue to resolve.
+# The shared identity helper lives in constants.py — see is_codex_login.
 CODEX_BOT_LOGIN = "chatgpt-codex-connector"
 CODEX_BOT_LOGIN_REST = "chatgpt-codex-connector[bot]"
-
-
-def _extra_codex_logins() -> tuple[str, ...]:
-    """Extra logins treated as Codex bot for thread classification.
-
-    Sourced from ``VOYAGER_TEST_BOT_LOGINS`` env var, comma-separated. Empty
-    or unset means no extras — behavior is identical to "only Codex counts."
-
-    Sandbox e2e harness only. Production never sets this; the variable name
-    is deliberately prefixed with ``TEST_`` to signal intent. Long-term, this
-    is expected to graduate into a TOML schema field
-    ``[voyager].review_bot_logins`` (with per-bot marker dialect) when other
-    review bots like GitHub Copilot are integrated. For now we keep the
-    surface small and the change reviewable.
-    """
-    raw = os.environ.get("VOYAGER_TEST_BOT_LOGINS", "")
-    return tuple(s.strip() for s in raw.split(",") if s.strip())
-
-
-def _is_codex_login(login: str | None) -> bool:
-    """True when ``login`` is the Codex bot, in either GraphQL or REST form,
-    or appears in ``VOYAGER_TEST_BOT_LOGINS`` (sandbox e2e bypass)."""
-    if login is None:
-        return False
-    if login in (CODEX_BOT_LOGIN, CODEX_BOT_LOGIN_REST):
-        return True
-    return login in _extra_codex_logins()
 
 
 # Voyager writes the new prefix; the old SWM prefix is kept in the read-side
@@ -85,7 +61,7 @@ def codex_pr_body_signal(reactions: list[dict]) -> CodexBodySignal | None:
     has_eyes = False
     for r in reactions or []:
         login = (r.get("user") or {}).get("login") or ""
-        if not _is_codex_login(login):
+        if not is_codex_login(login):
             continue
         if r.get("content") == "THUMBS_UP":
             has_thumbs = True
@@ -113,7 +89,7 @@ def is_codex_thread(thread: dict) -> bool:
     ``VOYAGER_TEST_BOT_LOGINS`` — the sandbox e2e bypass.
     """
     comments = _comment_nodes(thread)
-    return bool(comments) and _is_codex_login(_login(comments[0]))
+    return bool(comments) and is_codex_login(_login(comments[0]))
 
 
 def codex_comment_id(thread: dict) -> int | None:
@@ -142,7 +118,7 @@ def latest_author_reply(thread: dict, *, author_login: str | None = None) -> dic
     replies = [
         c
         for c in author_replies(thread)
-        if not _is_codex_login(_login(c)) and not _is_bot_conclusion_comment(c.get("body"))
+        if not is_codex_login(_login(c)) and not _is_bot_conclusion_comment(c.get("body"))
     ]
     if author_login is not None:
         replies = [c for c in replies if _login(c) == author_login]
@@ -151,7 +127,7 @@ def latest_author_reply(thread: dict, *, author_login: str | None = None) -> dic
 
 def latest_codex_followup(thread: dict) -> dict | None:
     """A Codex follow-up comment after its initial review — used for 👍/👎 detection."""
-    followups = [c for c in author_replies(thread) if _is_codex_login(_login(c))]
+    followups = [c for c in author_replies(thread) if is_codex_login(_login(c))]
     return followups[-1] if followups else None
 
 

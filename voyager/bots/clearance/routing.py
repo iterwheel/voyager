@@ -10,12 +10,12 @@ from .constants import (
     CLEARANCE_AGENT_SLUG,
     CLEARANCE_BOT_LOGIN,
     CLEARANCE_CLASSIFIER_VERSION,
-    CODEX_REVIEW_BOT_LOGINS,
     CODEX_REVIEW_REACTION_CONTENTS,
     CODEX_REVIEW_RESULT_PREFIX,
     PULL_REQUEST_ACTIONS,
     PULL_REQUEST_REVIEW_ACTIONS,
     REACTION_ACTIONS,
+    is_codex_login,
 )
 
 
@@ -45,9 +45,7 @@ def is_codex_review_result_comment(payload: dict[str, Any]) -> bool:
     comment = payload.get("comment") or {}
     user = comment.get("user") or {}
     body = str(comment.get("body") or "").lstrip()
-    return user.get("login") in CODEX_REVIEW_BOT_LOGINS and body.startswith(
-        CODEX_REVIEW_RESULT_PREFIX
-    )
+    return is_codex_login(user.get("login")) and body.startswith(CODEX_REVIEW_RESULT_PREFIX)
 
 
 def is_codex_pr_body_reaction(payload: dict[str, Any]) -> bool:
@@ -56,7 +54,7 @@ def is_codex_pr_body_reaction(payload: dict[str, Any]) -> bool:
     user = reaction.get("user") or payload.get("sender") or {}
     return (
         bool(issue.get("pull_request"))
-        and user.get("login") in CODEX_REVIEW_BOT_LOGINS
+        and is_codex_login(user.get("login"))
         and reaction.get("content") in CODEX_REVIEW_REACTION_CONTENTS
     )
 

@@ -294,23 +294,40 @@ def signal_is_none(signal) -> None:
 
 @pytest.fixture
 def _restore_test_bot_logins(monkeypatch):
-    """Ensure VOYAGER_TEST_BOT_LOGINS is removed before/after each scenario.
+    """Ensure VOYAGER_TEST_BOT_LOGINS is removed and cache is cleared per scenario.
 
-    monkeypatch auto-restores on teardown, so we only need to pre-clear it so
-    a scenario that doesn't `Given ... env is set` starts from a clean slate.
+    monkeypatch.setenv/delenv auto-restores on teardown. The lru_cache on
+    constants._extra_codex_logins is process-lifetime by design (one-shot
+    read at production startup), so tests that flip the env between scenarios
+    must explicitly clear the cache. We clear on setup AND teardown.
     """
+    from voyager.bots.clearance.constants import _extra_codex_logins
+
     monkeypatch.delenv("VOYAGER_TEST_BOT_LOGINS", raising=False)
-    return monkeypatch
+    _extra_codex_logins.cache_clear()
+    yield monkeypatch
+    _extra_codex_logins.cache_clear()
 
 
 @given(parsers.parse('VOYAGER_TEST_BOT_LOGINS env is set to "{value}"'))
 def given_test_bot_env(_restore_test_bot_logins, value: str) -> None:
+    from voyager.bots.clearance.constants import _extra_codex_logins
+
     _restore_test_bot_logins.setenv("VOYAGER_TEST_BOT_LOGINS", value)
+    _extra_codex_logins.cache_clear()
+
+
+@given('VOYAGER_TEST_BOT_LOGINS env is set to ""')
+def given_test_bot_env_empty(_restore_test_bot_logins) -> None:
+    from voyager.bots.clearance.constants import _extra_codex_logins
+
+    _restore_test_bot_logins.setenv("VOYAGER_TEST_BOT_LOGINS", "")
+    _extra_codex_logins.cache_clear()
 
 
 @given("VOYAGER_TEST_BOT_LOGINS env is not set")
 def given_test_bot_env_unset(_restore_test_bot_logins) -> None:
-    # The fixture already deleted it; this step exists for readability.
+    # The fixture already cleared env + cache; this step exists for readability.
     pass
 
 
