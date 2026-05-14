@@ -31,6 +31,12 @@ CODEX_REVIEW_REACTION_CONTENTS = {"+1", "eyes"}
 
 _log = logging.getLogger(__name__)
 
+# Module-level guard so the "bypass active" warning fires exactly once per
+# process, no matter how many times the cache is cleared (e.g. by a test
+# suite that flips the env between scenarios). Gemini r2 P3 — warning was
+# emitting on every cache miss, spamming test logs ~20 times per run.
+_BYPASS_WARNED_ONCE = False
+
 
 @functools.cache
 def _extra_codex_logins() -> frozenset[str]:
@@ -43,23 +49,40 @@ def _extra_codex_logins() -> frozenset[str]:
     Cached for the process lifetime — production sets the env once at startup
     (it doesn't; this is a sandbox-only signal) and reads at every classify
     site would otherwise re-split per comment. Tests that flip the env
-    between scenarios must call ``_extra_codex_logins.cache_clear()`` in
-    teardown; see ``tests/bdd/step_defs/test_swm_classify_steps.py``.
+    between scenarios call ``reset_test_bot_login_cache()`` (a public
+    test-facing helper) instead of reaching into the private ``cache_clear``.
 
     Sandbox e2e harness only. Production never sets this; the ``TEST_``
     prefix in the var name signals intent. The longer-term shape is a TOML
     schema ``[voyager].review_bot_logins`` with per-bot marker dialect,
     landing alongside the GitHub Copilot integration.
     """
+    global _BYPASS_WARNED_ONCE
     raw = os.environ.get("VOYAGER_TEST_BOT_LOGINS", "")
     parsed = frozenset(s.strip() for s in raw.split(",") if s.strip())
-    if parsed:
+    if parsed and not _BYPASS_WARNED_ONCE:
         _log.warning(
             "VOYAGER_TEST_BOT_LOGINS is set (extra Codex-equivalent logins: %s). "
             "Sandbox e2e bypass active — this must not be set in production.",
             sorted(parsed),
         )
+        _BYPASS_WARNED_ONCE = True
     return parsed
+
+
+def reset_test_bot_login_cache() -> None:
+    """Clear the VOYAGER_TEST_BOT_LOGINS cache. Test-only.
+
+    Tests that flip the env var between scenarios call this in setup/teardown
+    so the next read picks up the new value. Production callers should never
+    need this — the env is read once per process at first lookup.
+
+    Also resets the "warned once" guard so a fresh test fixture observing the
+    bypass-set state can assert the warning fires.
+    """
+    global _BYPASS_WARNED_ONCE
+    _extra_codex_logins.cache_clear()
+    _BYPASS_WARNED_ONCE = False
 
 
 def is_codex_login(login: str | None) -> bool:

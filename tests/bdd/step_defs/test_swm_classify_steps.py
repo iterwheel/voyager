@@ -297,32 +297,33 @@ def _restore_test_bot_logins(monkeypatch):
     """Ensure VOYAGER_TEST_BOT_LOGINS is removed and cache is cleared per scenario.
 
     monkeypatch.setenv/delenv auto-restores on teardown. The lru_cache on
-    constants._extra_codex_logins is process-lifetime by design (one-shot
-    read at production startup), so tests that flip the env between scenarios
-    must explicitly clear the cache. We clear on setup AND teardown.
+    ``_extra_codex_logins`` is process-lifetime by design (one-shot read at
+    production startup), so tests that flip the env between scenarios call
+    the public ``reset_test_bot_login_cache()`` helper (which also resets
+    the one-shot warning guard, per Gemini r2 P3).
     """
-    from voyager.bots.clearance.constants import _extra_codex_logins
+    from voyager.bots.clearance.constants import reset_test_bot_login_cache
 
     monkeypatch.delenv("VOYAGER_TEST_BOT_LOGINS", raising=False)
-    _extra_codex_logins.cache_clear()
+    reset_test_bot_login_cache()
     yield monkeypatch
-    _extra_codex_logins.cache_clear()
+    reset_test_bot_login_cache()
 
 
 @given(parsers.parse('VOYAGER_TEST_BOT_LOGINS env is set to "{value}"'))
 def given_test_bot_env(_restore_test_bot_logins, value: str) -> None:
-    from voyager.bots.clearance.constants import _extra_codex_logins
+    from voyager.bots.clearance.constants import reset_test_bot_login_cache
 
     _restore_test_bot_logins.setenv("VOYAGER_TEST_BOT_LOGINS", value)
-    _extra_codex_logins.cache_clear()
+    reset_test_bot_login_cache()
 
 
 @given('VOYAGER_TEST_BOT_LOGINS env is set to ""')
 def given_test_bot_env_empty(_restore_test_bot_logins) -> None:
-    from voyager.bots.clearance.constants import _extra_codex_logins
+    from voyager.bots.clearance.constants import reset_test_bot_login_cache
 
     _restore_test_bot_logins.setenv("VOYAGER_TEST_BOT_LOGINS", "")
-    _extra_codex_logins.cache_clear()
+    reset_test_bot_login_cache()
 
 
 @given("VOYAGER_TEST_BOT_LOGINS env is not set")

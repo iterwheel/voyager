@@ -18,13 +18,17 @@ import pytest
 
 @pytest.fixture
 def reset_codex_login_cache(monkeypatch):
-    """Clear is_codex_login's cache before/after each test."""
-    from voyager.bots.clearance.constants import _extra_codex_logins
+    """Clear is_codex_login's cache before/after each test.
+
+    Uses the public ``reset_test_bot_login_cache`` helper (Gemini r2 P2:
+    tests should not reach into the private ``_extra_codex_logins.cache_clear``).
+    """
+    from voyager.bots.clearance.constants import reset_test_bot_login_cache
 
     monkeypatch.delenv("VOYAGER_TEST_BOT_LOGINS", raising=False)
-    _extra_codex_logins.cache_clear()
+    reset_test_bot_login_cache()
     yield monkeypatch
-    _extra_codex_logins.cache_clear()
+    reset_test_bot_login_cache()
 
 
 # ---------------------------------------------------------------------------
@@ -56,9 +60,9 @@ def test_codex_review_result_comment_test_bot_accepted_when_env_set(
     from voyager.bots.clearance.routing import is_codex_review_result_comment
 
     reset_codex_login_cache.setenv("VOYAGER_TEST_BOT_LOGINS", "voyager-e2e-bot")
-    from voyager.bots.clearance.constants import _extra_codex_logins
+    from voyager.bots.clearance.constants import reset_test_bot_login_cache
 
-    _extra_codex_logins.cache_clear()
+    reset_test_bot_login_cache()
 
     assert is_codex_review_result_comment(_review_comment_payload("voyager-e2e-bot"))
 
@@ -77,9 +81,9 @@ def test_codex_review_result_comment_body_prefix_still_required(reset_codex_logi
     from voyager.bots.clearance.routing import is_codex_review_result_comment
 
     reset_codex_login_cache.setenv("VOYAGER_TEST_BOT_LOGINS", "voyager-e2e-bot")
-    from voyager.bots.clearance.constants import _extra_codex_logins
+    from voyager.bots.clearance.constants import reset_test_bot_login_cache
 
-    _extra_codex_logins.cache_clear()
+    reset_test_bot_login_cache()
 
     payload = _review_comment_payload("voyager-e2e-bot", body="not a Codex Review comment")
     assert not is_codex_review_result_comment(payload)
@@ -115,9 +119,9 @@ def test_codex_pr_body_reaction_test_bot_accepted_when_env_set(reset_codex_login
     from voyager.bots.clearance.routing import is_codex_pr_body_reaction
 
     reset_codex_login_cache.setenv("VOYAGER_TEST_BOT_LOGINS", "voyager-e2e-bot")
-    from voyager.bots.clearance.constants import _extra_codex_logins
+    from voyager.bots.clearance.constants import reset_test_bot_login_cache
 
-    _extra_codex_logins.cache_clear()
+    reset_test_bot_login_cache()
 
     assert is_codex_pr_body_reaction(_reaction_payload("voyager-e2e-bot"))
 
@@ -133,9 +137,9 @@ def test_codex_pr_body_reaction_content_filter_still_required(reset_codex_login_
     from voyager.bots.clearance.routing import is_codex_pr_body_reaction
 
     reset_codex_login_cache.setenv("VOYAGER_TEST_BOT_LOGINS", "voyager-e2e-bot")
-    from voyager.bots.clearance.constants import _extra_codex_logins
+    from voyager.bots.clearance.constants import reset_test_bot_login_cache
 
-    _extra_codex_logins.cache_clear()
+    reset_test_bot_login_cache()
 
     payload = _reaction_payload("voyager-e2e-bot", content="laugh")
     assert not is_codex_pr_body_reaction(payload)
@@ -159,10 +163,10 @@ def test_is_codex_login_emits_warning_when_env_set(reset_codex_login_cache, capl
     """Operational audit signal: env-set fires a logger.warning at first read."""
     import logging
 
-    from voyager.bots.clearance.constants import _extra_codex_logins, is_codex_login
+    from voyager.bots.clearance.constants import is_codex_login, reset_test_bot_login_cache
 
     reset_codex_login_cache.setenv("VOYAGER_TEST_BOT_LOGINS", "voyager-e2e-bot")
-    _extra_codex_logins.cache_clear()
+    reset_test_bot_login_cache()
 
     with caplog.at_level(logging.WARNING, logger="voyager.bots.clearance.constants"):
         is_codex_login("voyager-e2e-bot")
