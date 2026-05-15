@@ -423,6 +423,8 @@ def overlay_inputs_blocked_thread_only_status(status: str) -> dict:
             "enabled": True,
             "status": status,
             "reason": "all Codex review threads RESOLVED",
+            "sync_actions": [{"mutation": "resolve_review_thread", "threadId": "thread-1"}],
+            "sync_actions_count": 1,
             "unresolved_codex_thread_count": 0,
         },
     }
@@ -441,6 +443,8 @@ def overlay_inputs_draft_pending_status(status: str) -> dict:
             "enabled": True,
             "status": status,
             "reason": "all Codex review threads RESOLVED",
+            "sync_actions": [],
+            "sync_actions_count": 0,
             "unresolved_codex_thread_count": 0,
         },
     }
