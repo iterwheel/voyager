@@ -225,17 +225,28 @@ def _mint_test_bot_token(app: TestBotApp) -> str:
 
 def _get_file_blob_sha(sandbox_repo: str, branch: str, file_path: str) -> str | None:
     """Return the current blob SHA for ``file_path`` on ``branch``, or None
-    when the file doesn't exist.
+    when the file doesn't exist OR when ``file_path`` resolves to a
+    directory.
 
-    Gemini r4 P1: ``gh api ... -q .sha`` against a 404 emits the literal
-    string ``null`` to stdout (jq's representation of a missing field on
-    the error body). Naive ``if existing_sha:`` then passes ``sha=null``
-    to the PUT and the server rejects the schema. We avoid jq and check
-    the raw JSON response for the presence of an actual SHA string.
+    Layered defenses:
+      1. ``returncode != 0`` → None (404 or other gh error).
+      2. ``json.JSONDecodeError`` → None (defensive).
+      3. ``payload`` not a dict → None. Contents API returns a JSON ARRAY
+         when the path resolves to a directory (Gemini r5 P1); the prior
+         ``.get("sha")`` would raise AttributeError on the list.
+      4. ``sha`` absent or not a non-empty string → None. Avoids the
+         jq-emitted ``"null"`` literal (Gemini r4 P1).
+
+    Branch is passed via ``-F ref=...`` rather than URL-query so branches
+    containing ``#`` / ``+`` / ``%`` are handled correctly by gh (Gemini r5 P2).
     """
     result = _run_gh(
         "api",
-        f"repos/{sandbox_repo}/contents/{file_path}?ref={branch}",
+        f"repos/{sandbox_repo}/contents/{file_path}",
+        "-X",
+        "GET",
+        "-F",
+        f"ref={branch}",
         check=False,
     )
     if result.returncode != 0:
@@ -243,6 +254,8 @@ def _get_file_blob_sha(sandbox_repo: str, branch: str, file_path: str) -> str | 
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
         return None
     sha = payload.get("sha")
     return sha if isinstance(sha, str) and sha else None
@@ -285,12 +298,15 @@ def _review_inline_comment_ids(sandbox_repo: str, pr_number: int, review_id: int
 
     Gemini r4 P1: ``POST /pulls/{n}/reviews`` returns the Review object only,
     NOT the inline comments it created. To get them we must call
-    ``GET /pulls/{n}/reviews/{review_id}/comments`` after creation. Without
-    this round-trip, ``thread_reply`` scenarios always fail with
-    "0 reviews posted" because the parent comment IDs were never collected.
+    ``GET /pulls/{n}/reviews/{review_id}/comments`` after creation.
+
+    Uses ``--paginate`` (Gemini r5 P2) so reviews with >30 inline comments
+    aren't silently truncated — matrix.yaml's schema enforces
+    one-comment-per-review-item today but the safety belt is cheap.
     """
     result = _run_gh(
         "api",
+        "--paginate",
         f"repos/{sandbox_repo}/pulls/{pr_number}/reviews/{review_id}/comments",
         check=False,
     )
@@ -500,6 +516,15 @@ def _poll_for_writeback(
             if r.status_code != 200:
                 return None, f"unexpected HTTP {r.status_code}: {r.text[:200]}"
 
+            # Scan all candidates and return the NEWEST matching record
+            # (Codex r5 P2: the prior "filter + take first" semantic raced
+            # with the marker-advance window — a writeback emitted while
+            # the runner was capturing review_start_ts could be filtered
+            # out as too-old). Newest-wins sidesteps the timing race
+            # entirely: even if the marker is slightly ahead of the
+            # desired writeback's ts, that writeback is just one of N
+            # matches; we sort by ts and return the latest.
+            candidates: list[dict[str, Any]] = []
             for wb in r.json().get("writebacks", []):
                 if _extract_pr_number(wb) != pr_number:
                     continue
@@ -507,7 +532,10 @@ def _poll_for_writeback(
                     continue
                 if since_ts and (wb.get("ts") or "") < since_ts:
                     continue
-                return wb, None
+                candidates.append(wb)
+            if candidates:
+                candidates.sort(key=lambda w: w.get("ts") or "")
+                return candidates[-1], None
             time.sleep(interval_s)
 
     suffix = f" (last transient: {last_transient})" if last_transient else ""
