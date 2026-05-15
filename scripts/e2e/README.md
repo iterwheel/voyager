@@ -28,11 +28,24 @@ In the GitHub UI:
 4. **Permissions**:
    - Pull requests: **Read & Write**
    - Issues: **Read**
-   - Metadata: **Read**
-   - Reactions: **Read & Write**
+   - Metadata: **Read** (mandatory in the GitHub UI)
+   - Reactions are not exposed as a separate GitHub App permission in the
+     current UI; the reaction endpoints used by the harness are covered by
+     the issue / pull request resources above.
 5. **Where can this App be installed**: Only on this account
 6. After creation: generate a private key (.pem), download it
 7. Install the App on `iterwheel/voyager-sandbox`
+
+Current `iterwheel` sandbox registration:
+
+- App slug: `voyager-e2e-bot`
+- App ID: `3723890`
+- Webhook: inactive
+- Install target: `iterwheel` only; install on `iterwheel/voyager-sandbox`
+- Private key location: `~/.voyager/secrets/voyager-e2e-bot.pem` (never commit
+  the PEM)
+- Installation ID: capture from the GitHub installation URL after installing
+  the App, then export it as `VOYAGER_E2E_TEST_BOT_INSTALLATION_ID`
 
 ### 2. Wire it into voyager's config
 
