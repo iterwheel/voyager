@@ -161,9 +161,15 @@ scenarios:
       file_content: |
         # Initial content for E1 — will be force-pushed during the scenario.
         x = 1
-      # Phase B hook: after creating the PR + posting the review, the harness
-      # will force-push a new commit before voyager processes. The runner
-      # doesn't implement force_push_after_review yet — Phase B work.
+      # Hook: after posting the review threads, force-push a new commit so the
+      # PR's head SHA advances mid-pipeline. Voyager's pre-Stage-1.5 fresh
+      # fetch detects the change and emits stale_verdict_skip.
+      #
+      # Phase A timing limitation: depends on voyager finishing its initial
+      # webhook processing AFTER the force-push. If voyager is fast, it may
+      # complete the pipeline BEFORE the force-push and emit a normal verdict.
+      # Phase B will add a synchronization point (or test-mode pipeline delay)
+      # for deterministic E1 results.
       force_push_after_review:
         file_path: "samples/e1.py"
         new_content: |
