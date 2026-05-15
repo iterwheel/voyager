@@ -1,0 +1,208 @@
+# E2E test matrix — Phase A scaffold (5 cases × 6 categories planned).
+#
+# Each scenario builds a real PR in iterwheel/voyager-sandbox, posts a
+# Codex-shaped review thread via the test GitHub App identity (whose login
+# is listed in VOYAGER_TEST_BOT_LOGINS so voyager treats it as Codex), and
+# asserts voyager's resulting decision matches `expected`.
+#
+# Schema:
+#   id            — unique scenario identifier (category prefix + index + slug)
+#   category      — A / B / C / D / E / F (see top of file or README)
+#   description   — what this scenario tests, in plain English
+#   setup         — PR + branch setup (file content goes into the branch)
+#   review        — review thread(s) the test bot posts
+#   expected      — voyager's decision after processing
+#   wait_for      — termination signal (log marker, dashboard endpoint, etc.)
+#   cleanup       — close PR + delete branch on success
+#
+# Categories:
+#   A — severity extraction (4 marker formats × P1/P2/P3 + edge cases)
+#   B — severity demotion (required_check_coupling + branch_protected)
+#   C — β status aggregation (P1/P2/P3 mixes → BLOCKED / READY_WITH_LOW_PRIORITY)
+#   D — β overlay preservation (4 conditions: blocking reviewers / clearance_pending /
+#       non-Codex unresolved gap / mixed reasons)
+#   E — stale-verdict guard (double-fetch + terminal skip)
+#   F — investigator path regression (enrichment still works post-7C)
+
+sandbox_repo: "iterwheel/voyager-sandbox"
+base_branch: "main"
+test_bot_env: "VOYAGER_TEST_BOT_LOGINS"   # set this to the test App's bot login
+
+scenarios:
+  # ---------------------------------------------------------------------------
+  # A — Severity extraction
+  # ---------------------------------------------------------------------------
+  - id: A1.severity_bracket_p1
+    category: A
+    description: |
+      Codex-style review with [P1] bracket marker is extracted as P1 severity.
+      Regression test for Codex r1 P1 (bracket-format severity silent downgrade).
+    setup:
+      branch: "e2e/a1-bracket-p1"
+      file_path: "samples/a1.py"
+      file_content: |
+        # Sample file for E2E case A1.
+        def divide(a, b):
+            return a / b
+    review:
+      - path: "samples/a1.py"
+        line: 3
+        body: |
+          [P1] Division by zero unhandled
+
+          This will crash on `divide(1, 0)`. Add a guard or document the contract.
+    expected:
+      codex_severity: "P1"
+      effective_severity: "P1"
+      status: "BLOCKED"
+      label_present: "clearance-blocked"
+    wait_for:
+      kind: "log_marker"
+      pattern: "severity_demoted"   # absence == no demotion; final status from compute_status
+
+  # ---------------------------------------------------------------------------
+  # B — Severity demotion (required_check_coupling + branch_protected)
+  # ---------------------------------------------------------------------------
+  - id: B1.demotion_required_check_unprotected
+    category: B
+    description: |
+      P2 finding about 'required check + paths-ignore' on an UNPROTECTED branch
+      should DEMOTE to P3 per SWM-1102 §B row 1 (no real risk if branch
+      protection is off — we're not actually bypassing required checks).
+    setup:
+      branch: "e2e/b1-demotion-unprotected"
+      file_path: ".github/workflows/ci.yml"
+      file_content: |
+        name: ci
+        on:
+          push:
+            paths-ignore: ['docs/**']
+        jobs:
+          test:
+            runs-on: ubuntu-latest
+            steps: [{ uses: actions/checkout@v4 }]
+    review:
+      - path: ".github/workflows/ci.yml"
+        line: 4
+        body: |
+          [P2] Required check coupling — paths-ignore bypasses required status checks
+
+          Adding `paths-ignore` to a required-check workflow lets PRs touching
+          only ignored paths skip the check entirely, weakening branch protection.
+    expected:
+      codex_severity: "P2"
+      effective_severity: "P3"          # demoted because branch is unprotected
+      finding_kind: "required_check_coupling"
+      status: "READY_WITH_LOW_PRIORITY"
+      reason_substring: "low-priority"
+    wait_for:
+      kind: "log_marker"
+      pattern: "severity_demoted"
+
+  # ---------------------------------------------------------------------------
+  # C — β status aggregation
+  # ---------------------------------------------------------------------------
+  - id: C1.beta_p3_only_open
+    category: C
+    description: |
+      Single P3 OPEN thread on a PR with no other findings → β rule 4
+      (P3-only OPEN does NOT block; status = READY_WITH_LOW_PRIORITY).
+    setup:
+      branch: "e2e/c1-beta-p3-only"
+      file_path: "samples/c1.py"
+      file_content: |
+        # Sample file for E2E case C1.
+        def greet(name):
+            print("Hello, " + name)
+    review:
+      - path: "samples/c1.py"
+        line: 3
+        body: |
+          [P3] Use f-string for readability
+
+          Minor style — prefer `f"Hello, {name}"` over string concatenation.
+    expected:
+      codex_severity: "P3"
+      effective_severity: "P3"
+      status: "READY_WITH_LOW_PRIORITY"
+      label_present: "clearance-ready"
+    wait_for:
+      kind: "log_marker"
+      pattern: "compute_status.*READY_WITH_LOW_PRIORITY"
+
+  # ---------------------------------------------------------------------------
+  # E — Stale-verdict guard
+  # ---------------------------------------------------------------------------
+  - id: E1.stale_verdict_skip
+    category: E
+    description: |
+      Webhook arrives with stale head_sha (PR has been force-pushed since the
+      webhook was emitted). Voyager's pre-Stage-1.5 fresh fetch detects the
+      sha mismatch and short-circuits writeback with status=stale_verdict_skip.
+    setup:
+      branch: "e2e/e1-stale-sha"
+      file_path: "samples/e1.py"
+      file_content: |
+        # Initial content for E1 — will be force-pushed during the scenario.
+        x = 1
+      # Special: after creating the PR + posting Codex review, force-push a
+      # new commit before voyager processes. Harness handles this via the
+      # `force_push_after_review` hook.
+      force_push_after_review:
+        file_path: "samples/e1.py"
+        new_content: |
+          # Force-pushed content for E1.
+          y = 2
+    review:
+      - path: "samples/e1.py"
+        line: 2
+        body: |
+          [P2] Bare module-level state
+
+          Consider scoping `x` inside a function.
+    expected:
+      automation_status: "stale_verdict_skip"
+      writeback_skipped: true
+    wait_for:
+      kind: "log_marker"
+      pattern: "stale_verdict_skip"
+
+  # ---------------------------------------------------------------------------
+  # F — Investigator path regression
+  # ---------------------------------------------------------------------------
+  - id: F1.investigator_enrichment_happy_path
+    category: F
+    description: |
+      PR with a Codex P2 thread + author reply ("fixed in <sha>") → investigator
+      runs, returns RESOLVED, voyager's compute_status sees all threads
+      resolved, status = READY.
+    setup:
+      branch: "e2e/f1-investigator-resolved"
+      file_path: "samples/f1.py"
+      file_content: |
+        # Sample file for E2E case F1.
+        def parse_int(s):
+            return int(s)
+    review:
+      - path: "samples/f1.py"
+        line: 3
+        body: |
+          [P2] No error handling on int parse
+
+          Raises ValueError on non-numeric input; either catch or document.
+      # Author posts a reply (will be done by the harness's PR-author identity,
+      # not the test-bot identity, so latest_author_reply picks it up):
+      - thread_reply:
+          previous_thread_index: 0
+          body: |
+            Fixed in commit XXXX — wrapped in try/except returning None on bad input.
+    expected:
+      codex_severity: "P2"
+      effective_severity: "P2"
+      investigator_invoked: true
+      investigator_verdict: "RESOLVED"
+      status: "READY"
+      label_present: "clearance-ready"
+    wait_for:
+      kind: "log_marker"
+      pattern: "investigator_decision.*RESOLVED"
