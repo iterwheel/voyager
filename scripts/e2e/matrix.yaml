@@ -1,0 +1,258 @@
+# E2E test matrix — Phase A scaffold (5 cases × 6 categories planned).
+#
+# Each scenario builds a real PR in iterwheel/voyager-sandbox, posts a
+# Codex-shaped review thread via the test GitHub App identity (whose login
+# is listed in VOYAGER_TEST_BOT_LOGINS so voyager treats it as Codex), and
+# asserts voyager's resulting decision matches `expected`.
+#
+# Schema:
+#   id                 — unique scenario identifier (category prefix + index + slug)
+#   category           — A / B / C / D / E / F (see below)
+#   description        — what this scenario tests, in plain English
+#   setup              — PR + branch setup (file content goes into the branch)
+#   review             — review thread(s) the test bot posts. Each list entry
+#                        is EITHER a single inline-comment review (path/line/body)
+#                        OR a thread_reply spec (no path/line; refers to a prior
+#                        entry by previous_thread_index). One review item → one
+#                        posted comment — multi-comment items would break the
+#                        flat-list indexing used by thread_reply (DeepSeek r4 P3).
+#   expected           — PR-level keys the runner CAN assert today (see comparator
+#                        signatures in scripts/e2e/run_matrix.py:_flatten_writeback)
+#   phase_b_expected   — per-thread keys (codex_severity, effective_severity,
+#                        finding_kind, investigator_*) that require voyager-side
+#                        changes to expose thread state in the writeback record.
+#                        Documented here so scenarios stay complete; the runner
+#                        IGNORES this block in Phase A.
+#   cleanup            — close PR + delete branch (best-effort, runs in finally)
+#
+# Available `expected` keys (from _flatten_writeback today):
+#   - status / automation_status   (LOWERCASE: "blocked" | "pending" | "ready" |
+#                                    "ready_with_low_priority" | "stale_verdict_skip" —
+#                                    voyager emits Status enum `.value` which is lowercase)
+#   - automation_reason            (free-text reason; use `automation_reason_substring`
+#                                    for partial-match)
+#   - writeback_skipped            (bool — True when skipped=="stale_verdict")
+#   - applied / dry_run            (bool)
+#   - label_present                (first label in planned.add_labels)
+#   - add_labels                   (full list)
+#   - add_reactions                (full list)
+#   - head_sha                     (advancing this is the stale-guard trigger)
+#   - unresolved_codex_thread_count
+#   - sync_actions_count / investigator_error_count
+#
+# Categories:
+#   A — severity extraction (4 marker formats × P1/P2/P3 + edge cases)
+#   B — severity demotion (required_check_coupling + branch_protected)
+#   C — β status aggregation (P1/P2/P3 mixes → BLOCKED / READY_WITH_LOW_PRIORITY)
+#   D — β overlay preservation (4 conditions: blocking reviewers / clearance_pending /
+#       non-Codex unresolved gap / mixed reasons)
+#   E — stale-verdict guard (double-fetch + terminal skip)
+#   F — investigator path regression (enrichment still works post-7C)
+
+sandbox_repo: "iterwheel/voyager-sandbox"
+base_branch: "main"
+test_bot_env: "VOYAGER_TEST_BOT_LOGINS"   # set this to the test App's bot login
+
+scenarios:
+  # ---------------------------------------------------------------------------
+  # A — Severity extraction (PR-level: high-severity → BLOCKED)
+  # ---------------------------------------------------------------------------
+  - id: A1.severity_bracket_p1
+    category: A
+    description: |
+      Codex-style review with [P1] bracket marker is extracted as P1 severity.
+      Regression test for Codex r1 P1 (bracket-format severity silent downgrade).
+    setup:
+      branch: "e2e/a1-bracket-p1"
+      file_path: "samples/a1.py"
+      file_content: |
+        # Sample file for E2E case A1.
+        def divide(a, b):
+            return a / b
+    review:
+      - path: "samples/a1.py"
+        line: 3
+        body: |
+          [P1] Division by zero unhandled
+
+          This will crash on `divide(1, 0)`. Add a guard or document the contract.
+    expected:
+      status: "blocked"
+      label_present: "clearance-blocked"
+      unresolved_codex_thread_count: 1
+    phase_b_expected:
+      codex_severity: "P1"
+      effective_severity: "P1"
+
+  # ---------------------------------------------------------------------------
+  # B — Severity demotion (PR-level: demoted P2 → P3 → READY_WITH_LOW_PRIORITY)
+  # ---------------------------------------------------------------------------
+  - id: B1.demotion_required_check_unprotected
+    category: B
+    description: |
+      P2 finding about 'required check + paths-ignore' on an UNPROTECTED branch
+      should DEMOTE to P3 per SWM-1102 §B row 1 (no real risk if branch
+      protection is off — we're not actually bypassing required checks).
+    setup:
+      branch: "e2e/b1-demotion-unprotected"
+      file_path: ".github/workflows/ci.yml"
+      file_content: |
+        name: ci
+        on:
+          push:
+            paths-ignore: ['docs/**']
+        jobs:
+          test:
+            runs-on: ubuntu-latest
+            steps: [{ uses: actions/checkout@v4 }]
+    review:
+      - path: ".github/workflows/ci.yml"
+        line: 4
+        body: |
+          [P2] Required check coupling — paths-ignore bypasses required status checks
+
+          Adding `paths-ignore` to a required-check workflow lets PRs touching
+          only ignored paths skip the check entirely, weakening branch protection.
+    expected:
+      status: "ready_with_low_priority"
+      automation_reason_substring: "low-priority"
+      unresolved_codex_thread_count: 1
+    phase_b_expected:
+      codex_severity: "P2"
+      effective_severity: "P3"
+      finding_kind: "required_check_coupling"
+
+  # ---------------------------------------------------------------------------
+  # C — β status aggregation
+  # ---------------------------------------------------------------------------
+  - id: C1.beta_p3_only_open
+    category: C
+    description: |
+      Single P3 OPEN thread on a PR with no other findings → β rule 4
+      (P3-only OPEN does NOT block; status = READY_WITH_LOW_PRIORITY).
+    setup:
+      branch: "e2e/c1-beta-p3-only"
+      file_path: "samples/c1.py"
+      file_content: |
+        # Sample file for E2E case C1.
+        def greet(name):
+            print("Hello, " + name)
+    review:
+      - path: "samples/c1.py"
+        line: 3
+        body: |
+          [P3] Use f-string for readability
+
+          Minor style — prefer `f"Hello, {name}"` over string concatenation.
+    expected:
+      status: "ready_with_low_priority"
+      label_present: "clearance-ready"
+      unresolved_codex_thread_count: 1   # status "ready_with_low_priority" still has 1 P3 OPEN
+    phase_b_expected:
+      codex_severity: "P3"
+      effective_severity: "P3"
+
+  # ---------------------------------------------------------------------------
+  # E — Stale-verdict guard
+  # ---------------------------------------------------------------------------
+  - id: E1.stale_verdict_skip
+    category: E
+    phase: B    # gated to Phase B — see `phase` field handling in run_matrix.py
+    description: |
+      Webhook arrives with stale head_sha (PR has been force-pushed since the
+      webhook was emitted). Voyager's pre-Stage-1.5 fresh fetch detects the
+      sha mismatch and short-circuits writeback with status=stale_verdict_skip.
+
+      Phase A timing limitation (Codex GH-bot PR #15 P2 #13): the scenario
+      depends on voyager being mid-pipeline when the force-push hits. Without
+      an explicit synchronization point the result is racy — voyager may
+      complete a normal verdict before the force-push, producing a non-stale
+      result. Marked `phase: B` so the Phase A runner skips it; Phase B will
+      add a synchronization mechanism (test-mode pipeline delay or explicit
+      stage-completion barrier).
+    setup:
+      branch: "e2e/e1-stale-sha"
+      file_path: "samples/e1.py"
+      file_content: |
+        # Initial content for E1 — will be force-pushed during the scenario.
+        x = 1
+      # Hook: after posting the review threads, force-push a new commit so the
+      # PR's head SHA advances mid-pipeline. Voyager's pre-Stage-1.5 fresh
+      # fetch detects the change and emits stale_verdict_skip.
+      #
+      # Phase A timing limitation: depends on voyager finishing its initial
+      # webhook processing AFTER the force-push. If voyager is fast, it may
+      # complete the pipeline BEFORE the force-push and emit a normal verdict.
+      # Phase B will add a synchronization point (or test-mode pipeline delay)
+      # for deterministic E1 results.
+      force_push_after_review:
+        file_path: "samples/e1.py"
+        new_content: |
+          # Force-pushed content for E1.
+          y = 2
+    review:
+      - path: "samples/e1.py"
+        line: 2
+        body: |
+          [P2] Bare module-level state
+
+          Consider scoping `x` inside a function.
+    expected:
+      automation_status: "stale_verdict_skip"
+      writeback_skipped: true
+
+  # ---------------------------------------------------------------------------
+  # F — Investigator path regression
+  # ---------------------------------------------------------------------------
+  - id: F1.investigator_enrichment_happy_path
+    category: F
+    description: |
+      PR with a Codex P2 thread + author reply ("fixed in <sha>") → investigator
+      runs, returns RESOLVED, voyager's compute_status sees all threads
+      resolved, status = READY.
+    setup:
+      branch: "e2e/f1-investigator-resolved"
+      file_path: "samples/f1.py"
+      file_content: |
+        # Sample file for E2E case F1.
+        def parse_int(s):
+            return int(s)
+    review:
+      - path: "samples/f1.py"
+        line: 3
+        body: |
+          [P2] No error handling on int parse
+
+          Raises ValueError on non-numeric input; either catch or document.
+      # Thread-reply posting uses the PR-author PAT (ryosaeba1985), distinct
+      # from the test-bot identity, so voyager's `latest_author_reply` filter
+      # accepts it. The body must satisfy `is_substantive_reply` in
+      # voyager/bots/clearance/judge.py — needs ≥50 chars AND a concrete
+      # identifier (a 7-40 hex SHA, a recognized filename, or a code symbol).
+      # The literal "XXXX" doesn't match the SHA regex; use a real-shaped SHA
+      # + filename so the thread reaches state-C-substantive and the
+      # investigator runs (Codex GH-bot PR #15 P2 #5).
+      - thread_reply:
+          previous_thread_index: 0
+          body: |
+            Fixed in commit 3f978c6dd8 — `samples/f1.py` now wraps `int(s)`
+            in a try/except returning None on ValueError so callers get a
+            sentinel instead of an exception on bad input.
+    expected:
+      status: "ready"
+      label_present: "clearance-ready"
+      unresolved_codex_thread_count: 0
+    phase_b_expected:
+      codex_severity: "P2"
+      effective_severity: "P2"
+      # NOTE: this Phase-A F1 setup posts a substantive author reply on a
+      # NON-outdated thread → voyager's classify pipeline labels it state C.
+      # `judge()` resolves substantive state-C replies DIRECTLY (no LLM call);
+      # the investigator only runs for state-B/outdated threads. So this
+      # scenario exercises the deterministic resolve path, NOT the investigator.
+      # Phase B will add an F2 scenario whose `force_push_after_review` hook
+      # invalidates the diff anchor (→ state B) so the investigator actually
+      # fires. The fields below are documented as the eventual F2 expectations,
+      # NOT as something the Phase A F1 run will achieve.
+      # (Codex GH-bot PR #15 P2 — "Make F1 actually enter the investigator path")
+      investigator_invoked_PHASE_B_F2_NOTE: "F1 hits judge() directly; F2 will hit investigator"

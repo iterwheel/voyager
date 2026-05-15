@@ -261,7 +261,16 @@ async def dispatch_route_writeback(
             return {
                 "applied": False,
                 "reason": f"clearance enrichment failed: {exc.__class__.__name__}: {exc}",
+                "automation": automation,
             }
-        return await apply_route_writeback(client, enriched, repository=repository)
+        # Codex GH-bot PR #15 P1: include the `automation` dict in the normal
+        # apply-path return (not just the stale-skip + error paths). Without
+        # this, the e2e harness's `_flatten_writeback` reads `status`,
+        # `automation_reason`, and thread counts as None even though voyager
+        # computed them — every A/B/C/F scenario fails comparison.
+        apply_result = await apply_route_writeback(client, enriched, repository=repository)
+        if automation is not None:
+            apply_result["automation"] = automation
+        return apply_result
 
     return await apply_route_writeback(client, route, repository=repository)

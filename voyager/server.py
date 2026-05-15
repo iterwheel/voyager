@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from voyager.bots.clearance.investigator import ThreadInvestigator
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from voyager.bots.blueprint import route_blueprint_event
 from voyager.bots.clearance import route_clearance_event
@@ -188,6 +189,11 @@ async def _process_route_writebacks(
     repository: str | None = (payload.get("repository") or {}).get("full_name")
     default_profile_name = _get_default_profile_name()
     investigator = _get_investigator()
+    # Codex GH-bot PR #15 P1: include pr_number + ts at the top level of every
+    # writeback record so consumers (the e2e harness in particular) can match
+    # records to the PR they created without spelunking through nested route
+    # shapes that vary between apply / stale-skip / error paths.
+    pr_number = _extract_pr_number_from_payload(payload)
     for route in routes:
         try:
             result = await dispatch_route_writeback(
@@ -198,9 +204,44 @@ async def _process_route_writebacks(
                 default_profile_name=default_profile_name,
                 investigator=investigator,
             )
-            _recent_writebacks.append({"delivery_id": delivery_id, "event": event, **result})
+            _recent_writebacks.append(
+                {
+                    "delivery_id": delivery_id,
+                    "event": event,
+                    "repository": repository,
+                    "pr_number": pr_number,
+                    "ts": _utc_now(),
+                    **result,
+                }
+            )
         except Exception:
             _log.exception("writeback failed for route %r", route.get("agent"))
+
+
+def _extract_pr_number_from_payload(payload: dict[str, Any]) -> int | None:
+    """Best-effort PR number lookup across GitHub webhook payload shapes.
+
+    GitHub puts the PR number in different keys depending on the event type:
+      - pull_request / pull_request_review / pull_request_review_comment:
+        payload["pull_request"]["number"]
+      - issue_comment on a PR: payload["issue"]["number"] (PRs are issues)
+      - check_suite: payload["check_suite"]["pull_requests"][0]["number"]
+    """
+    pr = payload.get("pull_request") or {}
+    pr_num = pr.get("number")
+    if isinstance(pr_num, int):
+        return pr_num
+    issue = payload.get("issue") or {}
+    issue_num = issue.get("number")
+    if isinstance(issue_num, int) and issue.get("pull_request"):
+        return issue_num
+    check_suite = payload.get("check_suite") or {}
+    prs = check_suite.get("pull_requests") or []
+    if prs:
+        first_num = prs[0].get("number")
+        if isinstance(first_num, int):
+            return first_num
+    return None
 
 
 @app.get("/")
@@ -216,6 +257,65 @@ async def healthz() -> dict[str, Any]:
         "time": _utc_now(),
         "dry_run": dry_run_enabled(),
     }
+
+
+def _truthy(s: str | None) -> bool:
+    return (s or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+@app.get("/e2e/recent_writebacks", include_in_schema=False)
+async def e2e_recent_writebacks(
+    request: Request,
+    x_voyager_e2e_token: str | None = Header(default=None),
+) -> JSONResponse:
+    """Debug endpoint for the e2e test harness — returns the in-memory
+    writeback deque. Layered defense-in-depth (trinity round-1 P1):
+
+      1. ``VOYAGER_E2E_DEBUG=1`` env required (404 otherwise — doesn't leak
+         the endpoint's existence)
+      2. Request client must be loopback (127.0.0.1 / ::1 / localhost). A
+         tunnel or LAN client gets 404. Operators wanting non-loopback access
+         must opt in with VOYAGER_E2E_ALLOW_NON_LOOPBACK=1.
+      3. If ``VOYAGER_E2E_TOKEN`` env is set, the request must carry the
+         matching ``X-Voyager-E2E-Token`` header. Constant-time compare via
+         secrets.compare_digest to avoid timing oracle.
+      4. ``Cache-Control: no-store, max-age=0`` on the response so the
+         writeback record isn't cached by intermediaries.
+
+    Pair with ``scripts/e2e/run_matrix.py``.
+    """
+    if not _truthy(os.environ.get("VOYAGER_E2E_DEBUG")):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    if not _truthy(os.environ.get("VOYAGER_E2E_ALLOW_NON_LOOPBACK")):
+        client_host = (request.client.host if request.client else "") or ""
+        if client_host not in _LOOPBACK_HOSTS:
+            _log.warning(
+                "e2e endpoint rejected non-loopback client %r (set "
+                "VOYAGER_E2E_ALLOW_NON_LOOPBACK=1 to override)",
+                client_host,
+            )
+            raise HTTPException(status_code=404, detail="Not found")
+
+    expected_token = os.environ.get("VOYAGER_E2E_TOKEN")
+    if expected_token:
+        import secrets as _secrets
+
+        if not x_voyager_e2e_token or not _secrets.compare_digest(
+            expected_token, x_voyager_e2e_token
+        ):
+            raise HTTPException(status_code=401, detail="missing or invalid e2e token")
+
+    return JSONResponse(
+        content={
+            "count": len(_recent_writebacks),
+            "writebacks": list(_recent_writebacks),
+        },
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
 
 
 @app.post("/github/webhook")
