@@ -9,8 +9,8 @@ threads are the sole blocker.
 Fix 2 (Codex P2 on constants.py:24): clearance-ok is not a provisioned GitHub
 label. The β success case now uses clearance-ready instead.
 
-Also verifies that the "all RESOLVED" path (Status.READY plain) still
-no-ops through the overlay (evaluation unchanged).
+Also verifies that the "all RESOLVED" path (Status.READY plain) clears
+thread-only live-evaluator blockers while preserving non-thread blockers.
 """
 
 from __future__ import annotations
@@ -253,24 +253,37 @@ def test_none_automation_no_op() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Scenario 3: plain READY (all-resolved path) → evaluation unchanged
+# Scenario 3: plain READY (all-resolved path) → success override
 # ---------------------------------------------------------------------------
 
 
-def test_plain_ready_status_no_op() -> None:
-    """automation.status='ready' (all RESOLVED) → overlay no-ops.
-
-    This is the existing 7B-3 behavior for 'all RESOLVED': the evaluation
-    is already correct (conclusion=success) so the overlay must not override it.
-    """
+def test_plain_ready_status_clears_thread_only_blocker() -> None:
+    """automation.status='ready' clears a live unresolved-thread-only block."""
     automation = {
         "enabled": True,
         "status": "ready",
         "reason": "all Codex review threads RESOLVED",
         "sync_actions": [],
         "sync_actions_count": 0,
+        "unresolved_codex_thread_count": 0,
     }
-    ev = _ready_evaluation()
+    result = apply_swm_overlay(_blocked_evaluation(), automation)
+    assert result["conclusion"] == "success"
+    assert result["status"] == "clearance_ready"
+    assert CLEARANCE_READY_LABEL in result["labels"]["add"]
+    assert "+1" in result["reactions"]["add"]
+
+
+def test_plain_ready_status_preserves_non_thread_blocker() -> None:
+    """automation.status='ready' must not clear draft / no-approval blockers."""
+    automation = {
+        "enabled": True,
+        "status": "ready",
+        "reason": "no Codex review threads on PR",
+        "sync_actions": [],
+        "sync_actions_count": 0,
+    }
+    ev = _draft_blocked_evaluation()
     result = apply_swm_overlay(ev, automation)
     assert result is ev
 

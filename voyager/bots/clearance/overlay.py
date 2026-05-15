@@ -23,12 +23,12 @@ def apply_swm_overlay(
     if not automation or not automation.get("enabled"):
         return evaluation
     swm_status = automation.get("status")
-    if swm_status not in {"blocked", "pending", "error", "ready_with_low_priority"}:
+    if swm_status not in {"blocked", "pending", "error", "ready", "ready_with_low_priority"}:
         return evaluation
 
     updated: dict[str, Any] = dict(evaluation)
 
-    if swm_status == "ready_with_low_priority":
+    if swm_status in {"ready", "ready_with_low_priority"}:
         review_state = evaluation.get("review_state") or {}
         eval_confidence = evaluation.get("confidence") or {}
         reasons = eval_confidence.get("reasons") or []
@@ -40,12 +40,15 @@ def apply_swm_overlay(
         )
         if has_non_thread_blockers:
             return evaluation
-        # Preserve when the live evaluator sees more unresolved threads than the
-        # automation engine counted as unresolved Codex threads — the gap is
-        # non-Codex (human reviewer) threads that β must NOT clear.
-        # Only applies when unresolved_codex_thread_count is present; absent key
-        # means an old automation dict that predates this field — skip the check.
-        if "unresolved_codex_thread_count" in automation:
+        # Preserve ready_with_low_priority when the live evaluator sees more
+        # unresolved threads than the automation engine counted as unresolved
+        # Codex threads — the gap is non-Codex (human reviewer) threads that β
+        # must NOT clear. Plain ready intentionally skips this check: a RESOLVED
+        # Codex thread can still be unresolved on GitHub until Stage 1.5 syncs it.
+        if (
+            swm_status == "ready_with_low_priority"
+            and "unresolved_codex_thread_count" in automation
+        ):
             unresolved_count = review_state.get("unresolved_thread_count", 0)
             if unresolved_count > automation["unresolved_codex_thread_count"]:
                 return evaluation

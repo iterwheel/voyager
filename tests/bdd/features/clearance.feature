@@ -305,10 +305,13 @@ Feature: Clearance bot — PR review readiness verification and routing
     When the swm overlay is applied
     Then the overlaid evaluation is identical to the original
 
-  Scenario: apply_swm_overlay with status ready returns evaluation unchanged
-    Given a ready evaluation and automation with status "ready" and enabled true
+  Scenario: apply_swm_overlay with status ready clears thread-only blockers
+    Given a blocked thread-only evaluation and automation with status "ready" and enabled true
     When the swm overlay is applied
-    Then the overlaid evaluation status is still "clearance_ready"
+    Then the overlaid evaluation status is "clearance_ready"
+    And the overlaid evaluation conclusion is "success"
+    And the overlaid evaluation labels add "clearance-ready"
+    And the overlaid evaluation reactions add "+1"
 
   Scenario: apply_swm_overlay with status pending downgrades to clearance_pending
     Given a ready evaluation and automation with status "pending" and enabled true

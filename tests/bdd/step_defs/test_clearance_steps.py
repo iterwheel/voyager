@@ -370,6 +370,19 @@ def _ready_evaluation() -> dict:
     )
 
 
+def _blocked_thread_only_evaluation() -> dict:
+    """Minimal clearance_blocked evaluation caused only by an unresolved thread."""
+    from voyager.bots.clearance import evaluate_clearance_snapshot  # lazy import
+
+    return evaluate_clearance_snapshot(
+        {
+            "pull_request": _open_pr(),
+            "reviews": [_approval()],
+            "review_threads": [{"isResolved": False, "isOutdated": False}],
+        }
+    )
+
+
 @given("a ready evaluation and no automation", target_fixture="overlay_inputs")
 def overlay_inputs_no_automation() -> dict:
     return {"automation": None}
@@ -386,6 +399,24 @@ def overlay_inputs_disabled() -> dict:
 )
 def overlay_inputs_status(status: str) -> dict:
     return {"automation": {"enabled": True, "status": status}}
+
+
+@given(
+    parsers.parse(
+        'a blocked thread-only evaluation and automation with status "{status}" and enabled true'
+    ),
+    target_fixture="overlay_inputs",
+)
+def overlay_inputs_blocked_thread_only_status(status: str) -> dict:
+    return {
+        "base_evaluation": _blocked_thread_only_evaluation(),
+        "automation": {
+            "enabled": True,
+            "status": status,
+            "reason": "all Codex review threads RESOLVED",
+            "unresolved_codex_thread_count": 0,
+        },
+    }
 
 
 @given(
@@ -417,7 +448,7 @@ def overlay_inputs_status_with_error(status: str, error: str) -> dict:
 def apply_overlay(overlay_inputs: dict) -> dict:
     from voyager.bots.clearance import apply_swm_overlay  # lazy import
 
-    base_eval = _ready_evaluation()
+    base_eval = overlay_inputs.get("base_evaluation") or _ready_evaluation()
     return {
         "original": base_eval,
         "result": apply_swm_overlay(base_eval, overlay_inputs["automation"]),
