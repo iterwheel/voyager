@@ -32,6 +32,8 @@ def apply_swm_overlay(
         review_state = evaluation.get("review_state") or {}
         eval_confidence = evaluation.get("confidence") or {}
         reasons = eval_confidence.get("reasons") or []
+        # Keep this tuple synchronized with evaluate_clearance_snapshot's hard
+        # PR-state reasons; those must not be cleared by thread automation.
         non_thread_reason_markers = ("PR is still draft.", "PR is not open.")
         has_non_thread_blockers = bool(
             review_state.get("blocking_reviewers")

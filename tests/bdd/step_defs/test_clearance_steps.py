@@ -383,6 +383,15 @@ def _blocked_thread_only_evaluation() -> dict:
     )
 
 
+def _draft_pending_evaluation() -> dict:
+    """Minimal clearance_pending evaluation caused by draft PR state."""
+    from voyager.bots.clearance import evaluate_clearance_snapshot  # lazy import
+
+    return evaluate_clearance_snapshot(
+        {"pull_request": _open_pr(draft=True), "reviews": [_approval()], "review_threads": []}
+    )
+
+
 @given("a ready evaluation and no automation", target_fixture="overlay_inputs")
 def overlay_inputs_no_automation() -> dict:
     return {"automation": None}
@@ -410,6 +419,24 @@ def overlay_inputs_status(status: str) -> dict:
 def overlay_inputs_blocked_thread_only_status(status: str) -> dict:
     return {
         "base_evaluation": _blocked_thread_only_evaluation(),
+        "automation": {
+            "enabled": True,
+            "status": status,
+            "reason": "all Codex review threads RESOLVED",
+            "unresolved_codex_thread_count": 0,
+        },
+    }
+
+
+@given(
+    parsers.parse(
+        'a draft pending evaluation and automation with status "{status}" and enabled true'
+    ),
+    target_fixture="overlay_inputs",
+)
+def overlay_inputs_draft_pending_status(status: str) -> dict:
+    return {
+        "base_evaluation": _draft_pending_evaluation(),
         "automation": {
             "enabled": True,
             "status": status,

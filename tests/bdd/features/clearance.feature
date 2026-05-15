@@ -313,6 +313,11 @@ Feature: Clearance bot — PR review readiness verification and routing
     And the overlaid evaluation labels add "clearance-ready"
     And the overlaid evaluation reactions add "+1"
 
+  Scenario: apply_swm_overlay with status ready preserves draft PR blockers
+    Given a draft pending evaluation and automation with status "ready" and enabled true
+    When the swm overlay is applied
+    Then the overlaid evaluation is identical to the original
+
   Scenario: apply_swm_overlay with status pending downgrades to clearance_pending
     Given a ready evaluation and automation with status "pending" and enabled true
     When the swm overlay is applied

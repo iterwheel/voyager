@@ -275,7 +275,7 @@ def test_plain_ready_status_clears_thread_only_blocker() -> None:
 
 
 def test_plain_ready_status_preserves_non_thread_blocker() -> None:
-    """automation.status='ready' must not clear draft / no-approval blockers."""
+    """automation.status='ready' must not clear draft / PR-state blockers."""
     automation = {
         "enabled": True,
         "status": "ready",
@@ -286,6 +286,26 @@ def test_plain_ready_status_preserves_non_thread_blocker() -> None:
     ev = _draft_blocked_evaluation()
     result = apply_swm_overlay(ev, automation)
     assert result is ev
+
+
+def test_plain_ready_status_ignores_no_approval_reason() -> None:
+    """automation.status='ready' can clear no-approval because Clearance approves next."""
+    automation = {
+        "enabled": True,
+        "status": "ready",
+        "reason": "all Codex review threads RESOLVED",
+        "sync_actions": [],
+        "sync_actions_count": 0,
+    }
+    ev = _blocked_evaluation()
+    ev["confidence"]["reasons"] = [
+        "1 review thread(s) are unresolved.",
+        "No approval on the current PR head.",
+    ]
+    result = apply_swm_overlay(ev, automation)
+    assert result["conclusion"] == "success"
+    assert result["status"] == "clearance_ready"
+    assert CLEARANCE_READY_LABEL in result["labels"]["add"]
 
 
 # ---------------------------------------------------------------------------
