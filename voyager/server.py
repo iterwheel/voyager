@@ -218,6 +218,28 @@ async def healthz() -> dict[str, Any]:
     }
 
 
+@app.get("/e2e/recent_writebacks")
+async def e2e_recent_writebacks() -> dict[str, Any]:
+    """Debug endpoint for the e2e test harness — returns the in-memory
+    writeback deque. Gated behind ``VOYAGER_E2E_DEBUG=1`` so it cannot be
+    accidentally enabled in production.
+
+    Useful for the sandbox e2e runner to observe voyager's decisions in
+    DRY_RUN=true mode (where no labels are written). Pair with the test
+    harness in ``scripts/e2e/run_matrix.py``.
+    """
+    if not _truthy(os.environ.get("VOYAGER_E2E_DEBUG")):
+        raise HTTPException(status_code=404, detail="Not found")
+    return {
+        "count": len(_recent_writebacks),
+        "writebacks": list(_recent_writebacks),
+    }
+
+
+def _truthy(s: str | None) -> bool:
+    return (s or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 @app.post("/github/webhook")
 async def github_webhook(
     request: Request,

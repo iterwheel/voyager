@@ -62,11 +62,14 @@ class TestBotApp:
 class RunnerConfig:
     matrix_path: Path
     dashboard_url: str
+    voyager_url: str
     sandbox_repo: str
     base_branch: str
     test_bot: TestBotApp
     scenario_filter: list[str]  # only run scenarios whose id startswith any of these
     dry_run_sandbox: bool  # if True, log actions instead of hitting GitHub
+    poll_timeout_s: int = 60
+    poll_interval_s: float = 1.5
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +245,119 @@ def _post_review_thread(
 
 
 # ---------------------------------------------------------------------------
-# Scenario execution (Phase A — happy path only; cleanup minimal)
+# Voyager polling + comparator
+# ---------------------------------------------------------------------------
+
+
+def _extract_pr_number(writeback: dict[str, Any]) -> int | None:
+    """Walk a writeback record looking for the PR number under a few known keys."""
+    # Common shapes: top-level "pr_number", nested under route.validation, etc.
+    candidates = [
+        writeback.get("pr_number"),
+        writeback.get("pr"),
+        (writeback.get("route") or {}).get("pr_number"),
+        ((writeback.get("route") or {}).get("validation") or {}).get("pr_number"),
+        (writeback.get("planned") or {}).get("pr_number"),
+    ]
+    for c in candidates:
+        if isinstance(c, int):
+            return c
+        if isinstance(c, str) and c.isdigit():
+            return int(c)
+    return None
+
+
+def _flatten_writeback(writeback: dict[str, Any]) -> dict[str, Any]:
+    """Pluck the fields we care about into a flat dict for easier comparison."""
+    route = writeback.get("route") or {}
+    validation = route.get("validation") or {}
+    automation = route.get("automation") or writeback.get("automation") or {}
+    return {
+        "event": writeback.get("event"),
+        "delivery_id": writeback.get("delivery_id"),
+        "applied": writeback.get("applied"),
+        "dry_run": writeback.get("dry_run"),
+        "status": validation.get("status"),
+        "conclusion": validation.get("conclusion"),
+        "automation_status": automation.get("status"),
+        "head_sha": automation.get("head_sha"),
+        "label_present": (writeback.get("planned") or {}).get("label_applied")
+        or validation.get("label_applied"),
+        "_raw": writeback,
+    }
+
+
+def _poll_for_writeback(
+    *, voyager_url: str, pr_number: int, timeout_s: int = 60, interval_s: float = 1.5
+) -> dict[str, Any] | None:
+    """Poll voyager's /e2e/recent_writebacks until we see a record for our PR."""
+    deadline = time.time() + timeout_s
+    url = f"{voyager_url.rstrip('/')}/e2e/recent_writebacks"
+    with httpx.Client(timeout=5.0) as c:
+        while time.time() < deadline:
+            try:
+                r = c.get(url)
+                if r.status_code == 200:
+                    for wb in r.json().get("writebacks", []):
+                        if _extract_pr_number(wb) == pr_number:
+                            return wb
+            except Exception:
+                pass
+            time.sleep(interval_s)
+    return None
+
+
+def _compare(expected: dict[str, Any], actual: dict[str, Any]) -> list[str]:
+    """Soft comparator — return list of mismatch messages (empty == pass).
+
+    Each expected key is looked up in the flattened actual; mismatches are
+    reported in 'key: expected X, got Y' form. Unknown expected keys (not in
+    actual) are reported as 'key: not surfaced by voyager (actual missing)'.
+    """
+    mismatches: list[str] = []
+    for k, exp in expected.items():
+        if k.endswith("_substring"):
+            # e.g. expected: reason_substring: "low-priority"
+            base = k.removesuffix("_substring")
+            got = str(actual.get(base, ""))
+            if exp not in got:
+                mismatches.append(f"{base}: expected substring {exp!r}, got {got!r}")
+            continue
+        if k not in actual:
+            mismatches.append(f"{k}: not surfaced by voyager (actual missing)")
+            continue
+        got = actual[k]
+        if got != exp:
+            mismatches.append(f"{k}: expected {exp!r}, got {got!r}")
+    return mismatches
+
+
+def _cleanup_pr(sandbox_repo: str, pr_number: int, branch: str) -> None:
+    """Best-effort close PR + delete branch."""
+    import contextlib
+
+    with contextlib.suppress(Exception):
+        _run_gh(
+            "api",
+            "--method",
+            "PATCH",
+            f"repos/{sandbox_repo}/pulls/{pr_number}",
+            "-f",
+            "state=closed",
+            check=False,
+        )
+    with contextlib.suppress(Exception):
+        _run_gh(
+            "api",
+            "--method",
+            "DELETE",
+            f"repos/{sandbox_repo}/git/refs/heads/{branch}",
+            check=False,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Scenario execution (Phase A — polling + comparator + cleanup wired)
 # ---------------------------------------------------------------------------
 
 
@@ -344,25 +459,41 @@ def _run_scenario(
                 token=token,
             )
 
-        # 4. Wait for voyager to process the webhook.
-        # TODO Phase B: poll voyager's writeback log / state store for a marker.
-        # For Phase A, just sleep and report a placeholder "processed" status.
-        time.sleep(8)  # crude — replace with real polling
+        # 4. Poll voyager's /e2e/recent_writebacks endpoint for our PR's writeback.
+        writeback = _poll_for_writeback(
+            voyager_url=cfg.voyager_url,
+            pr_number=pr_number,
+            timeout_s=cfg.poll_timeout_s,
+        )
+        if writeback is None:
+            verdict = "failed"
+            error = (
+                f"timed out after {cfg.poll_timeout_s}s waiting for voyager "
+                f"to process PR #{pr_number} (no matching writeback record)"
+            )
+        else:
+            actual = _flatten_writeback(writeback)
+            # 5. Compare expected keys against the flattened actual.
+            mismatches = _compare(expected, actual)
+            if mismatches:
+                verdict = "failed"
+                error = "; ".join(mismatches)
+            else:
+                verdict = "passed"
+                error = None
 
-        # 5. TODO Phase B: capture actual decision from voyager's logs / state.
-        actual["status"] = "TODO_capture_from_voyager_logs"
-
-        # 6. Compare.
-        # TODO Phase B: implement deep-eq of actual vs expected with reasonable
-        # tolerance (e.g., ignore unrelated fields).
-        passed = False  # always FAIL in Phase A until comparator is wired
-        verdict = "passed" if passed else "failed"
-        if not passed:
-            error = "Phase A scaffold: comparator not yet implemented (TODO)"
+        # 6. Cleanup: close PR + delete branch (best-effort).
+        _cleanup_pr(cfg.sandbox_repo, pr_number, branch)
 
     except Exception as exc:
         verdict = "error"
         error = f"{type(exc).__name__}: {exc}"
+        # Best-effort cleanup even on error so we don't leave PR turds.
+        if pr_number is not None:
+            import contextlib
+
+            with contextlib.suppress(Exception):
+                _cleanup_pr(cfg.sandbox_repo, pr_number, branch)
 
     dashboard.update(
         {
@@ -403,6 +534,13 @@ def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Voyager E2E matrix runner")
     p.add_argument("--matrix", type=Path, default=Path("scripts/e2e/matrix.yaml"))
     p.add_argument("--dashboard", default="http://127.0.0.1:9099")
+    p.add_argument(
+        "--voyager",
+        default="http://127.0.0.1:8000",
+        help="Voyager server URL — polled at /e2e/recent_writebacks for decisions",
+    )
+    p.add_argument("--poll-timeout", type=int, default=60)
+    p.add_argument("--poll-interval", type=float, default=1.5)
     p.add_argument(
         "--filter",
         action="append",
@@ -492,11 +630,14 @@ def main() -> int:
     cfg = RunnerConfig(
         matrix_path=args.matrix,
         dashboard_url=args.dashboard,
+        voyager_url=args.voyager,
         sandbox_repo=matrix["sandbox_repo"],
         base_branch=matrix["base_branch"],
         test_bot=test_bot,  # type: ignore[arg-type]
         scenario_filter=args.filter,
         dry_run_sandbox=dry_run_sandbox,
+        poll_timeout_s=args.poll_timeout,
+        poll_interval_s=args.poll_interval,
     )
 
     for s in scenarios:
