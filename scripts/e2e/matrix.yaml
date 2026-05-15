@@ -156,10 +156,19 @@ scenarios:
   # ---------------------------------------------------------------------------
   - id: E1.stale_verdict_skip
     category: E
+    phase: B    # gated to Phase B — see `phase` field handling in run_matrix.py
     description: |
       Webhook arrives with stale head_sha (PR has been force-pushed since the
       webhook was emitted). Voyager's pre-Stage-1.5 fresh fetch detects the
       sha mismatch and short-circuits writeback with status=stale_verdict_skip.
+
+      Phase A timing limitation (Codex GH-bot PR #15 P2 #13): the scenario
+      depends on voyager being mid-pipeline when the force-push hits. Without
+      an explicit synchronization point the result is racy — voyager may
+      complete a normal verdict before the force-push, producing a non-stale
+      result. Marked `phase: B` so the Phase A runner skips it; Phase B will
+      add a synchronization mechanism (test-mode pipeline delay or explicit
+      stage-completion barrier).
     setup:
       branch: "e2e/e1-stale-sha"
       file_path: "samples/e1.py"

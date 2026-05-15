@@ -126,6 +126,55 @@ def _run_gh(*args: str, check: bool = True, capture: bool = True) -> subprocess.
     return subprocess.run(cmd, check=check, capture_output=capture, text=True)
 
 
+def _close_open_prs_for_branch(sandbox_repo: str, branch: str) -> None:
+    """Close any OPEN PRs that have ``branch`` as their head ref.
+
+    Crashed prior runs may leave PRs open after the branch is gone; the
+    subsequent run's branch DELETE then orphans the PR with an invalid
+    head. Listing + closing first keeps the sandbox repo tidy and lets
+    scenarios re-run idempotently.
+
+    Best-effort: any error is swallowed so scenario startup never blocks
+    on cleanup-of-debris from a previous run.
+    """
+    with contextlib.suppress(Exception):
+        # GET /repos/{owner}/{repo}/pulls?state=open&head={owner}:{branch}
+        owner = sandbox_repo.split("/", 1)[0]
+        result = _run_gh(
+            "api",
+            "--method",
+            "GET",
+            f"repos/{sandbox_repo}/pulls",
+            "-F",
+            "state=open",
+            "-F",
+            f"head={owner}:{branch}",
+            check=False,
+        )
+        if result.returncode != 0:
+            return
+        try:
+            prs = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return
+        if not isinstance(prs, list):
+            return
+        for pr in prs:
+            pr_number = pr.get("number")
+            if not isinstance(pr_number, int):
+                continue
+            with contextlib.suppress(Exception):
+                _run_gh(
+                    "api",
+                    "--method",
+                    "PATCH",
+                    f"repos/{sandbox_repo}/pulls/{pr_number}",
+                    "-f",
+                    "state=closed",
+                    check=False,
+                )
+
+
 def _create_branch_with_file(
     sandbox_repo: str,
     base_branch: str,
@@ -144,7 +193,13 @@ def _create_branch_with_file(
     base_ref = _run_gh("api", f"repos/{sandbox_repo}/git/refs/heads/{base_branch}")
     base_sha = json.loads(base_ref.stdout)["object"]["sha"]
 
-    # 2. Delete any pre-existing branch with the same name (idempotency).
+    # 2a. Close any open PRs that have this branch as head — if a previous
+    # crashed run left a PR open against this branch, deleting the branch
+    # ref below would orphan the PR with an invalid head ref. Close first
+    # (Codex GH-bot PR #15 P2 #15).
+    _close_open_prs_for_branch(sandbox_repo, branch)
+
+    # 2b. Delete any pre-existing branch with the same name (idempotency).
     with contextlib.suppress(subprocess.CalledProcessError):
         _run_gh(
             "api",
@@ -242,9 +297,9 @@ def _get_file_blob_sha(sandbox_repo: str, branch: str, file_path: str) -> str | 
     """
     result = _run_gh(
         "api",
-        f"repos/{sandbox_repo}/contents/{file_path}",
-        "-X",
+        "--method",
         "GET",
+        f"repos/{sandbox_repo}/contents/{file_path}",
         "-F",
         f"ref={branch}",
         check=False,
@@ -827,10 +882,29 @@ def _load_matrix(path: Path) -> dict[str, Any]:
         return yaml.safe_load(f)
 
 
-def _filter_scenarios(scenarios: list[dict], filters: list[str]) -> list[dict]:
-    if not filters:
-        return scenarios
-    return [s for s in scenarios if any(s["id"].startswith(f) for f in filters)]
+def _filter_scenarios(
+    scenarios: list[dict], filters: list[str], include_phases: list[str]
+) -> tuple[list[dict], list[dict]]:
+    """Apply --filter and --include-phase to the scenario list.
+
+    Returns (selected, skipped_by_phase) so the runner can surface the
+    skipped-by-phase scenarios to the dashboard as `skipped` rows (more
+    honest than silent omission). Codex GH-bot PR #15 P2 #13: scenarios
+    that aren't safe for the active phase (e.g. E1 needs Phase B sync)
+    are gated out by default — Phase A runners never accidentally run
+    them.
+    """
+    if filters:
+        scenarios = [s for s in scenarios if any(s["id"].startswith(f) for f in filters)]
+    selected: list[dict] = []
+    skipped: list[dict] = []
+    for s in scenarios:
+        phase = (s.get("phase") or "A").upper()
+        if phase in {p.upper() for p in include_phases}:
+            selected.append(s)
+        else:
+            skipped.append(s)
+    return selected, skipped
 
 
 def _parse_args() -> argparse.Namespace:
@@ -854,6 +928,15 @@ def _parse_args() -> argparse.Namespace:
         "--dry-run-sandbox",
         action="store_true",
         help="Don't actually hit GitHub; just stream skip events to the dashboard",
+    )
+    p.add_argument(
+        "--include-phase",
+        action="append",
+        default=None,
+        help=(
+            "Run scenarios with this `phase:` value (matrix.yaml). Repeatable. "
+            "Default: ['A']. Pass `--include-phase A --include-phase B` to run both."
+        ),
     )
     return p.parse_args()
 
@@ -899,7 +982,8 @@ def _build_test_bot() -> TestBotApp:
 def main() -> int:
     args = _parse_args()
     matrix = _load_matrix(args.matrix)
-    scenarios = _filter_scenarios(matrix["scenarios"], args.filter)
+    include_phases = args.include_phase or ["A"]
+    scenarios, phase_skipped = _filter_scenarios(matrix["scenarios"], args.filter, include_phases)
 
     dry_run_sandbox = args.dry_run_sandbox or bool(os.environ.get("DRY_RUN_SANDBOX"))
     test_bot = None if dry_run_sandbox else _build_test_bot()
@@ -920,7 +1004,30 @@ def main() -> int:
             }
         )
 
-    print(f"Running {len(scenarios)} scenario(s) against {matrix['sandbox_repo']}.")
+    # Phase-skipped scenarios surface to the dashboard so the operator can see
+    # what was elided + why (Codex GH-bot PR #15 P2 #13).
+    for s in phase_skipped:
+        first_line = (s.get("description", "").strip().splitlines() or [""])[0]
+        dashboard.update(
+            {
+                "id": s["id"],
+                "category": s.get("category", "?"),
+                "description": first_line,
+                "status": "skipped",
+                "expected": s.get("expected", {}),
+                "error": (
+                    f"phase={s.get('phase') or 'A'} excluded from current run "
+                    f"(--include-phase {' '.join(include_phases)})"
+                ),
+                "started_at": time.time(),
+                "finished_at": time.time(),
+            }
+        )
+
+    print(
+        f"Running {len(scenarios)} scenario(s) against {matrix['sandbox_repo']} "
+        f"(skipping {len(phase_skipped)} out-of-phase)."
+    )
     print(f"Dashboard: {args.dashboard}")
     if dry_run_sandbox:
         print("DRY_RUN_SANDBOX mode — no GitHub calls.")
