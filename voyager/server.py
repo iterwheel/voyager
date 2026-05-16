@@ -133,6 +133,35 @@ def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _webhook_debug_context(event: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Small webhook identity fields for e2e provenance filtering."""
+    sender = payload.get("sender") or {}
+    review = payload.get("review") or {}
+    comment = payload.get("comment") or {}
+    context: dict[str, Any] = {
+        "action": payload.get("action"),
+        "sender_login": sender.get("login"),
+    }
+    if event == "pull_request_review":
+        context.update(
+            {
+                "review_id": review.get("id"),
+                "review_state": review.get("state"),
+                "review_user_login": (review.get("user") or {}).get("login"),
+            }
+        )
+    if event == "pull_request_review_comment":
+        context.update(
+            {
+                "review_comment_id": comment.get("id"),
+                "review_comment_in_reply_to_id": comment.get("in_reply_to_id"),
+                "review_id": comment.get("pull_request_review_id"),
+                "review_comment_user_login": (comment.get("user") or {}).get("login"),
+            }
+        )
+    return {key: value for key, value in context.items() if value is not None}
+
+
 def configured_webhook_secrets() -> dict[str, str]:
     """Build the slug→secret map from environment variables at request time.
 
@@ -211,6 +240,7 @@ async def _process_route_writebacks(
                     "repository": repository,
                     "pr_number": pr_number,
                     "ts": _utc_now(),
+                    "webhook": _webhook_debug_context(event, payload),
                     **result,
                 }
             )

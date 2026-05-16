@@ -508,6 +508,9 @@ def _flatten_writeback(writeback: dict[str, Any]) -> dict[str, Any]:
         # Top-level envelope (added in server._process_route_writebacks)
         "event": writeback.get("event"),
         "delivery_id": writeback.get("delivery_id"),
+        "webhook_review_id": (writeback.get("webhook") or {}).get("review_id"),
+        "webhook_review_comment_id": (writeback.get("webhook") or {}).get("review_comment_id"),
+        "webhook_sender_login": (writeback.get("webhook") or {}).get("sender_login"),
         # Apply-path fields
         "applied": writeback.get("applied"),
         "dry_run": writeback.get("dry_run"),
@@ -534,36 +537,30 @@ def _flatten_writeback(writeback: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _positive_count(value: Any) -> int:
-    """Coerce voyager count fields defensively for poll-time filtering."""
+def _as_int(value: Any) -> int | None:
     if isinstance(value, bool):
-        return int(value)
+        return None
     if isinstance(value, int):
         return value
     if isinstance(value, str) and value.isdigit():
         return int(value)
-    return 0
+    return None
 
 
-def _has_review_thread_signal(writeback: dict[str, Any]) -> bool:
-    """Return True when a writeback includes Codex-thread-derived work.
-
-    Setup-only approval reviews share the ``pull_request_review`` event type
-    with Codex review webhooks. They do not carry unresolved Codex threads or
-    sync actions, so these automation counts distinguish the real scenario
-    verdict from a delayed setup approval webhook.
-    """
-    automation = writeback.get("automation") or {}
-    return (
-        _positive_count(automation.get("unresolved_codex_thread_count")) > 0
-        or _positive_count(automation.get("sync_actions_count")) > 0
-    )
-
-
-def _requires_review_thread_signal(setup: dict[str, Any], reviews: list[dict[str, Any]]) -> bool:
-    """Only current-approval setup can produce the approval-only review race."""
-    return bool(setup.get("current_approval")) and any(
-        "thread_reply" not in review for review in reviews
+def _matches_allowed_webhook_ids(
+    writeback: dict[str, Any],
+    *,
+    allowed_review_ids: tuple[int, ...] = (),
+    allowed_review_comment_ids: tuple[int, ...] = (),
+) -> bool:
+    """Match writebacks to the exact review/comment objects this scenario posted."""
+    if not allowed_review_ids and not allowed_review_comment_ids:
+        return True
+    webhook = writeback.get("webhook") or {}
+    review_id = _as_int(webhook.get("review_id"))
+    review_comment_id = _as_int(webhook.get("review_comment_id"))
+    return (review_id is not None and review_id in allowed_review_ids) or (
+        review_comment_id is not None and review_comment_id in allowed_review_comment_ids
     )
 
 
@@ -612,8 +609,9 @@ def _poll_for_writeback(
     event_filter: tuple[str, ...] = ("pull_request_review", "pull_request_review_comment"),
     since_ts: str | None = None,
     repository: str | None = None,
-    require_review_thread_signal: bool = False,
     expected_actual: dict[str, Any] | None = None,
+    allowed_review_ids: tuple[int, ...] = (),
+    allowed_review_comment_ids: tuple[int, ...] = (),
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Poll voyager's /e2e/recent_writebacks until we see a matching record.
 
@@ -626,13 +624,13 @@ def _poll_for_writeback(
         runner captures a timestamp BEFORE posting the review and passes
         it here so any pre-review writeback is excluded from the match
         even if it shares the event type (defense-in-depth).
-      - ``require_review_thread_signal``: ignore setup-only approval reviews
-        by requiring voyager's automation summary to include either unresolved
-        Codex threads or thread sync actions.
       - ``expected_actual``: when supplied, keep polling past intermediate
         writebacks until the flattened record satisfies the scenario's expected
         assertions. This avoids returning F-class pre-reply verdicts before the
         final ``thread_reply`` webhook is processed.
+      - ``allowed_review_ids`` / ``allowed_review_comment_ids``: ignore
+        setup-only approval deliveries by accepting only webhook payloads tied
+        to the exact review/comment objects created by the scenario.
 
     Returns (writeback_dict, error_message). On success, error_message is None.
     On non-transient HTTP errors (404 = endpoint not enabled; 401/403 = auth
@@ -698,7 +696,11 @@ def _poll_for_writeback(
                     continue
                 if since_ts and (wb.get("ts") or "") < since_ts:
                     continue
-                if require_review_thread_signal and not _has_review_thread_signal(wb):
+                if not _matches_allowed_webhook_ids(
+                    wb,
+                    allowed_review_ids=allowed_review_ids,
+                    allowed_review_comment_ids=allowed_review_comment_ids,
+                ):
                     continue
                 candidates.append(wb)
             if candidates:
@@ -714,7 +716,11 @@ def _poll_for_writeback(
             time.sleep(interval_s)
 
     suffix = f" (last transient: {last_transient})" if last_transient else ""
-    signal_note = " with review-thread signal" if require_review_thread_signal else ""
+    webhook_note = (
+        " with allowed review/comment webhook"
+        if (allowed_review_ids or allowed_review_comment_ids)
+        else ""
+    )
     mismatch_note = (
         f"; latest matching-filter record mismatched expected: {last_candidate_mismatch}"
         if last_candidate_mismatch
@@ -723,7 +729,7 @@ def _poll_for_writeback(
     return (
         None,
         f"timed out after {timeout_s}s waiting for PR #{pr_number}"
-        f"{signal_note}{mismatch_note}{suffix}",
+        f"{webhook_note}{mismatch_note}{suffix}",
     )
 
 
@@ -860,7 +866,10 @@ def _run_scenario(
         # POST /pulls/{n}/reviews returns only the Review object (no comments
         # array) — Gemini r4 P1. To get the inline-comment IDs we created, we
         # GET /pulls/{n}/reviews/{review_id}/comments after each post.
-        posted_review_ids: list[int] = []
+        posted_review_object_ids: list[int] = []
+        posted_review_comment_ids: list[int] = []
+        posted_reply_review_ids: list[int] = []
+        posted_reply_comment_ids: list[int] = []
         for review in scenario.get("review", []):
             if "thread_reply" in review:
                 # Wait until after the regular reviews are posted; then reply.
@@ -876,7 +885,8 @@ def _run_scenario(
             )
             review_id = posted.get("id")
             if isinstance(review_id, int):
-                posted_review_ids.extend(
+                posted_review_object_ids.append(review_id)
+                posted_review_comment_ids.extend(
                     _review_inline_comment_ids(cfg.sandbox_repo, pr_number, review_id)
                 )
 
@@ -886,17 +896,23 @@ def _run_scenario(
             if not tr:
                 continue
             idx = tr.get("previous_thread_index", 0)
-            if idx >= len(posted_review_ids):
+            if idx >= len(posted_review_comment_ids):
                 raise RuntimeError(
                     f"thread_reply references previous_thread_index={idx} but only "
-                    f"{len(posted_review_ids)} reviews were posted earlier"
+                    f"{len(posted_review_comment_ids)} reviews were posted earlier"
                 )
-            _post_thread_reply(
+            posted_reply = _post_thread_reply(
                 sandbox_repo=cfg.sandbox_repo,
                 pr_number=pr_number,
-                comment_id=posted_review_ids[idx],
+                comment_id=posted_review_comment_ids[idx],
                 body=tr["body"],
             )
+            reply_comment_id = posted_reply.get("id")
+            if isinstance(reply_comment_id, int):
+                posted_reply_comment_ids.append(reply_comment_id)
+            reply_review_id = posted_reply.get("pull_request_review_id")
+            if isinstance(reply_review_id, int):
+                posted_reply_review_ids.append(reply_review_id)
 
         # 3c. Optional `force_push_after_review` hook for E-class scenarios
         # (make the head SHA stale after voyager observed the review).
@@ -923,8 +939,12 @@ def _run_scenario(
         # No timing assumptions needed.
 
         # 4. Poll voyager for our PR's writeback (post-review event only).
-        reviews = scenario.get("review", [])
-        require_review_thread_signal = _requires_review_thread_signal(setup, reviews)
+        if posted_reply_comment_ids or posted_reply_review_ids:
+            allowed_review_ids = tuple(posted_reply_review_ids)
+            allowed_review_comment_ids = tuple(posted_reply_comment_ids)
+        else:
+            allowed_review_ids = tuple(posted_review_object_ids)
+            allowed_review_comment_ids = tuple(posted_review_comment_ids)
         writeback, poll_error = _poll_for_writeback(
             voyager_url=cfg.voyager_url,
             pr_number=pr_number,
@@ -933,8 +953,9 @@ def _run_scenario(
             auth_token=cfg.voyager_e2e_token,
             since_ts=review_start_ts,
             repository=cfg.sandbox_repo,
-            require_review_thread_signal=require_review_thread_signal,
             expected_actual=expected,
+            allowed_review_ids=allowed_review_ids,
+            allowed_review_comment_ids=allowed_review_comment_ids,
         )
         if writeback is None:
             verdict = "failed"

@@ -22,10 +22,9 @@ from scripts.e2e.run_matrix import (  # noqa: E402
     _compare,
     _extract_pr_number,
     _flatten_writeback,
-    _has_review_thread_signal,
+    _matches_allowed_webhook_ids,
     _poll_for_writeback,
     _post_approval_review,
-    _requires_review_thread_signal,
 )
 
 # ---------------------------------------------------------------------------
@@ -325,13 +324,8 @@ def test_poll_since_ts_excludes_old_records(monkeypatch) -> None:
     assert wb["stale"] is False
 
 
-def test_poll_review_thread_signal_skips_late_setup_approval(monkeypatch) -> None:
-    """current_approval creates an approval webhook that can arrive after the marker.
-
-    When a scenario posts Codex-shaped review threads, the runner must ignore
-    setup-only approval writebacks even if they are newer than the real
-    thread-derived writeback.
-    """
+def test_poll_allowed_webhook_ids_skip_matching_setup_approval(monkeypatch) -> None:
+    """A delayed approval can match live state but must not match provenance."""
     transport = _mock_transport(
         [
             (
@@ -340,13 +334,15 @@ def test_poll_review_thread_signal_skips_late_setup_approval(monkeypatch) -> Non
                     "writebacks": [
                         {
                             "pr_number": 42,
-                            "event": "pull_request_review_comment",
+                            "event": "pull_request_review",
                             "ts": "2026-05-15T12:00:02+00:00",
                             "source": "codex-thread",
+                            "webhook": {"review_id": 200},
+                            "planned": {"add_labels": ["clearance-ready"]},
                             "automation": {
-                                "status": "ready",
-                                "unresolved_codex_thread_count": 0,
-                                "sync_actions_count": 1,
+                                "status": "ready_with_low_priority",
+                                "unresolved_codex_thread_count": 1,
+                                "sync_actions_count": 0,
                             },
                         },
                         {
@@ -354,9 +350,11 @@ def test_poll_review_thread_signal_skips_late_setup_approval(monkeypatch) -> Non
                             "event": "pull_request_review",
                             "ts": "2026-05-15T12:00:03+00:00",
                             "source": "setup-approval",
+                            "webhook": {"review_id": 100},
+                            "planned": {"add_labels": ["clearance-ready"]},
                             "automation": {
-                                "status": "ready",
-                                "unresolved_codex_thread_count": 0,
+                                "status": "ready_with_low_priority",
+                                "unresolved_codex_thread_count": 1,
                                 "sync_actions_count": 0,
                             },
                         },
@@ -374,7 +372,12 @@ def test_poll_review_thread_signal_skips_late_setup_approval(monkeypatch) -> Non
         timeout_s=2,
         interval_s=0.01,
         since_ts="2026-05-15T12:00:00+00:00",
-        require_review_thread_signal=True,
+        allowed_review_ids=(200,),
+        expected_actual={
+            "status": "ready_with_low_priority",
+            "label_present": "clearance-ready",
+            "unresolved_codex_thread_count": 1,
+        },
     )
     assert err is None
     assert wb["source"] == "codex-thread"
@@ -387,6 +390,7 @@ def test_poll_expected_actual_waits_past_pre_reply_verdict(monkeypatch) -> None:
         "event": "pull_request_review_comment",
         "ts": "2026-05-15T12:00:02+00:00",
         "source": "pre-reply",
+        "webhook": {"review_comment_id": 900},
         "planned": {"add_labels": ["clearance-blocked"]},
         "automation": {
             "status": "blocked",
@@ -399,6 +403,7 @@ def test_poll_expected_actual_waits_past_pre_reply_verdict(monkeypatch) -> None:
         "event": "pull_request_review_comment",
         "ts": "2026-05-15T12:00:04+00:00",
         "source": "final-reply",
+        "webhook": {"review_comment_id": 901},
         "planned": {"add_labels": ["clearance-ready"]},
         "automation": {
             "status": "ready",
@@ -421,7 +426,7 @@ def test_poll_expected_actual_waits_past_pre_reply_verdict(monkeypatch) -> None:
         timeout_s=2,
         interval_s=0.01,
         since_ts="2026-05-15T12:00:00+00:00",
-        require_review_thread_signal=True,
+        allowed_review_comment_ids=(900, 901),
         expected_actual={
             "status": "ready",
             "label_present": "clearance-ready",
@@ -440,6 +445,7 @@ def test_poll_expected_actual_uses_newest_candidate_not_older_match(monkeypatch)
         "event": "pull_request_review_comment",
         "ts": "2026-05-15T12:00:02+00:00",
         "source": "older-ready",
+        "webhook": {"review_comment_id": 900},
         "planned": {"add_labels": ["clearance-ready"]},
         "automation": {
             "status": "ready",
@@ -452,6 +458,7 @@ def test_poll_expected_actual_uses_newest_candidate_not_older_match(monkeypatch)
         "event": "pull_request_review_comment",
         "ts": "2026-05-15T12:00:04+00:00",
         "source": "newer-blocked",
+        "webhook": {"review_comment_id": 901},
         "planned": {"add_labels": ["clearance-blocked"]},
         "automation": {
             "status": "blocked",
@@ -464,6 +471,7 @@ def test_poll_expected_actual_uses_newest_candidate_not_older_match(monkeypatch)
         "event": "pull_request_review_comment",
         "ts": "2026-05-15T12:00:06+00:00",
         "source": "newest-ready",
+        "webhook": {"review_comment_id": 902},
         "planned": {"add_labels": ["clearance-ready"]},
         "automation": {
             "status": "ready",
@@ -486,7 +494,7 @@ def test_poll_expected_actual_uses_newest_candidate_not_older_match(monkeypatch)
         timeout_s=2,
         interval_s=0.01,
         since_ts="2026-05-15T12:00:00+00:00",
-        require_review_thread_signal=True,
+        allowed_review_comment_ids=(900, 901, 902),
         expected_actual={
             "status": "ready",
             "label_present": "clearance-ready",
@@ -504,6 +512,7 @@ def test_poll_expected_actual_allows_stale_skip_without_current_approval(monkeyp
         "pr_number": 42,
         "event": "pull_request_review",
         "ts": "2026-05-15T12:00:02+00:00",
+        "webhook": {"review_id": 500},
         "skipped": "stale_verdict",
         "automation": {
             "status": "stale_verdict_skip",
@@ -521,7 +530,7 @@ def test_poll_expected_actual_allows_stale_skip_without_current_approval(monkeyp
         timeout_s=2,
         interval_s=0.01,
         since_ts="2026-05-15T12:00:00+00:00",
-        require_review_thread_signal=False,
+        allowed_review_ids=(500,),
         expected_actual={
             "automation_status": "stale_verdict_skip",
             "writeback_skipped": True,
@@ -628,23 +637,20 @@ def test_post_approval_review_posts_current_head_approval(monkeypatch) -> None:
     assert payload["event"] == "APPROVE"
 
 
-def test_has_review_thread_signal_accepts_unresolved_or_sync_counts() -> None:
-    assert _has_review_thread_signal(
-        {"automation": {"unresolved_codex_thread_count": 1, "sync_actions_count": 0}}
+def test_matches_allowed_webhook_ids_accepts_review_or_comment_ids() -> None:
+    assert _matches_allowed_webhook_ids(
+        {"webhook": {"review_id": 200}},
+        allowed_review_ids=(200,),
     )
-    assert _has_review_thread_signal(
-        {"automation": {"unresolved_codex_thread_count": 0, "sync_actions_count": "1"}}
+    assert _matches_allowed_webhook_ids(
+        {"webhook": {"review_comment_id": 901}},
+        allowed_review_comment_ids=(901,),
     )
-    assert not _has_review_thread_signal(
-        {"automation": {"unresolved_codex_thread_count": 0, "sync_actions_count": 0}}
+    assert not _matches_allowed_webhook_ids(
+        {"webhook": {"review_id": 100}},
+        allowed_review_ids=(200,),
     )
-
-
-def test_requires_review_thread_signal_only_for_current_approval_setup() -> None:
-    reviews = [{"path": "sample.py", "line": 1, "body": "[P2] finding"}]
-    assert _requires_review_thread_signal({"current_approval": True}, reviews)
-    assert not _requires_review_thread_signal({}, reviews)
-    assert not _requires_review_thread_signal(
-        {"current_approval": True},
-        [{"thread_reply": {"previous_thread_index": 0, "body": "fixed"}}],
+    assert not _matches_allowed_webhook_ids(
+        {"webhook": {"review_id": 200}},
+        allowed_review_comment_ids=(901,),
     )

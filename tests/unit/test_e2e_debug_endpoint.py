@@ -218,6 +218,52 @@ def test_extract_pr_number_from_check_suite() -> None:
     assert _extract_pr_number_from_payload(payload) == 33
 
 
+def test_webhook_debug_context_for_pull_request_review() -> None:
+    from voyager.server import _webhook_debug_context
+
+    payload = {
+        "action": "submitted",
+        "sender": {"login": "voyager-e2e-bot[bot]"},
+        "review": {
+            "id": 200,
+            "state": "commented",
+            "user": {"login": "voyager-e2e-bot[bot]"},
+        },
+    }
+
+    assert _webhook_debug_context("pull_request_review", payload) == {
+        "action": "submitted",
+        "sender_login": "voyager-e2e-bot[bot]",
+        "review_id": 200,
+        "review_state": "commented",
+        "review_user_login": "voyager-e2e-bot[bot]",
+    }
+
+
+def test_webhook_debug_context_for_pull_request_review_comment() -> None:
+    from voyager.server import _webhook_debug_context
+
+    payload = {
+        "action": "created",
+        "sender": {"login": "ryosaeba1985"},
+        "comment": {
+            "id": 901,
+            "in_reply_to_id": 900,
+            "pull_request_review_id": 300,
+            "user": {"login": "ryosaeba1985"},
+        },
+    }
+
+    assert _webhook_debug_context("pull_request_review_comment", payload) == {
+        "action": "created",
+        "sender_login": "ryosaeba1985",
+        "review_comment_id": 901,
+        "review_comment_in_reply_to_id": 900,
+        "review_id": 300,
+        "review_comment_user_login": "ryosaeba1985",
+    }
+
+
 def test_extract_pr_number_returns_none_for_unrecognized_payload() -> None:
     from voyager.server import _extract_pr_number_from_payload
 
