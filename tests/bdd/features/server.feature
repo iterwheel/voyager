@@ -159,6 +159,28 @@ Feature: Webhook server — HTTP entry point for GitHub events
     And the response body "writebacks" field has "status" equal to string "queued"
     And the response body "writebacks" field has "scheduled" greater than 0
 
+  Scenario: Production webhook filters routes outside the repository allow-list
+    Given DRY_RUN is "false"
+    And bridge allowed repositories is "iterwheel/voyager-sandbox"
+    And a signed webhook payload "server_issues_opened" for event "issues" with delivery "abc-043"
+    When the webhook is POSTed
+    Then the response status is 200
+    And the response body "queued" field is false
+    And the response body "routes" field is an empty list
+    And the response body "writebacks" field has "scheduled" equal to integer 0
+    And the response body "filtered" field has "status" equal to string "repository_not_allowed"
+    And the response body "filtered" field has "count" greater than 0
+
+  Scenario: Production webhook allows routes for an explicitly allow-listed repository
+    Given DRY_RUN is "false"
+    And bridge allowed repositories is "test-org/test-repo"
+    And a signed webhook payload "server_issues_opened" for event "issues" with delivery "abc-044"
+    When the webhook is POSTed
+    Then the response status is 200
+    And the response body "queued" field is true
+    And the response body "writebacks" field has "scheduled" greater than 0
+    And the response body "filtered" field has "count" equal to integer 0
+
   # ---------------------------------------------------------------------------
   # Dispatch routing — event-to-bot mapping (issues event)
   # ---------------------------------------------------------------------------

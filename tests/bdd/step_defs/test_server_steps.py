@@ -60,6 +60,7 @@ def state() -> dict[str, Any]:
         "request_body": b"",
         "request_headers": {},
         "response": None,
+        "extra_env": {},
         # match_signature unit-test sub-state
         "sig_body": b"",
         "sig_secret": "",
@@ -90,6 +91,7 @@ def background_secret(secret: str, slug: str) -> dict[str, Any]:
         "request_body": b"",
         "request_headers": {},
         "response": None,
+        "extra_env": {},
         "sig_body": b"",
         "sig_secret": "",
         "sig_slug": "",
@@ -280,6 +282,16 @@ def signed_non_json_body(state: dict, event: str, delivery: str) -> None:
     }
 
 
+@given(parsers.parse('DRY_RUN is "{value}"'))
+def dry_run_env(state: dict, value: str) -> None:
+    state.setdefault("extra_env", {})["DRY_RUN"] = value
+
+
+@given(parsers.parse('bridge allowed repositories is "{value}"'))
+def bridge_allowed_repositories_env(state: dict, value: str) -> None:
+    state.setdefault("extra_env", {})["BRIDGE_ALLOWED_REPOSITORIES"] = value
+
+
 # ---------------------------------------------------------------------------
 # When
 # ---------------------------------------------------------------------------
@@ -307,6 +319,13 @@ def when_post_webhook(state: dict) -> dict[str, Any]:
         # The server reads GITHUB_REPOSITORY_WEBHOOK_SECRET as a fallback slug;
         # use it so we don't need a real AppConfig.
         env_patch["GITHUB_REPOSITORY_WEBHOOK_SECRET"] = state["secret"]
+
+    # Keep server BDD hermetic even when the operator shell has production
+    # rollout allow-list variables exported.
+    for key in list(os.environ):
+        if key == "BRIDGE_ALLOWED_REPOSITORIES" or key.startswith("BRIDGE_ALLOWED_REPOSITORIES_"):
+            env_patch.setdefault(key, "")
+    env_patch.update(state.get("extra_env") or {})
 
     original = {k: os.environ.get(k) for k in env_patch}
     for k, v in env_patch.items():

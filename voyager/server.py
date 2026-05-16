@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from collections import deque
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
@@ -177,6 +178,61 @@ def configured_webhook_secrets() -> dict[str, str]:
     if repository_secret:
         secrets["repository-webhook"] = repository_secret
     return secrets
+
+
+def _allowed_repositories_env_key(agent_slug: str) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9]+", "_", agent_slug).strip("_").upper()
+    return f"BRIDGE_ALLOWED_REPOSITORIES_{normalized}"
+
+
+def _parse_allowed_repositories(value: str | None) -> set[str]:
+    if not value:
+        return set()
+    return {item.strip().lower() for item in re.split(r"[\s,]+", value) if item.strip()}
+
+
+def _repository_pattern_matches(pattern: str, repository: str) -> bool:
+    if pattern == "*":
+        return True
+    if pattern.endswith("/*"):
+        owner = pattern[:-2]
+        repo_owner, separator, repo_name = repository.partition("/")
+        return repo_owner == owner and separator == "/" and bool(repo_name) and "/" not in repo_name
+    return pattern == repository
+
+
+def _repository_allowed_for_agent(repository: str | None, agent_slug: str) -> bool:
+    """Return whether a route may run for this repository and agent.
+
+    Production defaults to deny when no allow-list is configured. Dry-run keeps
+    the historical permissive behavior so local routing tests and exploratory
+    dry-runs do not need allow-list env setup.
+    """
+    specific = os.environ.get(_allowed_repositories_env_key(agent_slug))
+    raw = (
+        specific if specific and specific.strip() else os.environ.get("BRIDGE_ALLOWED_REPOSITORIES")
+    )
+    allowed = _parse_allowed_repositories(raw)
+    if not allowed:
+        return dry_run_enabled()
+    if not repository:
+        return False
+    normalized_repo = repository.strip().lower()
+    return any(_repository_pattern_matches(pattern, normalized_repo) for pattern in allowed)
+
+
+def _filter_routes_by_repository(
+    routes: list[dict[str, Any]], repository: str | None
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    allowed: list[dict[str, Any]] = []
+    denied: list[dict[str, Any]] = []
+    for route in routes:
+        agent_slug = str(route.get("agent") or "")
+        if _repository_allowed_for_agent(repository, agent_slug):
+            allowed.append(route)
+        else:
+            denied.append(route)
+    return allowed, denied
 
 
 def _route_summaries(routes: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -376,11 +432,19 @@ async def github_webhook(
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail="Invalid JSON payload") from exc
 
-    routes = [
+    repository: str | None = (payload.get("repository") or {}).get("full_name")
+    candidate_routes = [
         *route_blueprint_event(x_github_event, payload),
         *route_stack_event(x_github_event, payload),
         *route_clearance_event(x_github_event, payload),
     ]
+    routes, denied_routes = _filter_routes_by_repository(candidate_routes, repository)
+    if denied_routes:
+        _log.warning(
+            "repository_allowlist_denied: repo=%r denied_routes=%s",
+            repository,
+            [route.get("agent") for route in denied_routes],
+        )
 
     if routes:
         background_tasks.add_task(
@@ -401,4 +465,9 @@ async def github_webhook(
         "delivery_id": x_github_delivery,
         "routes": _route_summaries(routes),
         "writebacks": {"status": "queued", "scheduled": len(routes)},
+        "filtered": {
+            "status": "repository_not_allowed" if denied_routes else "none",
+            "count": len(denied_routes),
+            "routes": _route_summaries(denied_routes),
+        },
     }

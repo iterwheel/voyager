@@ -34,6 +34,19 @@ default_profile = "flash"
 # One [[apps]] block per installed App. Webhook secrets are NOT stored
 # here — they live in env vars named GITHUB_WEBHOOK_SECRET_<SLUG_UPPER>
 # (e.g., GITHUB_WEBHOOK_SECRET_ITERWHEEL_CLEARANCE).
+#
+# Production writeback safety:
+#   DRY_RUN defaults to true. To enable real writes, set DRY_RUN=false AND
+#   set at least one repository allow-list env var.
+#
+# Global allow-list, used when no per-agent allow-list is set. Values are
+# case-insensitive and can be exact repo names, '*' for all repos, or owner
+# wildcards such as "frankyxhl/*":
+#   BRIDGE_ALLOWED_REPOSITORIES="iterwheel/voyager-sandbox"
+#
+# Per-agent allow-list override. Agent slugs are uppercased with '-' replaced
+# by '_'. Values use the same matching rules as the global allow-list:
+#   BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_CLEARANCE="iterwheel/voyager-sandbox"
 
 [[apps]]
 slug = "iterwheel-clearance"

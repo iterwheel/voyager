@@ -218,6 +218,144 @@ def test_extract_pr_number_from_check_suite() -> None:
     assert _extract_pr_number_from_payload(payload) == 33
 
 
+# ---------------------------------------------------------------------------
+# Production repository allow-list gate
+# ---------------------------------------------------------------------------
+
+
+def test_allowed_repositories_env_key_normalizes_agent_slug() -> None:
+    from voyager.server import _allowed_repositories_env_key
+
+    assert (
+        _allowed_repositories_env_key("iterwheel-clearance")
+        == "BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_CLEARANCE"
+    )
+    assert (
+        _allowed_repositories_env_key("iterwheel clearance/beta")
+        == "BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_CLEARANCE_BETA"
+    )
+
+
+def test_parse_allowed_repositories_ignores_empty_segments() -> None:
+    from voyager.server import _parse_allowed_repositories
+
+    assert _parse_allowed_repositories(None) == set()
+    assert _parse_allowed_repositories("   ") == set()
+    assert _parse_allowed_repositories(
+        "iterwheel/voyager-sandbox,  frankyxhl/trinity\nfrankyxhl/babs,,"
+    ) == {
+        "iterwheel/voyager-sandbox",
+        "frankyxhl/trinity",
+        "frankyxhl/babs",
+    }
+
+
+def test_repository_allowlist_defaults_allow_in_dry_run(monkeypatch) -> None:
+    from voyager.server import _repository_allowed_for_agent
+
+    monkeypatch.delenv("BRIDGE_ALLOWED_REPOSITORIES", raising=False)
+    monkeypatch.delenv("BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_CLEARANCE", raising=False)
+    monkeypatch.setenv("DRY_RUN", "true")
+
+    assert _repository_allowed_for_agent("test-org/test-repo", "iterwheel-clearance")
+
+
+def test_repository_allowlist_defaults_deny_in_production(monkeypatch) -> None:
+    from voyager.server import _repository_allowed_for_agent
+
+    monkeypatch.delenv("BRIDGE_ALLOWED_REPOSITORIES", raising=False)
+    monkeypatch.delenv("BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_CLEARANCE", raising=False)
+    monkeypatch.setenv("DRY_RUN", "false")
+
+    assert not _repository_allowed_for_agent("test-org/test-repo", "iterwheel-clearance")
+
+
+def test_repository_allowlist_global_allows_exact_repo(monkeypatch) -> None:
+    from voyager.server import _repository_allowed_for_agent
+
+    monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setenv("BRIDGE_ALLOWED_REPOSITORIES", "iterwheel/voyager-sandbox")
+    monkeypatch.delenv("BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_CLEARANCE", raising=False)
+
+    assert _repository_allowed_for_agent("iterwheel/voyager-sandbox", "iterwheel-clearance")
+    assert not _repository_allowed_for_agent("frankyxhl/trinity", "iterwheel-clearance")
+
+
+def test_repository_allowlist_agent_specific_overrides_global(monkeypatch) -> None:
+    from voyager.server import _repository_allowed_for_agent
+
+    monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setenv("BRIDGE_ALLOWED_REPOSITORIES", "iterwheel/voyager-sandbox")
+    monkeypatch.setenv("BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_CLEARANCE", "frankyxhl/trinity")
+
+    assert _repository_allowed_for_agent("frankyxhl/trinity", "iterwheel-clearance")
+    assert not _repository_allowed_for_agent("iterwheel/voyager-sandbox", "iterwheel-clearance")
+
+
+def test_repository_allowlist_blank_agent_specific_falls_back_to_global(monkeypatch) -> None:
+    from voyager.server import _repository_allowed_for_agent
+
+    monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setenv("BRIDGE_ALLOWED_REPOSITORIES", "iterwheel/voyager-sandbox")
+    monkeypatch.setenv("BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_CLEARANCE", "   ")
+
+    assert _repository_allowed_for_agent("iterwheel/voyager-sandbox", "iterwheel-clearance")
+    assert not _repository_allowed_for_agent("frankyxhl/trinity", "iterwheel-clearance")
+
+
+def test_repository_allowlist_supports_owner_wildcard(monkeypatch) -> None:
+    from voyager.server import _repository_allowed_for_agent
+
+    monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setenv("BRIDGE_ALLOWED_REPOSITORIES", "frankyxhl/*")
+    monkeypatch.delenv("BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_CLEARANCE", raising=False)
+
+    assert _repository_allowed_for_agent("frankyxhl/trinity", "iterwheel-clearance")
+    assert not _repository_allowed_for_agent("iterwheel/voyager-sandbox", "iterwheel-clearance")
+    assert not _repository_allowed_for_agent("frankyxhl/", "iterwheel-clearance")
+    assert not _repository_allowed_for_agent("frankyxhl/trinity/subpath", "iterwheel-clearance")
+
+
+def test_repository_allowlist_denies_missing_repository_when_allowlist_configured(
+    monkeypatch,
+) -> None:
+    from voyager.server import _repository_allowed_for_agent
+
+    monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setenv("BRIDGE_ALLOWED_REPOSITORIES", "*")
+    monkeypatch.delenv("BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_CLEARANCE", raising=False)
+
+    assert not _repository_allowed_for_agent(None, "iterwheel-clearance")
+
+
+def test_repository_allowlist_supports_global_wildcard(monkeypatch) -> None:
+    from voyager.server import _repository_allowed_for_agent
+
+    monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setenv("BRIDGE_ALLOWED_REPOSITORIES", "*")
+    monkeypatch.delenv("BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_CLEARANCE", raising=False)
+
+    assert _repository_allowed_for_agent("iterwheel/voyager-sandbox", "iterwheel-clearance")
+    assert _repository_allowed_for_agent("frankyxhl/trinity", "iterwheel-clearance")
+
+
+def test_filter_routes_by_repository_splits_allowed_and_denied(monkeypatch) -> None:
+    from voyager.server import _filter_routes_by_repository
+
+    monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setenv("BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_BLUEPRINT", "test-org/test-repo")
+    monkeypatch.setenv("BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_STACK", "other-org/other-repo")
+    routes = [
+        {"agent": "iterwheel-blueprint", "kind": "blueprint_intake"},
+        {"agent": "iterwheel-stack", "kind": "stack_classification"},
+    ]
+
+    allowed, denied = _filter_routes_by_repository(routes, "test-org/test-repo")
+
+    assert allowed == [routes[0]]
+    assert denied == [routes[1]]
+
+
 def test_webhook_debug_context_for_pull_request_review() -> None:
     from voyager.server import _webhook_debug_context
 
