@@ -553,14 +553,24 @@ def _matches_allowed_webhook_ids(
     allowed_review_ids: tuple[int, ...] = (),
     allowed_review_comment_ids: tuple[int, ...] = (),
 ) -> bool:
-    """Match writebacks to the exact review/comment objects this scenario posted."""
+    """Match writebacks to the exact review/comment objects this scenario posted.
+
+    Review IDs only match ``pull_request_review`` deliveries. Review-comment
+    deliveries must match by exact comment ID so a shared enclosing review ID
+    cannot admit an earlier comment webhook from the same thread.
+    """
     if not allowed_review_ids and not allowed_review_comment_ids:
         return True
     webhook = writeback.get("webhook") or {}
+    event = writeback.get("event")
     review_id = _as_int(webhook.get("review_id"))
     review_comment_id = _as_int(webhook.get("review_comment_id"))
-    return (review_id is not None and review_id in allowed_review_ids) or (
-        review_comment_id is not None and review_comment_id in allowed_review_comment_ids
+    return (
+        event == "pull_request_review" and review_id is not None and review_id in allowed_review_ids
+    ) or (
+        event == "pull_request_review_comment"
+        and review_comment_id is not None
+        and review_comment_id in allowed_review_comment_ids
     )
 
 
@@ -940,6 +950,10 @@ def _run_scenario(
 
         # 4. Poll voyager for our PR's writeback (post-review event only).
         if posted_reply_comment_ids or posted_reply_review_ids:
+            # GitHub may deliver replies as pull_request_review webhooks, while
+            # review-comment deliveries can share an enclosing review id. The
+            # matcher therefore uses reply review IDs only for review events,
+            # and reply comment IDs only for review-comment events.
             allowed_review_ids = tuple(posted_reply_review_ids)
             allowed_review_comment_ids = tuple(posted_reply_comment_ids)
         else:

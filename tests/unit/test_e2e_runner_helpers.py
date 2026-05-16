@@ -438,6 +438,62 @@ def test_poll_expected_actual_waits_past_pre_reply_verdict(monkeypatch) -> None:
     assert wb["source"] == "final-reply"
 
 
+def test_poll_reply_scenario_review_id_matches_only_review_webhook(monkeypatch) -> None:
+    """A shared review id must not let a delayed comment delivery match."""
+    delayed_original = {
+        "pr_number": 42,
+        "event": "pull_request_review_comment",
+        "ts": "2026-05-15T12:00:02+00:00",
+        "source": "delayed-original-review-comment",
+        "webhook": {"review_id": 300, "review_comment_id": 900},
+        "planned": {"add_labels": ["clearance-ready"]},
+        "automation": {
+            "status": "ready",
+            "unresolved_codex_thread_count": 0,
+            "sync_actions_count": 1,
+        },
+    }
+    reply = {
+        "pr_number": 42,
+        "event": "pull_request_review",
+        "ts": "2026-05-15T12:00:04+00:00",
+        "source": "reply-review",
+        "webhook": {"review_id": 300},
+        "planned": {"add_labels": ["clearance-ready"]},
+        "automation": {
+            "status": "ready",
+            "unresolved_codex_thread_count": 0,
+            "sync_actions_count": 1,
+        },
+    }
+    transport = _mock_transport(
+        [
+            (200, {"writebacks": [delayed_original]}),
+            (200, {"writebacks": [delayed_original, reply]}),
+        ]
+    )
+    _orig = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kw: _orig(transport=transport, **kw))
+
+    wb, err = _poll_for_writeback(
+        voyager_url="http://test",
+        pr_number=42,
+        timeout_s=2,
+        interval_s=0.01,
+        since_ts="2026-05-15T12:00:00+00:00",
+        allowed_review_ids=(300,),
+        allowed_review_comment_ids=(901,),
+        expected_actual={
+            "status": "ready",
+            "label_present": "clearance-ready",
+            "unresolved_codex_thread_count": 0,
+            "sync_actions_count": 1,
+        },
+    )
+    assert err is None
+    assert wb["source"] == "reply-review"
+
+
 def test_poll_expected_actual_uses_newest_candidate_not_older_match(monkeypatch) -> None:
     """A newer mismatch must block returning an older matching writeback."""
     older_ready = {
@@ -639,18 +695,22 @@ def test_post_approval_review_posts_current_head_approval(monkeypatch) -> None:
 
 def test_matches_allowed_webhook_ids_accepts_review_or_comment_ids() -> None:
     assert _matches_allowed_webhook_ids(
-        {"webhook": {"review_id": 200}},
+        {"event": "pull_request_review", "webhook": {"review_id": 200}},
         allowed_review_ids=(200,),
     )
     assert _matches_allowed_webhook_ids(
-        {"webhook": {"review_comment_id": 901}},
+        {"event": "pull_request_review_comment", "webhook": {"review_comment_id": 901}},
         allowed_review_comment_ids=(901,),
     )
     assert not _matches_allowed_webhook_ids(
-        {"webhook": {"review_id": 100}},
+        {"event": "pull_request_review", "webhook": {"review_id": 100}},
         allowed_review_ids=(200,),
     )
     assert not _matches_allowed_webhook_ids(
-        {"webhook": {"review_id": 200}},
+        {"event": "pull_request_review_comment", "webhook": {"review_id": 200}},
+        allowed_review_ids=(200,),
+    )
+    assert not _matches_allowed_webhook_ids(
+        {"event": "pull_request_review", "webhook": {"review_comment_id": 901}},
         allowed_review_comment_ids=(901,),
     )
