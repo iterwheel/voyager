@@ -433,6 +433,71 @@ def test_poll_expected_actual_waits_past_pre_reply_verdict(monkeypatch) -> None:
     assert wb["source"] == "final-reply"
 
 
+def test_poll_expected_actual_uses_newest_candidate_not_older_match(monkeypatch) -> None:
+    """A newer mismatch must block returning an older matching writeback."""
+    older_ready = {
+        "pr_number": 42,
+        "event": "pull_request_review_comment",
+        "ts": "2026-05-15T12:00:02+00:00",
+        "source": "older-ready",
+        "planned": {"add_labels": ["clearance-ready"]},
+        "automation": {
+            "status": "ready",
+            "unresolved_codex_thread_count": 0,
+            "sync_actions_count": 1,
+        },
+    }
+    newer_blocked = {
+        "pr_number": 42,
+        "event": "pull_request_review_comment",
+        "ts": "2026-05-15T12:00:04+00:00",
+        "source": "newer-blocked",
+        "planned": {"add_labels": ["clearance-blocked"]},
+        "automation": {
+            "status": "blocked",
+            "unresolved_codex_thread_count": 1,
+            "sync_actions_count": 0,
+        },
+    }
+    newest_ready = {
+        "pr_number": 42,
+        "event": "pull_request_review_comment",
+        "ts": "2026-05-15T12:00:06+00:00",
+        "source": "newest-ready",
+        "planned": {"add_labels": ["clearance-ready"]},
+        "automation": {
+            "status": "ready",
+            "unresolved_codex_thread_count": 0,
+            "sync_actions_count": 1,
+        },
+    }
+    transport = _mock_transport(
+        [
+            (200, {"writebacks": [older_ready, newer_blocked]}),
+            (200, {"writebacks": [older_ready, newer_blocked, newest_ready]}),
+        ]
+    )
+    _orig = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kw: _orig(transport=transport, **kw))
+
+    wb, err = _poll_for_writeback(
+        voyager_url="http://test",
+        pr_number=42,
+        timeout_s=2,
+        interval_s=0.01,
+        since_ts="2026-05-15T12:00:00+00:00",
+        require_review_thread_signal=True,
+        expected_actual={
+            "status": "ready",
+            "label_present": "clearance-ready",
+            "unresolved_codex_thread_count": 0,
+            "sync_actions_count": 1,
+        },
+    )
+    assert err is None
+    assert wb["source"] == "newest-ready"
+
+
 def test_poll_expected_actual_allows_stale_skip_without_current_approval(monkeypatch) -> None:
     """E-class stale-skip writebacks do not have review-thread signal counts."""
     stale_skip = {

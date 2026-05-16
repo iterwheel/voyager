@@ -700,15 +700,17 @@ def _poll_for_writeback(
                     continue
                 if require_review_thread_signal and not _has_review_thread_signal(wb):
                     continue
-                if expected_actual:
-                    mismatches = _compare(expected_actual, _flatten_writeback(wb))
-                    if mismatches:
-                        last_candidate_mismatch = "; ".join(mismatches)
-                        continue
                 candidates.append(wb)
             if candidates:
                 candidates.sort(key=lambda w: w.get("ts") or "")
-                return candidates[-1], None
+                newest = candidates[-1]
+                if expected_actual:
+                    mismatches = _compare(expected_actual, _flatten_writeback(newest))
+                    if mismatches:
+                        last_candidate_mismatch = "; ".join(mismatches)
+                        time.sleep(interval_s)
+                        continue
+                return newest, None
             time.sleep(interval_s)
 
     suffix = f" (last transient: {last_transient})" if last_transient else ""
