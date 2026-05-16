@@ -6,13 +6,15 @@ from typing import Any, cast
 
 from .classify import CodexBodySignal
 from .constants import (
+    ALL_CLEARANCE_LABELS,
     CLEARANCE_AGENT_SLUG,
     CLEARANCE_BLOCKED_LABEL,
     CLEARANCE_CODEX_REACTION_FOLLOW_UP_ACTION,
     CLEARANCE_CODEX_REACTION_FOLLOW_UP_EVENT,
-    CLEARANCE_LABELS,
     CLEARANCE_PENDING_LABEL,
+    CLEARANCE_READY_FOR_APPROVAL_LABEL,
     CLEARANCE_READY_LABEL,
+    configured_review_request_users,
 )
 from .evaluation import ClearanceEvaluation
 
@@ -55,12 +57,35 @@ def apply_swm_overlay(
             if unresolved_count > unresolved_codex_count + sync_actions_count:
                 return evaluation
         reason = automation.get("reason") or f"Clearance automation status is {swm_status}."
+        # Configured-approver gate: if a human approver is required and hasn't approved yet,
+        # produce ready_for_approval instead of ready.
+        configured = configured_review_request_users()
+        review_state = evaluation.get("review_state") or {}
+        current_approvals = review_state.get("current_approvals") or []
+        current_approvals_lc = {u.lower() for u in current_approvals}
+        configured_approval_present = bool(configured) and any(
+            user.lower() in current_approvals_lc for user in configured
+        )
+        if configured and not configured_approval_present:
+            updated["status"] = "clearance_ready_for_approval"
+            updated["conclusion"] = "neutral"
+            updated["summary"] = "Clearance is ready for human approval."
+            updated["labels"] = {
+                "add": [CLEARANCE_READY_FOR_APPROVAL_LABEL],
+                "remove": [
+                    item
+                    for item in ALL_CLEARANCE_LABELS
+                    if item != CLEARANCE_READY_FOR_APPROVAL_LABEL
+                ],
+            }
+            updated["reactions"] = {"add": ["eyes"], "remove": ["+1", "rocket"]}
+            return cast(ClearanceEvaluation, updated)
         updated["status"] = "clearance_ready"
         updated["conclusion"] = "success"
         updated["summary"] = reason
         updated["labels"] = {
             "add": [CLEARANCE_READY_LABEL],
-            "remove": [item for item in CLEARANCE_LABELS if item != CLEARANCE_READY_LABEL],
+            "remove": [item for item in ALL_CLEARANCE_LABELS if item != CLEARANCE_READY_LABEL],
         }
         updated["reactions"] = {"add": ["+1"], "remove": ["eyes", "rocket"]}
         return cast(ClearanceEvaluation, updated)
@@ -89,7 +114,7 @@ def apply_swm_overlay(
 
     updated["labels"] = {
         "add": [label],
-        "remove": [item for item in CLEARANCE_LABELS if item != label],
+        "remove": [item for item in ALL_CLEARANCE_LABELS if item != label],
     }
     updated["reactions"] = {"add": ["eyes"], "remove": ["+1", "rocket"]}
     return cast(ClearanceEvaluation, updated)

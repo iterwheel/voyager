@@ -132,14 +132,38 @@ def is_codex_login(login: str | None) -> bool:
     return login in _extra_codex_logins()
 
 
-CLEARANCE_READY_LABEL = "clearance-ready"
-CLEARANCE_PENDING_LABEL = "clearance-pending"
-CLEARANCE_BLOCKED_LABEL = "clearance-blocked"
+CLEARANCE_PENDING_LABEL = "clearance-1-pending"
+CLEARANCE_BLOCKED_LABEL = "clearance-2-blocked"
+CLEARANCE_READY_FOR_APPROVAL_LABEL = "clearance-3-ready-for-approval"
+CLEARANCE_READY_LABEL = "clearance-4-ready-for-merge"
 CLEARANCE_LABELS = (
-    CLEARANCE_READY_LABEL,
     CLEARANCE_PENDING_LABEL,
     CLEARANCE_BLOCKED_LABEL,
+    CLEARANCE_READY_FOR_APPROVAL_LABEL,
+    CLEARANCE_READY_LABEL,
 )
+LEGACY_CLEARANCE_LABELS = (
+    "clearance-pending",
+    "clearance-blocked",
+    "clearance-ready",
+)
+ALL_CLEARANCE_LABELS = CLEARANCE_LABELS + LEGACY_CLEARANCE_LABELS
+
+
+@functools.cache
+def configured_review_request_users() -> tuple[str, ...]:
+    """Parses VOYAGER_CLEARANCE_REVIEW_REQUEST_USERS: comma-sep, whitespace-stripped,
+    empty parts dropped. Returns empty tuple when unset (pre-#25 fallback behavior).
+    Tuple-typed so configured order is preserved in the operator-facing comment."""
+    raw = os.environ.get("VOYAGER_CLEARANCE_REVIEW_REQUEST_USERS", "")
+    return tuple(s.strip() for s in raw.split(",") if s.strip())
+
+
+def reset_review_request_users_cache() -> None:
+    """Test-only cache reset. Mirrors reset_test_bot_login_cache."""
+    configured_review_request_users.cache_clear()
+
+
 CHECKBOX_ACTION_LABELS = {
     "already_checked": "already checked",
     "flipped": "checked by Clearance",

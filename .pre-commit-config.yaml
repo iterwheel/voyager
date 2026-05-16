@@ -6,13 +6,20 @@ repos:
         args: [--fix]
       - id: ruff-format
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v2.0.0
+  # Local mypy hook (not the upstream mirror) so it runs inside the project's
+  # `uv` venv and has access to runtime deps (httpx, pydantic, openai, etc.).
+  # The mirrored hook installs into an isolated venv whose `additional_dependencies`
+  # would otherwise need to be kept in sync with pyproject by hand.
+  - repo: local
     hooks:
       - id: mypy
-        args: [--config-file=pyproject.toml]
+        name: mypy (project venv)
+        entry: uv run mypy
+        language: system
+        types: [python]
         files: ^voyager/
-        additional_dependencies: []
+        pass_filenames: false
+        args: [--config-file=pyproject.toml, voyager]
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -24,3 +31,29 @@ repos:
       - id: check-added-large-files
         args: [--maxkb=500]
       - id: detect-private-key
+
+  # Pre-push gate — mirrors the CI lint + test jobs (.github/workflows/ci.yml).
+  # Catches anything that bypassed commit-stage hooks (commits made before
+  # `pre-commit install`, or with --no-verify) and exercises the full test
+  # suite before any remote push. Enable with:
+  #     uv run pre-commit install --hook-type pre-push
+  - repo: local
+    hooks:
+      - id: ruff-check-strict
+        name: ruff check . (no --fix)
+        entry: uv run ruff check .
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+      - id: ruff-format-check
+        name: ruff format --check .
+        entry: uv run ruff format --check .
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+      - id: pytest
+        name: pytest
+        entry: uv run pytest
+        language: system
+        pass_filenames: false
+        stages: [pre-push]

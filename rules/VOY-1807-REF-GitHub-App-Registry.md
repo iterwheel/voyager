@@ -1,7 +1,7 @@
 # REF-1807: GitHub App Registry
 
 **Applies to:** VOY project
-**Last updated:** 2026-05-09
+**Last updated:** 2026-05-17
 **Last reviewed:** 2026-05-09
 **Status:** Active
 **Related:** VOY-1805, VOY-1806, VOY-1808
@@ -43,7 +43,7 @@ Current bridge write-back:
 |-------|------------------|---------|------------|
 | `iterwheel-blueprint` | `iterwheel/voyager`, `iterwheel/voyager-sandbox`, `frankyxhl/alfred`, `frankyxhl/babs`, `frankyxhl/fx_bin`, `frankyxhl/sweeping-monk`, `frankyxhl/trinity` | `issues.opened`, `issues.edited`, `issues.reopened`, or `/blueprint` issue comment | Validates issue title format and intake fields, maintains exactly one Blueprint state label from `blueprint-needed`, `blueprint-ready`, and `blueprint-requests-revision`, upserts one Blueprint intake comment, and adds a `rocket` issue reaction when the issue is Blueprint-ready |
 | `iterwheel-stack` | `iterwheel/voyager`, `iterwheel/voyager-sandbox`, `frankyxhl/alfred`, `frankyxhl/babs`, `frankyxhl/fx_bin`, `frankyxhl/sweeping-monk`, `frankyxhl/trinity` | `issues.opened`, `issues.edited`, `issues.reopened`, or `/stack` issue comment on a non-PR issue | Maintains one issue label from each Stack axis (`stack-type-*`, `stack-area-*`, `stack-size-*`, and `stack-risk-*`) when confident; otherwise applies `stack-needs-review`; upserts one Stack classification comment; adds `rocket` on successful issue classification and `eyes` when human review is needed |
-| `iterwheel-clearance` | `iterwheel/voyager-sandbox` | `pull_request.opened`, `pull_request.edited`, `pull_request.reopened`, `pull_request.ready_for_review`, `pull_request.converted_to_draft`, `pull_request.synchronize`, `pull_request_review.submitted`, `pull_request_review.dismissed`, `pull_request_review_comment.*`, or `/clearance` PR comment | Maintains one PR review-readiness label from `clearance-pending`, `clearance-blocked`, and `clearance-ready`; upserts one Clearance comment; adds `rocket` when ready and `eyes` otherwise |
+| `iterwheel-clearance` | `iterwheel/voyager-sandbox` | `pull_request.opened`, `pull_request.edited`, `pull_request.reopened`, `pull_request.ready_for_review`, `pull_request.converted_to_draft`, `pull_request.synchronize`, `pull_request_review.submitted`, `pull_request_review.dismissed`, `pull_request_review_comment.*`, or `/clearance` PR comment | Maintains one PR review-readiness label from `clearance-1-pending`, `clearance-2-blocked`, `clearance-3-ready-for-approval`, and `clearance-4-ready-for-merge`; upserts one Clearance comment; adds `rocket` when ready and `eyes` otherwise |
 
 Cross-account installation:
 
@@ -89,8 +89,11 @@ Operational notes:
   mention many generic terms.
 - Clearance v1 is active only for `iterwheel/voyager-sandbox`. It verifies
   current GitHub review state and review-thread resolution, but does not claim
-  AI-level semantic repair verification. The sandbox has the three Clearance
-  labels `clearance-pending`, `clearance-blocked`, and `clearance-ready`.
+  AI-level semantic repair verification. The sandbox now uses four numbered
+  Clearance labels: `clearance-1-pending`, `clearance-2-blocked`,
+  `clearance-3-ready-for-approval`, and `clearance-4-ready-for-merge`.
+  Legacy labels (`clearance-pending`, `clearance-blocked`, `clearance-ready`)
+  are removed on every write-back as part of the migration (issue #25).
 
 ---
 
@@ -117,3 +120,5 @@ Operational notes:
 | 2026-05-09 | Added Clearance v1 sandbox PR review-readiness routing, labels, and smoke test on `iterwheel/voyager-sandbox` #5 | Frank Xu + Codex |
 | 2026-05-09 | Added `frankyxhl/sweeping-monk` to Blueprint and Stack, webhook `620063000`, and smoke test issue #4              | Frank Xu + Codex |
 | 2026-05-09 | Changed the bridge webhook path to ACK first and perform GitHub write-back in a background task                   | Frank Xu + Codex |
+| 2026-05-17 | Updated Clearance label set to four numbered labels; added legacy-migration note (issue #25)                      | Claude Code      |
+| 2026-05-17 | Replaced legacy label names in main registry table write-back row with four numbered clearance labels (issue #25) | Claude Code      |

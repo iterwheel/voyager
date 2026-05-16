@@ -727,3 +727,104 @@ def extracted_signal_equals(extracted_signal: str | None, signal: str) -> None:
 @then("the extracted signal is None")
 def extracted_signal_is_none(extracted_signal: str | None) -> None:
     assert extracted_signal is None
+
+
+# ---------------------------------------------------------------------------
+# Issue #25: numbered label steps — Given fixtures for env var
+# ---------------------------------------------------------------------------
+
+
+@given("no configured review request users")
+def no_configured_review_users(monkeypatch) -> None:
+    monkeypatch.delenv("VOYAGER_CLEARANCE_REVIEW_REQUEST_USERS", raising=False)
+    from voyager.bots.clearance.constants import reset_review_request_users_cache
+
+    reset_review_request_users_cache()
+
+
+@given(
+    parsers.parse('configured review request user "{user}" who has not approved'),
+    target_fixture="configured_reviewer",
+)
+def configured_reviewer_not_approved(monkeypatch, user: str) -> str:
+    monkeypatch.setenv("VOYAGER_CLEARANCE_REVIEW_REQUEST_USERS", user)
+    from voyager.bots.clearance.constants import reset_review_request_users_cache
+
+    reset_review_request_users_cache()
+    return user
+
+
+@given(
+    "a clearance snapshot where the configured approver has approved",
+    target_fixture="snapshot",
+)
+def snapshot_configured_approver_approved(monkeypatch) -> dict:
+    monkeypatch.setenv("VOYAGER_CLEARANCE_REVIEW_REQUEST_USERS", "configured-approver")
+    from voyager.bots.clearance.constants import reset_review_request_users_cache
+
+    reset_review_request_users_cache()
+    return {
+        "pull_request": _open_pr(),
+        "reviews": [_approval(login="configured-approver")],
+        "review_threads": [],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Issue #25: numbered label steps — Then assertions for partial summary match
+# ---------------------------------------------------------------------------
+
+
+@then(parsers.parse('the evaluation summary contains "{text}"'))
+def evaluation_summary_contains(evaluation: dict, text: str) -> None:
+    assert text.lower() in evaluation["summary"].lower(), (
+        f"Expected {text!r} in summary: {evaluation['summary']!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Issue #25 AC#9: literal "Review request: requested @<user>" line in comment
+# ---------------------------------------------------------------------------
+
+
+@given(
+    'an env-configured reviewer "frankyxhl" that has not approved and an approval from a non-configured user',
+    target_fixture="review_request_comment_inputs",
+)
+def rr_comment_inputs_frankyxhl(monkeypatch) -> dict:
+    monkeypatch.setenv("VOYAGER_CLEARANCE_REVIEW_REQUEST_USERS", "frankyxhl")
+    from voyager.bots.clearance.constants import reset_review_request_users_cache
+
+    reset_review_request_users_cache()
+
+    snapshot = {
+        "pull_request": _open_pr(),
+        "reviews": [_approval(login="someone-else")],
+        "review_threads": [],
+    }
+    review_request = {
+        "enabled": True,
+        "applied": True,
+        "requested": ["frankyxhl"],
+        "already_requested": [],
+        "skipped_author": [],
+    }
+    return {"snapshot": snapshot, "review_request": review_request}
+
+
+@when("the clearance comment is built", target_fixture="comment_body")
+def build_comment(review_request_comment_inputs: dict) -> str:
+    from voyager.bots.clearance import evaluate_clearance_snapshot  # lazy import
+    from voyager.bots.clearance.enrichment import build_clearance_comment  # lazy import
+
+    ev = evaluate_clearance_snapshot(review_request_comment_inputs["snapshot"])
+    return build_clearance_comment(
+        ev,
+        automation=None,
+        review_request=review_request_comment_inputs["review_request"],
+    )
+
+
+@then(parsers.parse('the comment body contains "{text}"'))
+def comment_body_contains(comment_body: str, text: str) -> None:
+    assert text in comment_body, f"Expected {text!r} in comment body, got:\n{comment_body}"

@@ -6,11 +6,13 @@ from datetime import UTC, datetime
 from typing import Any, TypedDict
 
 from .constants import (
+    ALL_CLEARANCE_LABELS,
     CLEARANCE_BLOCKED_LABEL,
     CLEARANCE_CLASSIFIER_VERSION,
-    CLEARANCE_LABELS,
     CLEARANCE_PENDING_LABEL,
+    CLEARANCE_READY_FOR_APPROVAL_LABEL,
     CLEARANCE_READY_LABEL,
+    configured_review_request_users,
 )
 
 
@@ -49,7 +51,7 @@ class ClearanceEvaluation(TypedDict):
     """Clearance readiness evaluation with GitHub-actionable metadata.
 
     All fields are always present:
-    - status: one of clearance_ready | clearance_pending | clearance_blocked
+    - status: one of clearance_ready | clearance_pending | clearance_blocked | clearance_ready_for_approval
     - conclusion: one of success | neutral | failure
     - issue_number: PR number (duplicated from pr_number for compatibility)
     - pr_number: GitHub PR number
@@ -156,6 +158,12 @@ def evaluate_clearance_snapshot(snapshot: dict[str, Any]) -> ClearanceEvaluation
         else:
             reasons.append("No approval on the current PR head.")
 
+    configured = configured_review_request_users()
+    current_approvals_lc = {u.lower() for u in current_approvals}
+    configured_approval_present = bool(configured) and any(
+        user.lower() in current_approvals_lc for user in configured
+    )
+
     if blocking_reviewers or unresolved_threads:
         status = "clearance_blocked"
         conclusion = "failure"
@@ -164,6 +172,15 @@ def evaluate_clearance_snapshot(snapshot: dict[str, Any]) -> ClearanceEvaluation
         status = "clearance_pending"
         conclusion = "neutral"
         label = CLEARANCE_PENDING_LABEL
+    elif configured and not configured_approval_present:
+        status = "clearance_ready_for_approval"
+        conclusion = "neutral"
+        label = CLEARANCE_READY_FOR_APPROVAL_LABEL
+        reasons.append(
+            "Awaiting approval from configured reviewer(s): "
+            + ", ".join("@" + user for user in configured)
+            + "."
+        )
     else:
         status = "clearance_ready"
         conclusion = "success"
@@ -171,7 +188,7 @@ def evaluate_clearance_snapshot(snapshot: dict[str, Any]) -> ClearanceEvaluation
 
     labels: LabelsDict = {
         "add": [label],
-        "remove": [item for item in CLEARANCE_LABELS if item != label],
+        "remove": [item for item in ALL_CLEARANCE_LABELS if item != label],
     }
     reactions: ReactionsDict = (
         {"add": ["+1"], "remove": ["eyes", "rocket"]}
@@ -208,6 +225,8 @@ def evaluate_clearance_snapshot(snapshot: dict[str, Any]) -> ClearanceEvaluation
         "summary": (
             "Clearance is ready for Countdown."
             if status == "clearance_ready"
+            else "Clearance is ready for human approval."
+            if status == "clearance_ready_for_approval"
             else "Clearance is not ready yet."
         ),
     }

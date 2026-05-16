@@ -210,7 +210,11 @@ Feature: Clearance bot — PR review readiness verification and routing
     And the evaluation reactions add "+1"
     And the evaluation reactions remove "eyes"
     And the evaluation reactions remove "rocket"
-    And the evaluation labels add "clearance-ready"
+    And the evaluation labels add "clearance-4-ready-for-merge"
+    And the evaluation labels remove "clearance-1-pending"
+    And the evaluation labels remove "clearance-2-blocked"
+    And the evaluation labels remove "clearance-3-ready-for-approval"
+    And the evaluation labels remove "clearance-ready"
     And the evaluation labels remove "clearance-pending"
     And the evaluation labels remove "clearance-blocked"
     And the evaluation confidence has no reasons
@@ -265,7 +269,7 @@ Feature: Clearance bot — PR review readiness verification and routing
     Then the evaluation status is "clearance_blocked"
     And the evaluation conclusion is "failure"
     And the evaluation review state has blocking reviewers
-    And the evaluation labels add "clearance-blocked"
+    And the evaluation labels add "clearance-2-blocked"
 
   Scenario: Unresolved review thread causes clearance_blocked
     Given a clearance snapshot with an unresolved review thread
@@ -310,7 +314,7 @@ Feature: Clearance bot — PR review readiness verification and routing
     When the swm overlay is applied
     Then the overlaid evaluation status is "clearance_ready"
     And the overlaid evaluation conclusion is "success"
-    And the overlaid evaluation labels add "clearance-ready"
+    And the overlaid evaluation labels add "clearance-4-ready-for-merge"
     And the overlaid evaluation reactions add "+1"
 
   Scenario: apply_swm_overlay with status ready preserves draft PR blockers
@@ -325,7 +329,7 @@ Feature: Clearance bot — PR review readiness verification and routing
     And the overlaid evaluation conclusion is "neutral"
     And the overlaid evaluation reactions add "eyes"
     And the overlaid evaluation reactions remove "+1"
-    And the overlaid evaluation labels add "clearance-pending"
+    And the overlaid evaluation labels add "clearance-1-pending"
     And the overlaid evaluation confidence reasons include the automation engine reason
 
   Scenario: apply_swm_overlay with status blocked downgrades to clearance_blocked
@@ -333,7 +337,7 @@ Feature: Clearance bot — PR review readiness verification and routing
     When the swm overlay is applied
     Then the overlaid evaluation status is "clearance_blocked"
     And the overlaid evaluation conclusion is "failure"
-    And the overlaid evaluation labels add "clearance-blocked"
+    And the overlaid evaluation labels add "clearance-2-blocked"
 
   Scenario: apply_swm_overlay with status error downgrades to clearance_blocked
     Given a ready evaluation and automation with status "error" and enabled true
@@ -419,3 +423,88 @@ Feature: Clearance bot — PR review readiness verification and routing
     Given a clearance route with no codex_pr_body_signal
     When the codex pr body signal is extracted
     Then the extracted signal is None
+
+  # ---------------------------------------------------------------------------
+  # Issue #25: Numbered clearance labels — new label values
+  # ---------------------------------------------------------------------------
+
+  Scenario: PR with current-head approval and no configured approver is ready (numbered label)
+    Given a clearance snapshot with an approved review on the current head
+    And no configured review request users
+    When the clearance snapshot is evaluated
+    Then the evaluation status is "clearance_ready"
+    And the evaluation labels add "clearance-4-ready-for-merge"
+    And the evaluation labels remove "clearance-1-pending"
+    And the evaluation labels remove "clearance-2-blocked"
+    And the evaluation labels remove "clearance-3-ready-for-approval"
+
+  Scenario: PR with no reviews uses numbered pending label
+    Given a clearance snapshot with no reviews
+    And no configured review request users
+    When the clearance snapshot is evaluated
+    Then the evaluation status is "clearance_pending"
+    And the evaluation labels add "clearance-1-pending"
+    And the evaluation labels remove "clearance-4-ready-for-merge"
+    And the evaluation labels remove "clearance-2-blocked"
+
+  Scenario: PR with changes-requested uses numbered blocked label
+    Given a clearance snapshot with a changes-requested review
+    And no configured review request users
+    When the clearance snapshot is evaluated
+    Then the evaluation status is "clearance_blocked"
+    And the evaluation labels add "clearance-2-blocked"
+
+  Scenario: Legacy labels are migrated away on every writeback — ready case
+    Given a clearance snapshot with an approved review on the current head
+    And no configured review request users
+    When the clearance snapshot is evaluated
+    Then the evaluation labels remove "clearance-pending"
+    And the evaluation labels remove "clearance-blocked"
+    And the evaluation labels remove "clearance-ready"
+
+  Scenario: Legacy labels are migrated away on every writeback — pending case
+    Given a clearance snapshot with no reviews
+    And no configured review request users
+    When the clearance snapshot is evaluated
+    Then the evaluation labels remove "clearance-pending"
+    And the evaluation labels remove "clearance-blocked"
+    And the evaluation labels remove "clearance-ready"
+
+  Scenario: Legacy labels are migrated away on every writeback — blocked case
+    Given a clearance snapshot with a changes-requested review
+    And no configured review request users
+    When the clearance snapshot is evaluated
+    Then the evaluation labels remove "clearance-pending"
+    And the evaluation labels remove "clearance-blocked"
+    And the evaluation labels remove "clearance-ready"
+
+  Scenario: PR with no configured approver on current head is ready_for_approval
+    Given a clearance snapshot with an approved review on the current head
+    And configured review request user "required-approver" who has not approved
+    When the clearance snapshot is evaluated
+    Then the evaluation status is "clearance_ready_for_approval"
+    And the evaluation labels add "clearance-3-ready-for-approval"
+    And the evaluation labels remove "clearance-4-ready-for-merge"
+    And the evaluation labels remove "clearance-1-pending"
+    And the evaluation labels remove "clearance-2-blocked"
+    And the evaluation labels remove "clearance-pending"
+    And the evaluation labels remove "clearance-blocked"
+    And the evaluation labels remove "clearance-ready"
+    And the evaluation reactions add "eyes"
+    And the evaluation summary contains "ready for human approval"
+
+  Scenario: Configured approver has approved current head — clearance_ready
+    Given a clearance snapshot where the configured approver has approved
+    When the clearance snapshot is evaluated
+    Then the evaluation status is "clearance_ready"
+    And the evaluation labels add "clearance-4-ready-for-merge"
+    And the evaluation summary is "Clearance is ready for Countdown."
+
+  # ---------------------------------------------------------------------------
+  # Issue #25 AC#9: literal "Review request: requested @<user>" line
+  # ---------------------------------------------------------------------------
+
+  Scenario: Ready-for-approval comment includes literal "Review request: requested @frankyxhl" line
+    Given an env-configured reviewer "frankyxhl" that has not approved and an approval from a non-configured user
+    When the clearance comment is built
+    Then the comment body contains "Review request: requested @frankyxhl"

@@ -117,17 +117,29 @@ and VOY-1804.
    Clearance owns pull request review-readiness labels only. Its labels are
    mutually exclusive and should be applied only to pull requests:
 
-   | Label | Meaning |
-   |-------|---------|
-   | `clearance-pending` | Review clearance is not complete yet, for example the PR is draft, has no current-head approval, or only stale approvals. |
-   | `clearance-blocked` | Review clearance is blocked by requested changes or unresolved review threads. |
-   | `clearance-ready` | The PR has at least one current-head approval, no active requested-changes review, and no unresolved review threads. |
+   | Label | Color | Description |
+   |-------|-------|-------------|
+   | `clearance-1-pending` | `#FBCA04` (yellow) | Waiting for data, checks, webhook results, or bot review signal. |
+   | `clearance-2-blocked` | `#D93F0B` (red) | Explicit blocker: unresolved review threads, changes requested, or failing required checks. |
+   | `clearance-3-ready-for-approval` | `#5319E7` (purple) | Automated conditions satisfied; configured human approval still missing. |
+   | `clearance-4-ready-for-merge` | `#0E8A16` (green) | Configured human / current-head approval present and automated conditions satisfied. |
+
+   ### Legacy labels (migration)
+
+   The following three labels were used before issue #25 and are removed on
+   every Clearance writeback. They must not be applied by new code.
+
+   | Label | Status |
+   |-------|--------|
+   | `clearance-pending` | Replaced by `clearance-1-pending` |
+   | `clearance-blocked` | Replaced by `clearance-2-blocked` |
+   | `clearance-ready` | Replaced by `clearance-4-ready-for-merge` |
 
    Clearance v1 is deterministic. It verifies GitHub review state and review
-   thread resolution, upserts a Clearance comment, adds `rocket` when
-   `clearance-ready`, and adds `eyes` otherwise. It does not prove that every
-   requested semantic code change was truly fixed; AI-assisted semantic repair
-   verification is a later Clearance v2 responsibility.
+   thread resolution, upserts a Clearance comment, adds `+1` when
+   `clearance-4-ready-for-merge`, and adds `eyes` otherwise. It does not prove
+   that every requested semantic code change was truly fixed; AI-assisted
+   semantic repair verification is a later Clearance v2 responsibility.
 
 5. **Keep handle rules stable**
 
@@ -210,3 +222,4 @@ reaction.
 | 2026-05-09 | Tightened Stack scope to issue-only classification; pull requests are handled by Countdown                                   | Frank Xu + Codex |
 | 2026-05-09 | Added Stack v2 explicit `Work Type` / `Stack Area` parsing and weighted area scoring                                         | Frank Xu + Codex |
 | 2026-05-09 | Added Clearance v1 pull request review-readiness label standard                                                             | Frank Xu + Codex |
+| 2026-05-16 | Replace 3 unnumbered labels with 4 numbered labels + colors per issue #25; legacy names migrated by writeback               | Claude Code      |

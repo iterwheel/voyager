@@ -53,7 +53,7 @@ _TRANSITIONS: dict[tuple[str, str], str] = {
     (Stage.STACK_PENDING.value, "stack-classified"): Stage.STACK_CLASSIFIED.value,
     # PR stage
     (Stage.STACK_CLASSIFIED.value, "pr-opened"): Stage.PR_OPEN.value,
-    # Clearance stage
+    # Clearance stage — legacy signals
     (Stage.PR_OPEN.value, "clearance-pending"): Stage.CLEARANCE_PENDING.value,
     (Stage.CLEARANCE_PENDING.value, "clearance-ready"): Stage.CLEARANCE_READY.value,
     # Clearance can block on the FIRST evaluation (from pending) or on a
@@ -62,6 +62,24 @@ _TRANSITIONS: dict[tuple[str, str], str] = {
     (Stage.CLEARANCE_PENDING.value, "clearance-blocked"): Stage.CLEARANCE_BLOCKED.value,
     (Stage.CLEARANCE_READY.value, "clearance-blocked"): Stage.CLEARANCE_BLOCKED.value,
     (Stage.CLEARANCE_BLOCKED.value, "clearance-ready"): Stage.CLEARANCE_READY.value,
+    # Clearance stage — numbered signals (issue #25)
+    (Stage.PR_OPEN.value, "clearance-1-pending"): Stage.CLEARANCE_PENDING.value,
+    (Stage.PR_OPEN.value, "clearance-2-blocked"): Stage.CLEARANCE_BLOCKED.value,
+    (Stage.CLEARANCE_PENDING.value, "clearance-2-blocked"): Stage.CLEARANCE_BLOCKED.value,
+    (Stage.CLEARANCE_READY.value, "clearance-2-blocked"): Stage.CLEARANCE_BLOCKED.value,
+    (Stage.PR_OPEN.value, "clearance-3-ready-for-approval"): Stage.CLEARANCE_PENDING.value,
+    (
+        Stage.CLEARANCE_PENDING.value,
+        "clearance-3-ready-for-approval",
+    ): Stage.CLEARANCE_PENDING.value,
+    (Stage.CLEARANCE_READY.value, "clearance-3-ready-for-approval"): Stage.CLEARANCE_PENDING.value,
+    (
+        Stage.CLEARANCE_BLOCKED.value,
+        "clearance-3-ready-for-approval",
+    ): Stage.CLEARANCE_PENDING.value,
+    (Stage.CLEARANCE_PENDING.value, "clearance-4-ready-for-merge"): Stage.CLEARANCE_READY.value,
+    (Stage.CLEARANCE_BLOCKED.value, "clearance-4-ready-for-merge"): Stage.CLEARANCE_READY.value,
+    (Stage.CLEARANCE_READY.value, "clearance-4-ready-for-merge"): Stage.CLEARANCE_READY.value,
     # Liftoff
     (Stage.CLEARANCE_READY.value, "liftoff-done"): Stage.LIFTOFF_DONE.value,
 }
@@ -86,6 +104,11 @@ _SIGNAL_SOURCE_RANK: dict[str, int] = {
     "clearance-ready": _STAGE_ORDER[Stage.CLEARANCE_BLOCKED.value],
     "clearance-blocked": _STAGE_ORDER[Stage.CLEARANCE_READY.value],
     "liftoff-done": _STAGE_ORDER[Stage.CLEARANCE_READY.value],
+    # Numbered signals (issue #25) — same MAX-rank rule as legacy counterparts
+    "clearance-1-pending": _STAGE_ORDER[Stage.PR_OPEN.value],
+    "clearance-2-blocked": _STAGE_ORDER[Stage.CLEARANCE_READY.value],
+    "clearance-3-ready-for-approval": _STAGE_ORDER[Stage.CLEARANCE_BLOCKED.value],
+    "clearance-4-ready-for-merge": _STAGE_ORDER[Stage.CLEARANCE_BLOCKED.value],
     "no-blueprint-needed": _STAGE_ORDER[Stage.BLUEPRINT_PENDING.value],
     "force-restart": -1,  # always applicable
 }
