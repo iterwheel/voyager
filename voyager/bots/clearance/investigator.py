@@ -28,11 +28,12 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
-# Models supported by DeepSeek's V4 lineup. Pro is the default; Flash is
-# substantially cheaper but weaker at multi-step semantic reasoning, so we
-# warn when the factory builds an investigator targeting it. DeepSeek M3
-# review flag — the confidence threshold was tuned against Pro.
-_KNOWN_PRO_MODELS = frozenset({"deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"})
+# Models supported by Voyager's documented DeepSeek policy. Pro is the default;
+# Flash is substantially cheaper but weaker at multi-step semantic reasoning,
+# so we warn when the factory builds an investigator targeting it. Public
+# non-thinking aliases such as ``deepseek-chat`` can move across provider
+# releases, so they stay unknown until a rollout document pins their tier.
+_KNOWN_PRO_MODELS = frozenset({"deepseek-v4-pro", "deepseek-reasoner"})
 # Recognized Flash-tier models. When the operator picks one of these we know
 # it's intentional; when they pick something *else* we surface a stronger
 # "unknown model" warning in build_investigator_from_env.
