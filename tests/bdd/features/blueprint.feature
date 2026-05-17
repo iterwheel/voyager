@@ -174,6 +174,15 @@ Feature: Blueprint bot — issue intake validation and routing
     And the route validation status is "blueprint_ready"
     And the section "Problem / Goal" is present in sections found
 
+  Scenario: Optional Stack metadata fields remain Blueprint-ready
+    Given a webhook payload "issues_opened_with_stack_metadata"
+    When Blueprint receives the "issues" event
+    Then exactly one route is produced
+    And the route validation status is "blueprint_ready"
+    And the route validation has no missing fields
+    And the route validation has no weak fields
+    And the section "Work Type" is present in sections found
+
   # ---------------------------------------------------------------------------
   # Route shape
   # ---------------------------------------------------------------------------

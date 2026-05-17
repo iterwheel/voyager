@@ -189,6 +189,10 @@ For a new personal repository, perform these steps:
    `stack-type-*`, `stack-area-*`, `stack-size-*`, `stack-risk-*`, and
    `stack-needs-review` set.
 6. Add or copy the issue template if Blueprint form-based intake is desired.
+   After the Voyager template is validated, copy
+   `.github/ISSUE_TEMPLATE/iterwheel_issue.md` to managed repositories such as
+   `frankyxhl/alfred` and `frankyxhl/trinity`; keep its allowed Stack Type and
+   Stack Area values synchronized with `voyager/bots/stack/constants.py`.
 7. Run a smoke test on a non-critical issue. Opening a complete issue should
    exercise both Blueprint and Stack; `/blueprint` and `/stack` comments can be
    used for targeted rechecks.

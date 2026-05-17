@@ -25,6 +25,14 @@ release note for the explicit migration path.
   current Flash no-thinking canary behavior until an operator changes
   `[voyager].default_profile`.
 
+### Added — Stack metadata issue template ([#47](https://github.com/iterwheel/voyager/issues/47))
+
+- Added a structured GitHub issue template with optional `Stack Type` and
+  `Stack Area` fields plus allowed-value guidance for authors.
+- Added Blueprint and Stack regression coverage showing optional Stack
+  metadata remains Blueprint-ready and overrides noisy weighted signals when
+  provided.
+
 ### Fixed — Clearance writeback failure visibility ([#45](https://github.com/iterwheel/voyager/issues/45))
 
 - Clearance now captures GitHub writeback failures, including

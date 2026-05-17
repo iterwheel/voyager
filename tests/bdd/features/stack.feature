@@ -200,6 +200,16 @@ Feature: Stack bot — issue classification and routing
     And the stack classification area is "infra"
     And the stack area source is "explicit_field"
 
+  Scenario: Issue-template Stack metadata overrides title and weighted signals
+    Given a webhook payload "stack_issues_template_metadata_override"
+    When Stack receives the "issues" event
+    Then exactly one stack route is produced
+    And the stack validation status is "stack_classified"
+    And the stack classification type is "feature"
+    And the stack classification type source is "explicit_field"
+    And the stack classification area is "github"
+    And the stack area source is "explicit_field"
+
   Scenario: Weighted signals select highest-scoring area
     Given a webhook payload "stack_issues_opened_classified"
     When Stack receives the "issues" event

@@ -1,0 +1,9 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 47,
+    "title": "[Feature]: Add explicit Stack metadata fields to issue templates",
+    "html_url": "https://github.test/issues/47",
+    "body": "## Work Type\n\nIssue-template ergonomics for Stack routing.\n\nStack Type: feature\nStack Area: github\n\n## Problem / Goal\n\nVoyager issue authors need optional Stack metadata fields so Stack can avoid ambiguous weighted classification.\n\n## Context\n\nTemplate text mentions docs, automation, GitHub, tests, workflow, labels, and issue routing, which can otherwise create area ties.\n\n## Expected Outcome\n\nThe issue template includes optional Stack Type and Stack Area fields with allowed values documented.\n\n## Acceptance Criteria\n\n- [ ] Blueprint accepts issues that include the optional Stack metadata fields.\n- [ ] Stack uses the explicit fields before weighted signals.\n\n## Reproduction Steps / Task Plan\n\n1. Create an issue from the template.\n2. Fill Stack Type and Stack Area.\n3. Verify Blueprint and Stack results.\n\n## Priority\n\nP2 - reduces manual Stack cleanup.\n\n## Requester / Owner\n\nRequester: @frankyxhl\nOwner: Iterwheel Stack\n"
+  }
+}
