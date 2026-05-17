@@ -1,0 +1,247 @@
+name: Release
+
+# Auto-publishes a GitHub release whenever the version in pyproject.toml
+# changes on main. Manual workflow_dispatch is available for re-runs and
+# for cases where the auto-detect path didn't fire (e.g. main was bumped
+# before this workflow existed).
+#
+# Operator flow:
+#   1. Open a release PR that bumps pyproject.toml + voyager/__init__.py
+#      and lands a `## [<version>] — <date>` section in CHANGELOG.md.
+#   2. Merge the PR.
+#   3. This workflow detects the version change, validates the package
+#      pins all match, extracts the matching CHANGELOG section, and
+#      creates the tag + GitHub release.
+#
+# Why workflow + not org-level automation:
+# - ryosaeba1985 (the agent identity) does not have write permission on
+#   iterwheel/voyager, so `gh release create` from a local shell hits 404.
+#   The workflow runs as `github-actions[bot]` with the repo's GITHUB_TOKEN,
+#   which has contents:write inside the workflow context.
+# - See VOY-1810 SOP for the full operator runbook.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - pyproject.toml
+      - voyager/__init__.py
+      - CHANGELOG.md
+      - .github/workflows/release.yml
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g. 0.2.0). Defaults to pyproject.toml.'
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Resolve target version
+        id: version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then
+            version="$INPUT_VERSION"
+          else
+            version=$(awk -F'"' '/^version =/ {print $2; exit}' pyproject.toml)
+          fi
+          if [ -z "$version" ]; then
+            echo "::error::Could not resolve version from pyproject.toml or workflow input."
+            exit 1
+          fi
+          # Validate against the WHOLE string (not line-by-line). `grep -qE`
+          # would pass an input like $'0.2.0\nmalicious=...' because grep
+          # matches per line; that could then write extra name=value pairs
+          # to $GITHUB_OUTPUT and let the attacker override `tag`. bash's
+          # `[[ =~ ]]` matches against the entire variable value, so any
+          # embedded control character (newline, CR, tab) fails the regex.
+          # Codex bot review on PR #33 (multiline-bypass P1).
+          # Allow prerelease AND build-metadata combined (e.g. 1.0.0-rc.1+build.5),
+          # matching SemVer and the `version_no_build` stripping below.
+          version_re='^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?(\+[A-Za-z0-9.-]+)?$'
+          if [[ ! "$version" =~ $version_re ]]; then
+            echo "::error::Version '$version' does not match required format X.Y.Z (with optional pre-release/build suffix), or contains forbidden control characters."
+            exit 1
+          fi
+          # Detect SemVer prereleases. Per SemVer §9, prerelease info is the
+          # part between the first `-` and any `+` (e.g. `1.0.0-rc.1+build`).
+          # Per SemVer §10, build metadata alone (`1.0.0+build-meta`) does NOT
+          # make a release a prerelease. Strip the build-metadata suffix first
+          # so a `-` inside it doesn't trigger a false positive.
+          version_no_build="${version%%+*}"
+          if [[ "$version_no_build" == *-* ]]; then
+            prerelease=true
+          else
+            prerelease=false
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "Resolved version=$version tag=v$version prerelease=$prerelease"
+
+      - name: Decide whether this push warrants a release
+        id: gate
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "Manual trigger — proceeding."
+            exit 0
+          fi
+          new="${{ steps.version.outputs.version }}"
+          # `github.event.before` is the tip of main BEFORE this push — robust across
+          # merge-commit, squash-merge, and rebase-merge. Falls back to empty when
+          # this is the first push to a fresh branch (BEFORE_SHA = 0000...).
+          if [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ] || [ -z "$BEFORE_SHA" ]; then
+            old=""
+          else
+            git fetch origin "$BEFORE_SHA" --depth=1 || true
+            old=$(git show "$BEFORE_SHA":pyproject.toml 2>/dev/null \
+              | awk -F'"' '/^version =/ {print $2; exit}' || true)
+          fi
+          if [ "$old" = "$new" ]; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "No version change vs $BEFORE_SHA (still $new) — skipping."
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "Version changed: ${old:-<none>} -> $new — proceeding."
+          fi
+
+      - name: Verify package versions are in sync
+        if: steps.gate.outputs.release == 'true'
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          pyproject=$(awk -F'"' '/^version =/ {print $2; exit}' pyproject.toml)
+          init=$(awk -F'"' '/^__version__ =/ {print $2; exit}' voyager/__init__.py)
+          if [ "$pyproject" != "$version" ] || [ "$init" != "$version" ]; then
+            echo "::error::Version pins out of sync. pyproject.toml=$pyproject voyager/__init__.py=$init expected=$version"
+            exit 1
+          fi
+          echo "Version pins in sync: $version."
+
+      - name: Verify tag/release state for this version
+        if: steps.gate.outputs.release == 'true'
+        id: state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ steps.version.outputs.tag }}"
+          # Prefer the peeled ref (refs/tags/X^{}) — for annotated tags this dereferences
+          # to the underlying commit SHA. Lightweight tags don't have a peeled ref, so
+          # fall back to the direct ref (which is already the commit SHA). Codex bot
+          # review on PR #33 — annotated-tag SHA comparison bug.
+          tag_sha=$(git ls-remote origin "refs/tags/${tag}^{}" 2>/dev/null | awk '{print $1; exit}')
+          if [ -z "$tag_sha" ]; then
+            tag_sha=$(git ls-remote origin "refs/tags/${tag}" 2>/dev/null | awk '{print $1; exit}')
+          fi
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Release $tag already exists — refusing to recreate."
+            exit 1
+          fi
+          if [ -n "$tag_sha" ]; then
+            if [ "$tag_sha" != "$GITHUB_SHA" ]; then
+              echo "::error::Tag $tag exists at $tag_sha but this run targets $GITHUB_SHA — manual recovery required."
+              exit 1
+            fi
+            echo "tag_exists=true" >> "$GITHUB_OUTPUT"
+            echo "Stranded tag found at expected SHA; will create the release against it."
+          else
+            echo "tag_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Extract CHANGELOG section
+        if: steps.gate.outputs.release == 'true'
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          # Match `## [<version>]` on its own line; print everything until
+          # the next `## [` heading. Strip the heading line itself so the
+          # release body starts with the section content.
+          awk -v v="$version" '
+            index($0, "## [" v "]") == 1 { in_section=1; next }
+            in_section && index($0, "## [") == 1 { exit }
+            in_section { print }
+          ' CHANGELOG.md > release-notes.md
+          # Trim leading blank lines.
+          sed -i '/./,$!d' release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::error::CHANGELOG.md has no '## [$version]' section — refusing to release."
+            exit 1
+          fi
+          echo "Release notes (${{ steps.version.outputs.tag }}):"
+          echo "---"
+          head -20 release-notes.md
+          echo "---"
+          echo "($(wc -l < release-notes.md) lines total)"
+
+      - name: Create tag + GitHub release
+        if: steps.gate.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Omit --latest entirely — `gh release create`'s documented default
+          # is "automatic based on date and version" (matches the SemVer-aware
+          # behavior we want). `--latest=auto` is not a valid value and would
+          # fail at release time. To opt out for a backport, an operator can
+          # later run `gh release edit vX.Y.Z --latest=false`.
+          #
+          # `--prerelease` is set for SemVer prereleases (e.g. v0.3.0-rc.1)
+          # per Codex bot PR #33 P2; build-metadata-only versions stay
+          # stable per SemVer §10.
+          extra_flags=()
+          if [ "${{ steps.version.outputs.prerelease }}" = "true" ]; then
+            extra_flags+=(--prerelease)
+          fi
+          if [ "${{ steps.state.outputs.tag_exists }}" = "true" ]; then
+            gh release create "${{ steps.version.outputs.tag }}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "${{ steps.version.outputs.tag }}" \
+              --notes-file release-notes.md \
+              --verify-tag \
+              "${extra_flags[@]}"
+          else
+            gh release create "${{ steps.version.outputs.tag }}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "${{ steps.version.outputs.tag }}" \
+              --notes-file release-notes.md \
+              "${extra_flags[@]}"
+          fi
+          echo "::notice::Released ${{ steps.version.outputs.tag }} from $GITHUB_SHA"
+
+      - name: Comment on commit if release failed
+        if: failure() && steps.gate.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          body=$(cat <<EOF
+          ❌ Voyager release workflow failed for tag \`${{ steps.version.outputs.tag }}\`.
+
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Common causes:
+          - CHANGELOG.md is missing a \`## [${{ steps.version.outputs.version }}]\` section
+          - \`pyproject.toml\` and \`voyager/__init__.py\` versions are out of sync
+          - Tag \`${{ steps.version.outputs.tag }}\` exists at a different SHA (manual recovery needed)
+
+          See [VOY-1810 §Pitfalls](https://github.com/iterwheel/voyager/blob/main/rules/VOY-1810-SOP-Release-Process.md) for recovery steps.
+          EOF
+          )
+          gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/comments" \
+            -f body="$body" || echo "(comment failed; release log is still the canonical record)"
