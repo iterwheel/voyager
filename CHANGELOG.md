@@ -8,6 +8,15 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+### Added — Wukong launchd bridge runbook ([#44](https://github.com/iterwheel/voyager/issues/44))
+
+- Added a repo-safe launchd plist template, Wukong env-file template, and
+  `VOY-1814` operator SOP for managing the Voyager bridge on
+  `127.0.0.1:8787`.
+- Documented private file locations, start/stop/restart/status/log-tail
+  commands, healthchecks, and rollback to a previous git tag while preserving
+  `DRY_RUN=false` plus app-specific repository allow-lists.
+
 ### Fixed — Clearance writeback failure visibility ([#45](https://github.com/iterwheel/voyager/issues/45))
 
 - Clearance now captures GitHub writeback failures, including
