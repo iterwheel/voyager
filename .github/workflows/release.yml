@@ -171,21 +171,25 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Omit --latest entirely — `gh release create`'s documented default
+          # is "automatic based on date and version" (matches the SemVer-aware
+          # behavior DeepSeek's panel review wanted). `--latest=auto` is not a
+          # valid value and would fail at release time. Codex bot review on
+          # PR #33. To opt out for a backport, an operator can later run
+          # `gh release edit vX.Y.Z --latest=false`.
           if [ "${{ steps.state.outputs.tag_exists }}" = "true" ]; then
             gh release create "${{ steps.version.outputs.tag }}" \
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
               --title "${{ steps.version.outputs.tag }}" \
               --notes-file release-notes.md \
-              --latest=auto \
               --verify-tag
           else
             gh release create "${{ steps.version.outputs.tag }}" \
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
               --title "${{ steps.version.outputs.tag }}" \
-              --notes-file release-notes.md \
-              --latest=auto
+              --notes-file release-notes.md
           fi
           echo "::notice::Released ${{ steps.version.outputs.tag }} from $GITHUB_SHA"
 
