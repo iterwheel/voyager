@@ -33,6 +33,14 @@ release note for the explicit migration path.
   metadata remains Blueprint-ready and overrides noisy weighted signals when
   provided.
 
+### Added — Managed repository canary expansion plan ([#48](https://github.com/iterwheel/voyager/issues/48))
+
+- Added `VOY-1816`, a staged canary expansion SOP that orders
+  `frankyxhl/babs` before `frankyxhl/screen-harness`, excludes
+  `frankyxhl/sweeping-monk`, and requires one repository per validation cycle.
+- Documented preflight checks, per-bot enablement, validation records, and
+  allow-list rollback steps without expanding Wukong production scope.
+
 ### Fixed — Clearance writeback failure visibility ([#45](https://github.com/iterwheel/voyager/issues/45))
 
 - Clearance now captures GitHub writeback failures, including
