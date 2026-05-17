@@ -271,21 +271,55 @@ The agent MUST perform these checks (or equivalents for non-GitHub-API
 runtimes) before reporting Phase 11 complete:
 
 ```bash
-# 1. Assemble the Related PR Set from issue cross-references
-gh issue list --state closed --search "<issue-number>" --json number,title
+# 1. Assemble the Related PR Set from issue cross-references (GraphQL)
+gh api graphql -F owner="iterwheel" -F repo="voyager" -F issue=<issue_number> \
+  -f query='
+    query($owner:String!, $repo:String!, $issue:Int!) {
+      repository(owner:$owner, name:$repo) {
+        issue(number:$issue) {
+          timelineItems(first:50, itemTypes:[CROSS_REFERENCED_EVENT, CLOSED_EVENT]) {
+            nodes {
+              ... on CrossReferencedEvent {
+                source { ... on PullRequest { number title state url } }
+              }
+              ... on ClosedEvent {
+                closer { ... on PullRequest { number title state url } }
+              }
+            }
+          }
+        }
+      }
+    }'
 
-# 2. For each PR in the set: fetch review threads
+# 2. For each PR in the set: fetch review threads (REST for discovery)
 gh api "/repos/iterwheel/voyager/pulls/{pr_number}/comments" \
   --jq '.[] | select(.in_reply_to_id == null) | {id, path, body, created_at, html_url}'
 
-# 3. For each thread: check resolution state
-gh api "/repos/iterwheel/voyager/pulls/{pr_number}/comments" \
-  --jq '[.[] | select(.in_reply_to_id != null) | .in_reply_to_id] | unique'
-# Compare thread root IDs against resolved reply IDs.
+# 3. For each thread: check resolved state (GraphQL isResolved)
+gh api graphql -F owner="iterwheel" -F repo="voyager" -F pr=<pr_number> \
+  -f query='
+    query($owner:String!, $repo:String!, $pr:Int!) {
+      repository(owner:$owner, name:$repo) {
+        pullRequest(number:$pr) {
+          reviewThreads(first:100) {
+            nodes {
+              isResolved
+              path
+              comments(first:1) { nodes { body } }
+            }
+          }
+        }
+      }
+    }' --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)'
 
 # 4. Cross-reference: check PR bodies/comments for mentions of other PRs
 gh pr view {pr_number} --json body,comments
 ```
+
+> **Note:** The REST API's `in_reply_to_id` field signals reply linkage, not
+> resolution state. A thread with replies may still be unresolved, and a thread
+> resolved via the GitHub UI (Resolve button) may have zero replies. Use check
+> #3 (GraphQL `isResolved`) as the authoritative resolution gate.
 
 If a runtime cannot execute these checks (e.g., no GitHub CLI access), the
 agent MUST explicitly record the limitation and report it as an open
