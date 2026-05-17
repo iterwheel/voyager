@@ -165,6 +165,7 @@ def test_ready_for_approval_panel_does_not_wait_on_skipped_author(monkeypatch) -
         "already_requested": [],
         "planned": [],
         "skipped_author": ["pr-author"],
+        "author_only_deadlock": True,
     }
 
     comment = build_clearance_comment(
@@ -180,9 +181,45 @@ def test_ready_for_approval_panel_does_not_wait_on_skipped_author(monkeypatch) -
 
     assert "👤 Review: skipped PR author @pr-author" in comment
     assert "⏳ Approval: waiting for eligible reviewer" in comment
-    assert "Next: request review from an eligible non-author reviewer." in comment
+    assert "⚠️ Warning: @pr-author is the only configured reviewer" in comment
+    assert "`VOYAGER_CLEARANCE_REVIEW_REQUEST_USERS`" in comment
+    assert "Next: add a non-author configured reviewer" in comment
     assert "Approval: waiting for @pr-author" not in comment
     assert "Next: @pr-author review + approve." not in comment
+    assert "Stage: 4" not in comment
+
+
+def test_ready_for_approval_panel_does_not_show_false_deadlock(monkeypatch) -> None:
+    from voyager.bots.clearance.constants import reset_review_request_users_cache
+    from voyager.bots.clearance.enrichment import build_clearance_comment
+
+    monkeypatch.setenv("VOYAGER_CLEARANCE_REVIEW_REQUEST_USERS", "pr-author,eligible-reviewer")
+    reset_review_request_users_cache()
+    review_request = {
+        "enabled": True,
+        "applied": True,
+        "requested": ["eligible-reviewer"],
+        "already_requested": [],
+        "planned": [],
+        "skipped_author": ["pr-author"],
+        "author_only_deadlock": False,
+    }
+
+    comment = build_clearance_comment(
+        _evaluation(
+            status="clearance_ready_for_approval",
+            label="clearance-3-ready-for-approval",
+            current_approvals=["someone-else"],
+        ),
+        automation=_automation(),
+        review_request=review_request,
+        provenance={"updated_at": "2026-05-17T00:00:00Z"},
+    )
+
+    assert "👤 Review: requested @eligible-reviewer; skipped PR author @pr-author" in comment
+    assert "⏳ Approval: waiting for @eligible-reviewer" in comment
+    assert "Next: @eligible-reviewer review + approve." in comment
+    assert "only configured reviewer" not in comment
 
 
 def test_compact_comment_details_include_debug_diagnostics() -> None:

@@ -163,11 +163,29 @@ def _automation_status_line(automation: dict[str, Any] | None) -> str:
     )
 
 
+def _author_only_deadlock_warning(review_request: dict[str, Any] | None) -> str | None:
+    if not review_request or not review_request.get("author_only_deadlock"):
+        return None
+    skipped = review_request.get("skipped_author") or []
+    who = format_user_list(skipped) if skipped else "the PR author"
+    return (
+        f"⚠️ Warning: {who} is the only configured reviewer, but PR authors cannot "
+        "approve their own PRs. To unblock, add another configured reviewer, request "
+        "an eligible non-author reviewer, or update "
+        "`VOYAGER_CLEARANCE_REVIEW_REQUEST_USERS`."
+    )
+
+
 def _next_action(evaluation: ClearanceEvaluation, review_request: dict[str, Any] | None) -> str:
     status = evaluation["status"]
     if status == "clearance_ready":
         return "Next: merge when the repository's normal merge gates are satisfied."
     if status == "clearance_ready_for_approval":
+        if review_request and review_request.get("author_only_deadlock"):
+            return (
+                "Next: add a non-author configured reviewer or update "
+                "`VOYAGER_CLEARANCE_REVIEW_REQUEST_USERS`, then rerun Clearance."
+            )
         targets = (
             _review_request_users(review_request)
             if review_request is not None
@@ -250,6 +268,17 @@ async def _dispatch_review_request(
         else:
             to_request.append(user)
 
+    author_only_deadlock = bool(skipped_author) and not to_request and not already
+    if author_only_deadlock:
+        _log.warning(
+            "clearance.review_request: author-only reviewer deadlock "
+            "repository=%s pr_number=%s configured_users=%s pr_author=%s",
+            repository,
+            pr_number,
+            list(configured_users),
+            pr_author,
+        )
+
     if dry_run_enabled():
         result: dict[str, Any] = {
             "enabled": True,
@@ -257,6 +286,7 @@ async def _dispatch_review_request(
             "planned": to_request,
             "already_requested": already,
             "skipped_author": skipped_author,
+            "author_only_deadlock": author_only_deadlock,
             "reason": "dry-run",
         }
         _log.info(
@@ -293,6 +323,7 @@ async def _dispatch_review_request(
                     "requested": [],
                     "already_requested": already + to_request,
                     "skipped_author": skipped_author,
+                    "author_only_deadlock": False,
                     "reason": "already requested (422 race)",
                 }
                 _log.info(
@@ -316,6 +347,7 @@ async def _dispatch_review_request(
                 "planned": to_request,
                 "already_requested": already,
                 "skipped_author": skipped_author,
+                "author_only_deadlock": False,
                 "reason": f"API request failed ({exc.__class__.__name__})",
             }
             _log.info(
@@ -340,6 +372,7 @@ async def _dispatch_review_request(
                 "planned": to_request,
                 "already_requested": already,
                 "skipped_author": skipped_author,
+                "author_only_deadlock": False,
                 "reason": f"API request failed ({exc.__class__.__name__})",
             }
             _log.info(
@@ -359,6 +392,7 @@ async def _dispatch_review_request(
         "requested": to_request,
         "already_requested": already,
         "skipped_author": skipped_author,
+        "author_only_deadlock": author_only_deadlock,
     }
     _log.info(
         "clearance.review_request: applied=%s requested=%s already=%s skipped_author=%s reason=%s",
@@ -382,6 +416,7 @@ def build_clearance_comment(
     stage_number, stage_name, fallback_label = _stage_metadata(evaluation)
     selected_label = _selected_label(evaluation) or fallback_label
     reasons = evaluation["confidence"]["reasons"]
+    warning = _author_only_deadlock_warning(review_request)
 
     lines = [
         CLEARANCE_COMMENT_MARKER,
@@ -392,22 +427,28 @@ def build_clearance_comment(
         _threads_status_line(evaluation),
         _approval_status_line(evaluation, review_request),
         _automation_status_line(automation),
-        "",
-        _next_action(evaluation, review_request),
-        "",
-        "<details>",
-        "<summary>Details</summary>",
-        "",
-        f"- Classifier: {evaluation.get('classifier', CLEARANCE_CLASSIFIER_VERSION)}",
-        f"- Status: {evaluation['status'].replace('_', '-')}",
-        f"- Selected label: `{selected_label}`",
-        f"- Current approvals: {format_user_list(review_state['current_approvals'])}",
-        f"- Stale approvals: {format_user_list(review_state['stale_approvals'])}",
-        f"- Changes requested: {format_user_list(review_state['blocking_reviewers'])}",
-        f"- Unresolved threads: {review_state['unresolved_thread_count']}",
-        f"- Automation: {_automation_details(automation)}",
-        f"- Last updated: {_last_updated_line(provenance)}",
     ]
+    if warning:
+        lines.append(warning)
+    lines.extend(
+        [
+            "",
+            _next_action(evaluation, review_request),
+            "",
+            "<details>",
+            "<summary>Details</summary>",
+            "",
+            f"- Classifier: {evaluation.get('classifier', CLEARANCE_CLASSIFIER_VERSION)}",
+            f"- Status: {evaluation['status'].replace('_', '-')}",
+            f"- Selected label: `{selected_label}`",
+            f"- Current approvals: {format_user_list(review_state['current_approvals'])}",
+            f"- Stale approvals: {format_user_list(review_state['stale_approvals'])}",
+            f"- Changes requested: {format_user_list(review_state['blocking_reviewers'])}",
+            f"- Unresolved threads: {review_state['unresolved_thread_count']}",
+            f"- Automation: {_automation_details(automation)}",
+            f"- Last updated: {_last_updated_line(provenance)}",
+        ]
+    )
     if evaluation.get("head_sha"):
         lines.append(f"- Head SHA: `{evaluation['head_sha']}`")
     if reasons:

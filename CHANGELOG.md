@@ -8,6 +8,17 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+### Changed — Clearance author-only reviewer deadlock warning ([#28](https://github.com/iterwheel/voyager/issues/28))
+
+- Clearance now surfaces an explicit readiness-panel warning when the only
+  configured review-request user is also the PR author. The PR remains at
+  `clearance-3-ready-for-approval`, and the panel tells operators to add or
+  request an eligible non-author configured reviewer or update
+  `VOYAGER_CLEARANCE_REVIEW_REQUEST_USERS`.
+- The review-request dispatcher logs the author-only reviewer deadlock with
+  repository, PR number, configured users, and PR author so operators can
+  diagnose the misconfiguration server-side.
+
 ### Changed — Clearance readiness panel ([#30](https://github.com/iterwheel/voyager/issues/30))
 
 - Clearance PR-level readiness comments now use the existing marker with

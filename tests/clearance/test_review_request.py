@@ -221,6 +221,66 @@ async def test_pr_author_in_configured_list_is_skipped(monkeypatch) -> None:
     assert "pr-author" in comment_body
 
 
+async def test_author_only_configured_reviewer_warns_and_does_not_request(
+    monkeypatch, caplog
+) -> None:
+    import logging
+
+    from voyager.bots.clearance.constants import reset_review_request_users_cache
+
+    monkeypatch.setenv("VOYAGER_CLEARANCE_REVIEW_REQUEST_USERS", "pr-author")
+    monkeypatch.setenv("DRY_RUN", "false")
+    reset_review_request_users_cache()
+    caplog.set_level(logging.WARNING, logger="voyager.bots.clearance.enrichment")
+
+    client = _StubClient(reviews=[_approval(login="someone-else")])
+    result = await _run_enrich(client, _base_route())
+
+    assert result["validation"]["status"] == "clearance_ready_for_approval"
+    assert client._request_reviewers_calls == []
+
+    comment_body = result["writeback"]["comment_body"]
+    assert "⚠️ Warning: @pr-author is the only configured reviewer" in comment_body
+    assert "`VOYAGER_CLEARANCE_REVIEW_REQUEST_USERS`" in comment_body
+    assert "Next: add a non-author configured reviewer" in comment_body
+    assert "clearance-3-ready-for-approval" in comment_body
+    assert "clearance-4-ready-for-merge" not in comment_body
+
+    log_text = "\n".join(record.getMessage() for record in caplog.records)
+    assert "author-only reviewer deadlock" in log_text
+    assert "repository=iterwheel/voyager" in log_text
+    assert "pr_number=77" in log_text
+    assert "configured_users=['pr-author']" in log_text
+    assert "pr_author=pr-author" in log_text
+
+
+async def test_multi_reviewer_author_skip_requests_eligible_without_deadlock(
+    monkeypatch, caplog
+) -> None:
+    import logging
+
+    from voyager.bots.clearance.constants import reset_review_request_users_cache
+
+    monkeypatch.setenv("VOYAGER_CLEARANCE_REVIEW_REQUEST_USERS", "pr-author,eligible-reviewer")
+    monkeypatch.setenv("DRY_RUN", "false")
+    reset_review_request_users_cache()
+    caplog.set_level(logging.WARNING, logger="voyager.bots.clearance.enrichment")
+
+    client = _StubClient(reviews=[_approval(login="someone-else")])
+    result = await _run_enrich(client, _base_route())
+
+    requested = [u for call in client._request_reviewers_calls for u in call["reviewers"]]
+    assert requested == ["eligible-reviewer"]
+
+    comment_body = result["writeback"]["comment_body"]
+    assert "requested @eligible-reviewer" in comment_body
+    assert "skipped PR author @pr-author" in comment_body
+    assert "only configured reviewer" not in comment_body
+
+    log_text = "\n".join(record.getMessage() for record in caplog.records)
+    assert "author-only reviewer deadlock" not in log_text
+
+
 # ---------------------------------------------------------------------------
 # User already in requested_reviewers → already_requested
 # ---------------------------------------------------------------------------
