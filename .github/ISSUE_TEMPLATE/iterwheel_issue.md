@@ -9,7 +9,11 @@ labels: ["blueprint-needed"]
 
 <!--
 Describe the work in one short sentence.
+-->
 
+## Stack Metadata
+
+<!--
 Optional Stack metadata helps Stack avoid ambiguous weighted classification.
 Leave blank when unsure.
 
