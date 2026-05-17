@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -13,8 +14,12 @@ from voyager.core.writeback import dry_run_enabled
 from .constants import (
     CHECKBOX_ACTION_LABELS,
     CLEARANCE_AGENT_SLUG,
+    CLEARANCE_BLOCKED_LABEL,
     CLEARANCE_CLASSIFIER_VERSION,
     CLEARANCE_COMMENT_MARKER,
+    CLEARANCE_PENDING_LABEL,
+    CLEARANCE_READY_FOR_APPROVAL_LABEL,
+    CLEARANCE_READY_LABEL,
     configured_review_request_users,
 )
 from .evaluation import ClearanceEvaluation, evaluate_clearance_snapshot
@@ -52,6 +57,168 @@ def one_line(value: Any, *, limit: int = 260) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 3].rstrip() + "..."
+
+
+_STAGE_BY_STATUS: dict[str, tuple[int, str, str]] = {
+    "clearance_pending": (1, "Pending", CLEARANCE_PENDING_LABEL),
+    "clearance_blocked": (2, "Blocked", CLEARANCE_BLOCKED_LABEL),
+    "clearance_ready_for_approval": (
+        3,
+        "Ready for approval",
+        CLEARANCE_READY_FOR_APPROVAL_LABEL,
+    ),
+    "clearance_ready": (4, "Ready for merge", CLEARANCE_READY_LABEL),
+}
+
+
+def _selected_label(evaluation: ClearanceEvaluation) -> str:
+    labels = evaluation.get("labels") or {}
+    add_labels = labels.get("add") or []
+    if add_labels:
+        return str(add_labels[0])
+    return _stage_metadata(evaluation)[2]
+
+
+def _stage_metadata(evaluation: ClearanceEvaluation) -> tuple[int, str, str]:
+    status = evaluation["status"]
+    return _STAGE_BY_STATUS.get(status, (0, status.replace("_", " ").title(), "unknown"))
+
+
+def _review_request_users(review_request: dict[str, Any] | None) -> list[str]:
+    if not review_request:
+        return []
+    users: list[str] = []
+    seen: set[str] = set()
+    for key in ("requested", "already_requested", "planned"):
+        for user in review_request.get(key) or []:
+            normalized = str(user).lower()
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            users.append(str(user))
+    return users
+
+
+def _review_status_line(
+    evaluation: ClearanceEvaluation, review_request: dict[str, Any] | None
+) -> str:
+    review_state = evaluation["review_state"]
+    if review_request:
+        return f"👤 Review: {format_review_request_status(review_request)}"
+    if review_state["blocking_reviewers"]:
+        return f"❌ Review: changes requested by {format_user_list(review_state['blocking_reviewers'])}"
+    if review_state["current_approvals"]:
+        return f"✅ Review: approved by {format_user_list(review_state['current_approvals'])}"
+    configured = list(configured_review_request_users())
+    if evaluation["status"] == "clearance_ready_for_approval" and configured:
+        return f"⏳ Review: waiting for {format_user_list(configured)}"
+    return "⏳ Review: no current approval"
+
+
+def _threads_status_line(evaluation: ClearanceEvaluation) -> str:
+    count = int(evaluation["review_state"]["unresolved_thread_count"])
+    if count == 0:
+        return "✅ Threads: 0 unresolved"
+    return f"❌ Threads: {count} unresolved"
+
+
+def _approval_status_line(
+    evaluation: ClearanceEvaluation, review_request: dict[str, Any] | None
+) -> str:
+    review_state = evaluation["review_state"]
+    current_approvals = review_state["current_approvals"]
+    status = evaluation["status"]
+    if status == "clearance_ready":
+        return f"✅ Approval: current from {format_user_list(current_approvals)}"
+    if status == "clearance_ready_for_approval":
+        targets = (
+            _review_request_users(review_request)
+            if review_request is not None
+            else list(configured_review_request_users())
+        )
+        if targets:
+            return f"⏳ Approval: waiting for {format_user_list(targets)}"
+        return "⏳ Approval: waiting for eligible reviewer"
+    if review_state["blocking_reviewers"]:
+        return f"❌ Approval: blocked by {format_user_list(review_state['blocking_reviewers'])}"
+    if current_approvals:
+        return f"✅ Approval: current from {format_user_list(current_approvals)}"
+    return "⏳ Approval: waiting"
+
+
+def _automation_status_line(automation: dict[str, Any] | None) -> str:
+    if not automation or not automation.get("enabled"):
+        return "⏳ Automation: not run"
+    status = str(automation.get("status") or "unknown")
+    icon = (
+        "✅"
+        if status in {"ready", "ready_with_low_priority"}
+        else "❌"
+        if status in {"blocked", "error"}
+        else "⏳"
+    )
+    return (
+        f"{icon} Automation: {status.replace('_', ' ')}; "
+        f"thread sync actions: {automation.get('sync_actions_count', 0)}"
+    )
+
+
+def _next_action(evaluation: ClearanceEvaluation, review_request: dict[str, Any] | None) -> str:
+    status = evaluation["status"]
+    if status == "clearance_ready":
+        return "Next: merge when the repository's normal merge gates are satisfied."
+    if status == "clearance_ready_for_approval":
+        targets = (
+            _review_request_users(review_request)
+            if review_request is not None
+            else list(configured_review_request_users())
+        )
+        if not targets:
+            return (
+                "Next: request review from an eligible non-author reviewer. After approval, "
+                "Clearance should move to Stage 4 - Ready for merge."
+            )
+        who = format_user_list(targets)
+        return (
+            f"Next: {who} review + approve. After approval, Clearance should move to "
+            "Stage 4 - Ready for merge."
+        )
+    if status == "clearance_blocked":
+        return "Next: resolve the blocking review state, then rerun Clearance."
+    return "Next: wait for pending signals or rerun Clearance when the PR state changes."
+
+
+def _last_updated_line(provenance: dict[str, Any] | None) -> str:
+    provenance = provenance or {}
+    updated_at = str(provenance.get("updated_at") or "")
+    if not updated_at:
+        updated_at = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    event = str(provenance.get("event") or "")
+    action = str(provenance.get("action") or "")
+    delivery = str(provenance.get("delivery_id") or "")
+
+    parts = [updated_at]
+    if event:
+        via = event + (f".{action}" if action else "")
+        parts.append(f"via {via}")
+    if delivery:
+        parts.append(f"delivery {delivery}")
+    return " ".join(parts)
+
+
+def _automation_details(automation: dict[str, Any] | None) -> str:
+    if not automation or not automation.get("enabled"):
+        return "not run; thread sync actions: 0"
+    parts = [
+        str(automation.get("status") or "unknown"),
+        f"thread sync actions: {automation.get('sync_actions_count', 0)}",
+    ]
+    if "dry_run" in automation:
+        parts.append(f"dry-run: {str(bool(automation.get('dry_run'))).lower()}")
+    reason = automation.get("reason")
+    if reason:
+        parts.append(f"reason: {one_line(reason, limit=180)}")
+    return "; ".join(parts)
 
 
 async def _dispatch_review_request(
@@ -209,31 +376,46 @@ def build_clearance_comment(
     automation: dict[str, Any] | None = None,
     *,
     review_request: dict[str, Any] | None = None,
+    provenance: dict[str, Any] | None = None,
 ) -> str:
     review_state = evaluation["review_state"]
+    stage_number, stage_name, fallback_label = _stage_metadata(evaluation)
+    selected_label = _selected_label(evaluation) or fallback_label
+    reasons = evaluation["confidence"]["reasons"]
+
     lines = [
         CLEARANCE_COMMENT_MARKER,
-        "Clearance review readiness",
+        "## Clearance",
         "",
-        f"Classifier: {evaluation.get('classifier', CLEARANCE_CLASSIFIER_VERSION)}",
+        f"🚦 Stage: {stage_number} - {stage_name} (`{selected_label}`)",
+        _review_status_line(evaluation, review_request),
+        _threads_status_line(evaluation),
+        _approval_status_line(evaluation, review_request),
+        _automation_status_line(automation),
         "",
-        f"Status: {evaluation['status'].replace('_', '-')}",
+        _next_action(evaluation, review_request),
         "",
-        evaluation["summary"],
+        "<details>",
+        "<summary>Details</summary>",
         "",
-        "Signals:",
+        f"- Classifier: {evaluation.get('classifier', CLEARANCE_CLASSIFIER_VERSION)}",
+        f"- Status: {evaluation['status'].replace('_', '-')}",
+        f"- Selected label: `{selected_label}`",
         f"- Current approvals: {format_user_list(review_state['current_approvals'])}",
         f"- Stale approvals: {format_user_list(review_state['stale_approvals'])}",
         f"- Changes requested: {format_user_list(review_state['blocking_reviewers'])}",
-        f"- Unresolved review threads: {review_state['unresolved_thread_count']}",
+        f"- Unresolved threads: {review_state['unresolved_thread_count']}",
+        f"- Automation: {_automation_details(automation)}",
+        f"- Last updated: {_last_updated_line(provenance)}",
     ]
-    reasons = evaluation["confidence"]["reasons"]
+    if evaluation.get("head_sha"):
+        lines.append(f"- Head SHA: `{evaluation['head_sha']}`")
     if reasons:
-        lines.extend(["", "Reasons:"])
+        lines.append("- Reasons:")
         lines.extend(f"- {reason}" for reason in reasons)
     if review_request:
-        lines.extend(["", f"Review request: {format_review_request_status(review_request)}"])
-    if automation and automation.get("enabled"):
+        lines.append(f"- Review request: {format_review_request_status(review_request)}")
+    if automation and automation.get("enabled") and automation.get("tick"):
         approve = automation.get("approve") or {}
         tick = automation.get("tick") or {}
         approval_status = (
@@ -276,7 +458,9 @@ def build_clearance_comment(
                 )
         if approve.get("reason"):
             lines.append(f"- Approval reason: {approve['reason']}")
-    lines.extend(["", evaluation["confidence"]["semantic_fix_note"]])
+    if evaluation["confidence"].get("semantic_fix_note"):
+        lines.append(f"- Note: {evaluation['confidence']['semantic_fix_note']}")
+    lines.extend(["", "</details>"])
     return "\n".join(lines).strip()
 
 
@@ -314,9 +498,16 @@ async def enrich_clearance_route(
         enriched["automation"] = {"swm_clearance": automation}
     enriched["writeback"] = {
         "comment_marker": CLEARANCE_COMMENT_MARKER,
-        "comment_mode": "append",
+        "comment_mode": "upsert",
         "comment_body": build_clearance_comment(
-            evaluation, automation, review_request=review_request
+            evaluation,
+            automation,
+            review_request=review_request,
+            provenance={
+                "event": route.get("event"),
+                "action": route.get("action"),
+                "delivery_id": route.get("delivery_id"),
+            },
         ),
         "labels": evaluation["labels"],
         "reactions": evaluation["reactions"],

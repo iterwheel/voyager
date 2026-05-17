@@ -3,6 +3,8 @@
 *.swo
 .idea/
 .vscode/
+.claude/
+.trinity/
 
 # Python
 __pycache__/
@@ -43,3 +45,6 @@ sessions/
 dist/
 build/
 *.whl
+
+# Local uv resolver output
+uv.lock

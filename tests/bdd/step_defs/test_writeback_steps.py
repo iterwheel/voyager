@@ -113,6 +113,7 @@ class WritebackState:
     captured: list[httpx.Request] = field(default_factory=list)
     responses: list[httpx.Response] = field(default_factory=list)
     result: dict[str, Any] | None = None
+    results: list[dict[str, Any]] = field(default_factory=list)
     dry_run_env: str = "true"
 
 
@@ -187,6 +188,74 @@ def given_client_upsert_comment() -> WritebackState:
         ),
     ]
     s.client = _build_client(s.apps, s.responses, s.captured)
+    return s
+
+
+class _InMemoryCommentClient:
+    def __init__(self) -> None:
+        self.comments: list[dict[str, Any]] = []
+        self.upsert_calls: list[dict[str, Any]] = []
+        self.create_calls: list[dict[str, Any]] = []
+
+    async def upsert_issue_comment(
+        self,
+        app_slug: str,
+        repo: str,
+        issue_number: int,
+        *,
+        marker: str,
+        body: str,
+    ) -> dict[str, Any]:
+        self.upsert_calls.append(
+            {
+                "app_slug": app_slug,
+                "repo": repo,
+                "issue_number": issue_number,
+                "marker": marker,
+                "body": body,
+            }
+        )
+        for comment in self.comments:
+            if marker in str(comment.get("body") or ""):
+                comment["body"] = body
+                return dict(comment)
+        comment = {
+            "id": len(self.comments) + 1,
+            "body": body,
+            "html_url": f"https://github.test/{repo}/issues/{issue_number}#issuecomment-1",
+        }
+        self.comments.append(comment)
+        return dict(comment)
+
+    async def create_issue_comment(
+        self,
+        app_slug: str,
+        repo: str,
+        issue_number: int,
+        *,
+        body: str,
+    ) -> dict[str, Any]:
+        self.create_calls.append(
+            {
+                "app_slug": app_slug,
+                "repo": repo,
+                "issue_number": issue_number,
+                "body": body,
+            }
+        )
+        comment = {
+            "id": len(self.comments) + 1,
+            "body": body,
+            "html_url": f"https://github.test/{repo}/issues/{issue_number}#issuecomment-new",
+        }
+        self.comments.append(comment)
+        return dict(comment)
+
+
+@given("an in-memory writeback client for clearance comments", target_fixture="state")
+def given_in_memory_clearance_comments() -> WritebackState:
+    s = WritebackState()
+    s.client = _InMemoryCommentClient()
     return s
 
 
@@ -335,6 +404,37 @@ def when_apply_writeback_none_repo(state: WritebackState) -> WritebackState:
         state.result = asyncio.run(
             apply_route_writeback(state.client, state.route, repository=None)
         )
+    finally:
+        if old is None:
+            os.environ.pop("DRY_RUN", None)
+        else:
+            os.environ["DRY_RUN"] = old
+    return state
+
+
+@when(
+    parsers.parse(
+        'apply_route_writeback is called twice with updated comment body "{body}" for repository "{repository}"'
+    ),
+    target_fixture="state",
+)
+def when_apply_writeback_twice_with_updated_comment(
+    state: WritebackState, body: str, repository: str
+) -> WritebackState:
+    import asyncio
+
+    from voyager.core.writeback import apply_route_writeback  # lazy
+
+    old = os.environ.get("DRY_RUN")
+    os.environ["DRY_RUN"] = state.dry_run_env
+    try:
+        first = asyncio.run(apply_route_writeback(state.client, state.route, repository=repository))
+        state.route["writeback"]["comment_body"] = body
+        second = asyncio.run(
+            apply_route_writeback(state.client, state.route, repository=repository)
+        )
+        state.results = [first, second]
+        state.result = second
     finally:
         if old is None:
             os.environ.pop("DRY_RUN", None)
@@ -540,6 +640,21 @@ def then_post_comment_direct(state: WritebackState) -> None:
         f"Unexpected GET requests in append mode: {[(r.method, str(r.url)) for r in gets]}"
     )
     assert posts, f"No POST comment request: {[(r.method, str(r.url)) for r in non_token]}"
+
+
+@then("exactly one in-memory comment exists")
+def then_one_in_memory_comment(state: WritebackState) -> None:
+    assert len(state.client.comments) == 1, f"comments={state.client.comments!r}"
+
+
+@then(parsers.parse('the in-memory comment body is "{body}"'))
+def then_in_memory_comment_body(state: WritebackState, body: str) -> None:
+    assert state.client.comments[0]["body"] == body, f"comments={state.client.comments!r}"
+
+
+@then("no direct append comments were created")
+def then_no_direct_append_comments(state: WritebackState) -> None:
+    assert state.client.create_calls == [], f"create_calls={state.client.create_calls!r}"
 
 
 @then(parsers.parse('the result reason mentions "{text}"'))

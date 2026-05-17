@@ -42,6 +42,15 @@ Feature: apply_route_writeback — write GitHub labels/reactions/comments
     Then the result has applied true
     And the result comment_url is set
 
+  Scenario: Repeated Clearance readiness triggers update the same PR-level marker comment
+    Given an in-memory writeback client for clearance comments
+    And a route for "iterwheel-clearance" on issue 42 with comment body "<!-- iterwheel:clearance-readiness --> First" marker "<!-- iterwheel:clearance-readiness -->" mode "upsert"
+    And DRY_RUN is "false"
+    When apply_route_writeback is called twice with updated comment body "<!-- iterwheel:clearance-readiness --> Second" for repository "iterwheel/voyager-sandbox"
+    Then exactly one in-memory comment exists
+    And the in-memory comment body is "<!-- iterwheel:clearance-readiness --> Second"
+    And no direct append comments were created
+
   Scenario: comment_mode append invokes create_issue_comment path
     Given a writeback client with a recording transport for append comment
     And a route for "iterwheel-blueprint" on issue 42 with comment body "Hello" marker "" mode "append"

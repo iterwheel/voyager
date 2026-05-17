@@ -127,6 +127,15 @@ async def test_empty_env_review_request_disabled() -> None:
     assert "Review request:" not in comment_body
 
 
+async def test_clearance_readiness_comment_uses_upsert_mode() -> None:
+    client = _StubClient(
+        reviews=[_approval(login="some-approver")],
+    )
+    result = await _run_enrich(client, _base_route())
+    assert result["writeback"]["comment_marker"] == "<!-- iterwheel:clearance-readiness -->"
+    assert result["writeback"]["comment_mode"] == "upsert"
+
+
 # ---------------------------------------------------------------------------
 # Non-ready_for_approval state → no dispatch
 # ---------------------------------------------------------------------------

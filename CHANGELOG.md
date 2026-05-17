@@ -6,6 +6,19 @@ versions follow [SemVer](https://semver.org/spec/v2.0.0.html). Pre-1.0,
 minor bumps may still include surface-level breaking changes — see each
 release note for the explicit migration path.
 
+## [Unreleased]
+
+### Changed — Clearance readiness panel ([#30](https://github.com/iterwheel/voyager/issues/30))
+
+- Clearance PR-level readiness comments now use the existing marker with
+  `comment_mode = "upsert"`, so repeated `/clearance`, PR, review, and
+  CI/webhook triggers update one status panel instead of appending new
+  top-level comments.
+- The readiness comment is now a compact emoji status panel with numbered
+  stage/label, review-request status, thread/approval/automation summary,
+  concise next action, and diagnostics inside `<details>`.
+- Stage 1.5 review-thread evidence replies remain inline and append-only.
+
 ## [0.2.0] — 2026-05-17
 
 ### Added — Numbered Clearance readiness labels ([#25](https://github.com/iterwheel/voyager/issues/25), [#26](https://github.com/iterwheel/voyager/pull/26))

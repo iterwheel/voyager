@@ -280,10 +280,11 @@ async def _process_route_writebacks(
     # shapes that vary between apply / stale-skip / error paths.
     pr_number = _extract_pr_number_from_payload(payload)
     for route in routes:
+        route_for_writeback = {**route, "delivery_id": delivery_id}
         try:
             result = await dispatch_route_writeback(
                 client,
-                route,
+                route_for_writeback,
                 repository=repository,
                 store=store,
                 default_profile_name=default_profile_name,
