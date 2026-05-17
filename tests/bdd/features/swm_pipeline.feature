@@ -51,13 +51,18 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     Then the sync actions count is 1
     And no in-thread reply was posted
 
-  Scenario: resolveReviewThread mutation failure suppresses the in-thread reply (Codex PR #9 P2 fix)
+  Scenario: resolveReviewThread mutation failure captures structured metadata and suppresses the in-thread reply (CHG-1813)
     Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with substantive author reply and isResolved false
-    And the stub GitHubAppClient fails on the resolveReviewThread mutation
+    And the stub GitHubAppClient fails on the resolveReviewThread mutation with an HTTP error
     When compute_clearance_automation runs with DRY_RUN false
-    Then the pipeline raised an exception
+    Then the automation status is "error"
     And exactly 1 resolveReviewThread mutation was invoked
     And no in-thread reply was posted
+    And the automation has writeback failure metadata
+    And the automation writeback failure count is 1
+    And the automation writeback failure reason starts with "1 writeback operation failed"
+    And the Stage 1.5 action result has applied false with operation "resolveReviewThread"
+    And the thread GitHub state was not mutated
 
   Scenario: State C thread with non-substantive reply produces OPEN → blocked
     Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with a short ack reply and isResolved false
@@ -497,3 +502,44 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     When compute_clearance_automation runs with DRY_RUN false
     Then the automation status is "ready"
     And exactly 1 resolveReviewThread mutation was invoked
+
+  # ---------------------------------------------------------------------------
+  # CHG-1813: writeback failure capture from Stage 1.5
+  # ---------------------------------------------------------------------------
+
+  Scenario: CHG-1813 HTTPStatusError on resolveReviewThread — structured failure metadata captured
+    Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with substantive author reply and isResolved false
+    And the stub GitHubAppClient fails on the resolveReviewThread mutation with HTTPStatusError 403
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "error"
+    And exactly 1 resolveReviewThread mutation was invoked
+    And no in-thread reply was posted
+    And the automation has writeback failure metadata
+    And the automation writeback failure count is 1
+    And the Stage 1.5 action result has applied false with operation "resolveReviewThread"
+    And the thread GitHub state was not mutated
+
+  Scenario: CHG-1813 GraphQL permission error on resolveReviewThread — structured failure metadata captured
+    Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with substantive author reply and isResolved false
+    And the stub GitHubAppClient fails on the resolveReviewThread mutation with a GraphQL error
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "error"
+    And exactly 1 resolveReviewThread mutation was invoked
+    And no in-thread reply was posted
+    And the automation has writeback failure metadata
+    And the Stage 1.5 action result error_class is "GraphQLError"
+
+  Scenario: CHG-1813 TimeoutError on resolveReviewThread — structured failure metadata captured
+    Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with substantive author reply and isResolved false
+    And the stub GitHubAppClient fails on the resolveReviewThread mutation with a TimeoutError
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "error"
+    And the automation has writeback failure metadata
+    And the Stage 1.5 action result error_class is "TimeoutError"
+
+  Scenario: CHG-1813 Successful resolve produces no writeback failure keys
+    Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with substantive author reply and isResolved false
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "ready"
+    And the automation has no writeback failure metadata
+    And exactly 1 in-thread reply was posted under the Codex review comment

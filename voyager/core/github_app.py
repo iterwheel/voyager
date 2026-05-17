@@ -11,6 +11,23 @@ import jwt
 
 _log = logging.getLogger(__name__)
 
+
+class GitHubGraphQLError(Exception):
+    """Raised when a GitHub GraphQL response contains ``data.errors``.
+
+    The display message is sanitised — callers should use typed fields
+    (``errors`` list, ``message``) rather than ``str(exc)`` for
+    GitHub-visible diagnostics.
+    """
+
+    def __init__(self, errors: list[dict[str, Any]]) -> None:
+        self.errors = errors
+        # Sanitised summary — never include raw payload in str()
+        n = len(errors)
+        first_type = (errors[0] if errors else {}).get("type", "unknown")
+        super().__init__(f"GitHub GraphQL returned {n} error(s); first type: {first_type}")
+
+
 GITHUB_API = "https://api.github.com"
 GITHUB_API_VERSION = "2022-11-28"
 
@@ -180,7 +197,7 @@ class GitHubAppClient:
         response.raise_for_status()
         data = response.json()
         if data.get("errors"):
-            raise RuntimeError(f"GitHub GraphQL errors: {data['errors']}")
+            raise GitHubGraphQLError(data["errors"])
         return data.get("data")
 
     async def pull_request(self, app_slug: str, repo: str, pull_number: int) -> dict[str, Any]:
@@ -453,12 +470,19 @@ class GitHubAppClient:
             response.raise_for_status()
             return bool((response.json() or {}).get("protected", False))
         except (httpx.HTTPError, TimeoutError) as exc:
+            status = (
+                exc.response.status_code
+                if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None
+                else None
+            )
             _log.warning(
-                "branch_protected: REST call failed for %s/%s branch=%s (fail-safe → True): %s",
+                "branch_protected: REST call failed for %s/%s branch=%s "
+                "(fail-safe -> True): class=%s status=%s",
                 owner,
                 name,
                 branch,
-                exc,
+                exc.__class__.__name__,
+                status,
             )
             return True
 

@@ -17,6 +17,117 @@ if TYPE_CHECKING:
 CLEARANCE_AGENT_SLUG = "iterwheel-clearance"  # voyager clearance bot App
 
 
+def _safe_exception_fields(exc: BaseException) -> dict[str, Any]:
+    """Return class-name and optional HTTP status from an exception.
+
+    Never includes ``str(exc)``, request URLs, headers, or token-bearing
+    messages — used for fallback reason/log fields where the full
+    ``build_writeback_failure()`` schema is not needed.
+    """
+    import httpx as _httpx
+
+    fields: dict[str, Any] = {"error_class": type(exc).__name__}
+    if isinstance(exc, _httpx.HTTPStatusError) and exc.response is not None:
+        fields["status"] = exc.response.status_code
+    else:
+        fields["status"] = None
+    return fields
+
+
+def build_writeback_failure(
+    *,
+    operation: str,
+    exc: BaseException,
+    repository: str,
+    pr: int | None = None,
+    issue: int | None = None,
+    thread_id: str | None = None,
+) -> dict[str, Any]:
+    """Convert a writeback exception into the structured failure metadata schema.
+
+    Never includes raw exception strings, tokens, or request URLs in the
+    returned dict.  Safe for GitHub-visible comments and debug records.
+    """
+    import httpx as _httpx
+
+    from .github_app import GitHubGraphQLError
+
+    status: int | None = None
+    if isinstance(exc, _httpx.HTTPStatusError) and exc.response is not None:
+        status = exc.response.status_code
+
+    error_class = "GraphQLError" if isinstance(exc, GitHubGraphQLError) else type(exc).__name__
+
+    # Determine suggested_action based on failure family
+    if isinstance(exc, GitHubGraphQLError):
+        suggested_action = "Verify the GitHub App permissions, repository installation, and installation access for this operation."
+    elif isinstance(exc, _httpx.HTTPStatusError) and exc.response is not None:
+        code = exc.response.status_code
+        if code == 429:
+            suggested_action = (
+                "Check GitHub API rate-limit status and retry after the limit resets."
+            )
+        elif code in (401, 403, 404):
+            suggested_action = "Verify the GitHub App permissions, repository installation, and installation access for this operation."
+        else:
+            suggested_action = "Review the structured writeback failure fields and retry after correcting the operation target."
+    elif isinstance(
+        exc, (_httpx.TimeoutException, TimeoutError, _httpx.ConnectError, _httpx.ReadError)
+    ):
+        suggested_action = (
+            "Check GitHub API reachability and retry the operation after service health recovers."
+        )
+    else:
+        suggested_action = "Review the structured writeback failure fields and retry after correcting the operation target."
+
+    return {
+        "operation": operation,
+        "error_class": error_class,
+        "status": status,
+        "repo": repository,
+        "pr": pr,
+        "issue": issue,
+        "thread_id": thread_id,
+        "suggested_action": suggested_action,
+    }
+
+
+def format_writeback_failure_warning(failure: dict[str, Any]) -> str:
+    """Format a writeback failure dict into a compact operator-facing warning line.
+
+    Never includes raw exception strings or secrets.  Defensive on malformed
+    input (missing ``pr`` and ``issue`` renders as ``unknown target``).
+    """
+    operation = failure.get("operation", "unknown")
+    error_class = failure.get("error_class", "unknown")
+    status = failure.get("status")
+    repo = failure.get("repo", "unknown")
+    pr = failure.get("pr")
+    issue = failure.get("issue")
+    thread_id = failure.get("thread_id")
+    suggested_action = failure.get("suggested_action", "")
+
+    status_part = f", HTTP {status}" if status is not None else ""
+
+    if pr is not None:
+        target = f"{repo}#{pr}"
+        thread_part = f" thread {thread_id}" if thread_id else ""
+        return (
+            f"⚠️ Automation writeback: {operation} failed ({error_class}{status_part}) "
+            f"on {target}{thread_part}. {suggested_action}"
+        )
+    elif issue is not None:
+        return (
+            f"⚠️ Automation writeback: {operation} failed ({error_class}{status_part}) "
+            f"on {repo}#{issue}. {suggested_action}"
+        )
+    else:
+        return (
+            f"⚠️ Automation writeback: {operation} failed ({error_class}{status_part}) "
+            f"on {repo} unknown target. {suggested_action}"
+        )
+
+
 def dry_run_enabled() -> bool:
     """Canonical dry-run predicate, shared by the server and writeback paths.
 
@@ -65,40 +176,154 @@ async def apply_route_writeback(
     if dry_run_enabled():
         return {"applied": False, "dry_run": True, "planned": planned}
 
+    # CHG-1813: Capture label/reaction/comment writeback failures as structured
+    # metadata. Partial failures are captured and the comment body is patched
+    # with the compact warning before upsert/create.
+    wb_failures: list[dict[str, Any]] = []
+
     for label in remove_labels:
-        await client.remove_label(app_slug, repository, int(issue_number), label)
+        try:
+            await client.remove_label(app_slug, repository, int(issue_number), label)
+        except (httpx.HTTPError, TimeoutError) as exc:
+            wb_failures.append(
+                build_writeback_failure(
+                    operation="removeLabel",
+                    exc=exc,
+                    repository=repository,
+                    issue=int(issue_number),
+                )
+            )
+
     if add_labels:
-        await client.add_labels(app_slug, repository, int(issue_number), add_labels)
+        try:
+            await client.add_labels(app_slug, repository, int(issue_number), add_labels)
+        except (httpx.HTTPError, TimeoutError) as exc:
+            wb_failures.append(
+                build_writeback_failure(
+                    operation="addLabels",
+                    exc=exc,
+                    repository=repository,
+                    issue=int(issue_number),
+                )
+            )
 
     for reaction in remove_reactions:
-        await client.remove_issue_reaction(app_slug, repository, int(issue_number), reaction)
+        try:
+            await client.remove_issue_reaction(app_slug, repository, int(issue_number), reaction)
+        except (httpx.HTTPError, TimeoutError) as exc:
+            wb_failures.append(
+                build_writeback_failure(
+                    operation="removeReaction",
+                    exc=exc,
+                    repository=repository,
+                    issue=int(issue_number),
+                )
+            )
+
     for reaction in add_reactions:
-        await client.add_issue_reaction(app_slug, repository, int(issue_number), reaction)
+        try:
+            await client.add_issue_reaction(app_slug, repository, int(issue_number), reaction)
+        except (httpx.HTTPError, TimeoutError) as exc:
+            wb_failures.append(
+                build_writeback_failure(
+                    operation="addReaction",
+                    exc=exc,
+                    repository=repository,
+                    issue=int(issue_number),
+                )
+            )
 
     comment = None
-    if writeback.get("comment_body"):
-        if writeback.get("comment_mode") == "append":
-            comment = await client.create_issue_comment(
-                app_slug,
-                repository,
-                int(issue_number),
-                body=writeback["comment_body"],
-            )
-        else:
-            comment = await client.upsert_issue_comment(
-                app_slug,
-                repository,
-                int(issue_number),
-                marker=writeback["comment_marker"],
-                body=writeback["comment_body"],
-            )
+    comment_body = writeback.get("comment_body") or ""
+    if comment_body:
+        # CHG-1813: If label/reaction failures occurred and a comment body
+        # exists, insert the compact warning after the marker line.
+        if wb_failures:
+            warning_line = format_writeback_failure_warning(wb_failures[0])
+            comment_body = _insert_warning_after_marker(comment_body, warning_line)
 
-    return {
+        if writeback.get("comment_mode") == "append":
+            try:
+                comment = await client.create_issue_comment(
+                    app_slug,
+                    repository,
+                    int(issue_number),
+                    body=comment_body,
+                )
+            except (httpx.HTTPError, TimeoutError) as exc:
+                wb_failures.append(
+                    build_writeback_failure(
+                        operation="createComment",
+                        exc=exc,
+                        repository=repository,
+                        issue=int(issue_number),
+                    )
+                )
+        else:
+            try:
+                comment = await client.upsert_issue_comment(
+                    app_slug,
+                    repository,
+                    int(issue_number),
+                    marker=writeback["comment_marker"],
+                    body=comment_body,
+                )
+            except (httpx.HTTPError, TimeoutError) as exc:
+                wb_failures.append(
+                    build_writeback_failure(
+                        operation="upsertComment",
+                        exc=exc,
+                        repository=repository,
+                        issue=int(issue_number),
+                    )
+                )
+
+    result: dict[str, Any] = {
         "applied": True,
         "dry_run": False,
         "planned": planned,
         "comment_url": (comment or {}).get("html_url"),
     }
+
+    # CHG-1813: Only add writeback failure keys when at least one failure occurred.
+    if wb_failures:
+        result["writeback_failures"] = wb_failures
+        result["writeback_failure_count"] = len(wb_failures)
+        first = wb_failures[0]
+        op = first.get("operation", "unknown")
+        ec = first.get("error_class", "unknown")
+        st = first.get("status")
+        st_part = f", HTTP {st}" if st is not None else ""
+        count = len(wb_failures)
+        if count == 1:
+            result["writeback_failure_reason"] = (
+                f"1 writeback operation failed; first: {op} ({ec}{st_part})"
+            )
+        else:
+            result["writeback_failure_reason"] = (
+                f"{count} writeback operations failed; first: {op} ({ec}{st_part})"
+            )
+
+    return result
+
+
+def _insert_warning_after_marker(body: str, warning_line: str) -> str:
+    """Insert a warning line after the first HTML marker comment.
+
+    If the body starts with an HTML marker comment (``<!-- ... -->``), the
+    warning is inserted on a new line immediately after it. Otherwise the
+    warning is prepended above the existing body.  Safe when ``body`` is empty.
+    """
+    if not body:
+        return body
+    import re
+
+    marker_match = re.match(r"^(<!--[^>]*-->)\n?", body)
+    if marker_match:
+        marker = marker_match.group(1)
+        rest = body[marker_match.end() :]
+        return f"{marker}\n{warning_line}\n{rest}"
+    return f"{warning_line}\n{body}"
 
 
 async def dispatch_route_writeback(
@@ -163,14 +388,18 @@ async def dispatch_route_writeback(
                     expected_sha=webhook_head_sha,
                 )
             except Exception as exc:
-                _log.exception(
-                    "clearance pipeline failed for %s; falling back to error automation",
+                safe = _safe_exception_fields(exc)
+                _log.warning(
+                    "clearance pipeline failed for %s; falling back to error automation "
+                    "(class=%s status=%s)",
                     repository,
+                    safe["error_class"],
+                    safe["status"],
                 )
                 automation = {
                     "enabled": True,
                     "status": "error",
-                    "reason": f"pipeline failed: {exc.__class__.__name__}: {exc}",
+                    "reason": f"pipeline failed: {safe['error_class']}",
                     "sync_actions": [],
                     "sync_actions_count": 0,
                 }
@@ -229,12 +458,12 @@ async def dispatch_route_writeback(
             except (httpx.HTTPError, TimeoutError) as exc:
                 # Codex MVE-round P2: fail-open observability — log + counter event
                 # so persistent API instability surfaces.
+                safe = _safe_exception_fields(exc)
                 _log.warning(
                     "stale_guard: REST fetch failed for %s PR=%s; emitting fail-open log + counter, "
-                    "proceeding with writeback: %s",
+                    "proceeding with writeback",
                     repository,
                     pr_number,
-                    exc,
                 )
                 _log.info(
                     "stale_guard_failed_fail_open: %s",
@@ -244,7 +473,8 @@ async def dispatch_route_writeback(
                             "repo": repository,
                             "pr": pr_number,
                             "expected_sha": expected_sha,
-                            "error": str(exc),
+                            "error_class": safe["error_class"],
+                            "status": safe["status"],
                         }
                     ),
                 )
@@ -254,13 +484,16 @@ async def dispatch_route_writeback(
                 client, route, repository=repository, automation=automation
             )
         except Exception as exc:
-            _log.exception(
-                "clearance enrichment failed for %s; returning applied=False",
+            safe = _safe_exception_fields(exc)
+            _log.warning(
+                "clearance enrichment failed for %s; returning applied=False (class=%s status=%s)",
                 repository,
+                safe["error_class"],
+                safe["status"],
             )
             return {
                 "applied": False,
-                "reason": f"clearance enrichment failed: {exc.__class__.__name__}: {exc}",
+                "reason": f"clearance enrichment failed: {safe['error_class']}",
                 "automation": automation,
             }
         # Codex GH-bot PR #15 P1: include the `automation` dict in the normal

@@ -9,7 +9,7 @@ from typing import Any
 import httpx
 
 from voyager.core.github_app import GitHubAppClient
-from voyager.core.writeback import dry_run_enabled
+from voyager.core.writeback import dry_run_enabled, format_writeback_failure_warning
 
 from .constants import (
     CHECKBOX_ACTION_LABELS,
@@ -418,6 +418,12 @@ def build_clearance_comment(
     reasons = evaluation["confidence"]["reasons"]
     warning = _author_only_deadlock_warning(review_request)
 
+    # CHG-1813: Writeback failure warning line.
+    writeback_warning = None
+    failures = (automation or {}).get("writeback_failures") or []
+    if failures:
+        writeback_warning = format_writeback_failure_warning(failures[0])
+
     lines = [
         CLEARANCE_COMMENT_MARKER,
         "## Clearance",
@@ -428,6 +434,8 @@ def build_clearance_comment(
         _approval_status_line(evaluation, review_request),
         _automation_status_line(automation),
     ]
+    if writeback_warning:
+        lines.append(writeback_warning)
     if warning:
         lines.append(warning)
     lines.extend(

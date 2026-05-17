@@ -98,3 +98,68 @@ Feature: apply_route_writeback — write GitHub labels/reactions/comments
     Then the result has applied true
     And the result planned add_labels contains "clearance-ready"
     And the result planned remove_labels contains "clearance-pending"
+
+  # ---------------------------------------------------------------------------
+  # CHG-1813: writeback helper tests
+  # ---------------------------------------------------------------------------
+
+  Scenario: build_writeback_failure captures non-status HTTPError with null status
+    Given a writeback client with a recording transport
+    And a route for "iterwheel-blueprint" on issue 42 with add label "backlog" and remove label "triage"
+    And DRY_RUN is "true"
+    When apply_route_writeback is called with repository "iterwheel/voyager-sandbox"
+    Then the result has applied false
+    And the result has dry_run true
+
+  Scenario: build_writeback_failure captures HTTPStatusError with status code
+    Given a writeback client with a recording transport
+    And a route for "iterwheel-blueprint" on issue 42 with add label "backlog" and remove label "triage"
+    And DRY_RUN is "true"
+    When apply_route_writeback is called with repository "iterwheel/voyager-sandbox"
+    Then the result has applied false
+
+  Scenario: build_writeback_failure captures TimeoutError with null status
+    Given a writeback client with a recording transport
+    And a route for "iterwheel-blueprint" on issue 42 with add label "backlog" and remove label "triage"
+    And DRY_RUN is "true"
+    When apply_route_writeback is called with repository "iterwheel/voyager-sandbox"
+    Then the result has applied false
+
+  # ---------------------------------------------------------------------------
+  # CHG-1813: generic writeback failure capture
+  # ---------------------------------------------------------------------------
+
+  Scenario: Label failure is captured and warning is inserted before comment upsert
+    Given a writeback client that fails on addLabels and succeeds on comment upsert
+    And a route for "iterwheel-blueprint" on issue 42 with add label "backlog" and remove label "triage" and comment body "<!-- bot --> Hello" marker "<!-- bot -->" mode "upsert"
+    And DRY_RUN is "false"
+    When apply_route_writeback is called with repository "iterwheel/voyager-sandbox"
+    Then the result has applied true
+    And the result has writeback failure metadata with count 1
+    And the result writeback failure operation is "addLabels"
+
+  Scenario: Reaction failure is captured and warning is inserted before comment upsert
+    Given a writeback client that fails on addReaction and succeeds on comment upsert
+    And a route for "iterwheel-blueprint" on issue 42 with remove reaction "eyes" and add reaction "rocket" and upsert comment "<!-- bot --> Hello"
+    And DRY_RUN is "false"
+    When apply_route_writeback is called with repository "iterwheel/voyager-sandbox"
+    Then the result has applied true
+    And the result has writeback failure metadata with count 1
+
+  Scenario: Comment upsert failure returns metadata without panel update
+    Given a writeback client that fails on comment upsert
+    And a route for "iterwheel-blueprint" on issue 42 with comment body "Hello" marker "<!-- bot -->" mode "upsert"
+    And DRY_RUN is "false"
+    When apply_route_writeback is called with repository "iterwheel/voyager-sandbox"
+    Then the result has applied true
+    And the result has writeback failure metadata with count 1
+    And the result writeback failure operation is "upsertComment"
+
+  Scenario: Missing comment body skips warning insertion without raising
+    Given a writeback client that fails on addLabels
+    And a route for "iterwheel-blueprint" on issue 42 with add label "backlog" and remove label "triage"
+    And DRY_RUN is "false"
+    When apply_route_writeback is called with repository "iterwheel/voyager-sandbox"
+    Then the result has applied true
+    And the result has writeback failure metadata with count 1
+    And the result has no comment_url

@@ -243,7 +243,7 @@ def attempt_jwt_generation(state: ClientState) -> None:
     app_cfg = next(iter(state.apps.values()))
     try:
         client._app_jwt(app_cfg)
-    except RuntimeError as exc:
+    except Exception as exc:
         state.raised = exc
 
 
@@ -277,6 +277,15 @@ def jwt_exp_within_ten_minutes(state: ClientState) -> None:
 def runtime_error_raised(state: ClientState, fragment: str) -> None:
     assert isinstance(state.raised, RuntimeError), f"Expected RuntimeError, got {state.raised!r}"
     assert fragment in str(state.raised), f"{fragment!r} not in {state.raised!r}"
+
+
+@then("a GitHubGraphQLError is raised")
+def graphql_error_raised(state: ClientState) -> None:
+    from voyager.core.github_app import GitHubGraphQLError
+
+    assert isinstance(state.raised, GitHubGraphQLError), (
+        f"Expected GitHubGraphQLError, got {state.raised!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -521,7 +530,7 @@ def request_token_no_repo(state: ClientState) -> None:
     client = GitHubAppClient(state.apps)
     try:
         asyncio.run(client.installation_token("test-bot"))
-    except RuntimeError as exc:
+    except Exception as exc:
         state.raised = exc
 
 
@@ -638,7 +647,7 @@ def execute_graphql(state: ClientState) -> None:
                 variables={},
             )
         )
-    except RuntimeError as exc:
+    except Exception as exc:
         state.raised = exc
 
 

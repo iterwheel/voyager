@@ -61,8 +61,8 @@ from voyager.bots.clearance.models import (
 from voyager.bots.clearance.severity import evaluate as evaluate_severity
 from voyager.bots.clearance.severity_input import extract_severity_and_kind
 from voyager.bots.clearance.state import StateStore
-from voyager.core.github_app import GitHubAppClient
-from voyager.core.writeback import dry_run_enabled
+from voyager.core.github_app import GitHubAppClient, GitHubGraphQLError
+from voyager.core.writeback import _safe_exception_fields, build_writeback_failure, dry_run_enabled
 
 _log = logging.getLogger(__name__)
 
@@ -397,7 +397,36 @@ async def _maybe_sync_stage_15(
             )
             continue
 
-        result = await client.resolve_review_thread(CLEARANCE_AGENT_SLUG, repository, thread.id)
+        # CHG-1813: Catch resolveReviewThread write failures and record
+        # structured metadata instead of propagating the exception.
+        # On failure: snap.github_state, thread.github_isResolved, and
+        # the in-thread reply remain unchanged (A6).
+        try:
+            result = await client.resolve_review_thread(CLEARANCE_AGENT_SLUG, repository, thread.id)
+        except (httpx.HTTPError, GitHubGraphQLError, TimeoutError) as exc:
+            failure = build_writeback_failure(
+                operation="resolveReviewThread",
+                exc=exc,
+                repository=repository,
+                pr=pr,
+                thread_id=thread.id,
+            )
+            _log.warning(
+                "resolveReviewThread failed for thread %s on %s#%s: %s",
+                thread.id,
+                repository,
+                pr,
+                json.dumps(failure),
+            )
+            actions.append(
+                Stage15Action(
+                    mutation=Stage15Mutation.RESOLVE_REVIEW_THREAD,
+                    threadId=thread.id,
+                    result={"applied": False, **failure},
+                )
+            )
+            continue
+
         actions.append(
             Stage15Action(
                 mutation=Stage15Mutation.RESOLVE_REVIEW_THREAD,
@@ -430,15 +459,52 @@ async def _maybe_sync_stage_15(
                 body=comment_body,
             )
         except (httpx.HTTPError, RuntimeError) as exc:
+            safe = _safe_exception_fields(exc)
             _log.warning(
-                "in-thread reply suppressed for thread %s (Stage 1.5 mutation already applied): %s: %s",
+                "in-thread reply suppressed for thread %s "
+                "(Stage 1.5 mutation already applied): class=%s status=%s",
                 thread.id,
-                exc.__class__.__name__,
-                exc,
-                exc_info=True,
+                safe["error_class"],
+                safe["status"],
             )
 
     return actions
+
+
+def _stage15_writeback_failures(sync_actions: list[Stage15Action]) -> dict[str, Any]:
+    """Collect Stage 1.5 writeback failures from sync action results.
+
+    Returns a dict with ``writeback_failures``, ``writeback_failure_count``,
+    and ``writeback_failure_reason`` only when failures are present.
+    Returns an empty dict when no failures occurred.
+    """
+    failures: list[dict[str, Any]] = []
+    for action in sync_actions:
+        result = action.result or {}
+        if result.get("applied") is False and result.get("operation"):
+            failures.append(result)
+
+    if not failures:
+        return {}
+
+    count = len(failures)
+    first = failures[0]
+    operation = first.get("operation", "unknown")
+    error_class = first.get("error_class", "unknown")
+    status = first.get("status")
+    status_part = f", HTTP {status}" if status is not None else ""
+    if count == 1:
+        reason = f"1 writeback operation failed; first: {operation} ({error_class}{status_part})"
+    else:
+        reason = (
+            f"{count} writeback operations failed; first: {operation} ({error_class}{status_part})"
+        )
+
+    return {
+        "writeback_failures": failures,
+        "writeback_failure_count": count,
+        "writeback_failure_reason": reason,
+    }
 
 
 async def compute_clearance_automation(
@@ -482,10 +548,11 @@ async def compute_clearance_automation(
             CLEARANCE_AGENT_SLUG, repository, pr_number
         )
     except Exception as exc:
+        safe = _safe_exception_fields(exc)
         return {
             "enabled": True,
             "status": Status.ERROR.value,
-            "reason": f"pipeline: fetch failed: {exc.__class__.__name__}: {exc}",
+            "reason": f"pipeline: fetch failed: {safe['error_class']}",
             "sync_actions": [],
             "sync_actions_count": 0,
         }
@@ -505,11 +572,14 @@ async def compute_clearance_automation(
             CLEARANCE_AGENT_SLUG, repository, base_branch
         )
     except Exception as exc:
+        safe = _safe_exception_fields(exc)
         _log.warning(
-            "branch_protected fetch failed for %s branch=%s (fail-safe → True): %s",
+            "branch_protected fetch failed for %s branch=%s "
+            "(fail-safe -> True): class=%s status=%s",
             repository,
             base_branch,
-            exc,
+            safe["error_class"],
+            safe["status"],
         )
         branch_protected_state = True
 
@@ -596,9 +666,11 @@ async def compute_clearance_automation(
         pr_data_fresh = await client.pull_request(CLEARANCE_AGENT_SLUG, repository, pr_number)
         head_sha_fresh: str | None = (pr_data_fresh.get("head") or {}).get("sha") or ""
     except Exception as exc:
+        safe = _safe_exception_fields(exc)
         _log.warning(
-            "pre-stage-1.5 stale re-fetch failed (fail-open, proceeding): %s",
-            exc,
+            "pre-stage-1.5 stale re-fetch failed (fail-open, proceeding): class=%s status=%s",
+            safe["error_class"],
+            safe["status"],
         )
         head_sha_fresh = None
     baseline = expected_sha or head_sha
@@ -683,4 +755,17 @@ async def compute_clearance_automation(
         result_dict["investigator_error_count"] = len(investigator_failures)
         result_dict["investigator_error_thread_ids"] = [tid for tid, _ in investigator_failures]
         result_dict["investigator_error_reason"] = investigator_failures[0][1]
+
+    # CHG-1813: Aggregate Stage 1.5 writeback failures.
+    # Only add keys when failures are present; successful results omit them.
+    wb_failures = _stage15_writeback_failures(sync_actions)
+    if wb_failures:
+        result_dict.update(wb_failures)
+        # If any intended Stage 1.5 write failed, surface as ERROR status
+        # so apply_swm_overlay handles it via the existing "error" path.
+        result_dict["status"] = Status.ERROR.value
+        # Keep the original pipeline-level reason alongside failure metadata;
+        # override reason with the failure summary.
+        result_dict["reason"] = wb_failures["writeback_failure_reason"]
+
     return result_dict

@@ -51,6 +51,178 @@ def _automation(status: str = "ready") -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# CHG-1813: writeback failure warning in comment rendering
+# ---------------------------------------------------------------------------
+
+
+def _automation_with_writeback_failure(
+    *,
+    status: str = "error",
+    operation: str = "resolveReviewThread",
+    error_class: str = "HTTPStatusError",
+    http_status: int | None = 403,
+    repo: str = "iterwheel/sandbox",
+    pr: int | None = 49,
+    issue: int | None = None,
+    thread_id: str | None = "PRRT_codex_alpha",
+) -> dict:
+    failure = {
+        "operation": operation,
+        "error_class": error_class,
+        "status": http_status,
+        "repo": repo,
+        "pr": pr,
+        "issue": issue,
+        "thread_id": thread_id,
+        "suggested_action": "Verify the GitHub App permissions, repository installation, and installation access for this operation.",
+    }
+    return {
+        "enabled": True,
+        "status": status,
+        "reason": "1 writeback operation failed; first: resolveReviewThread (HTTPStatusError, HTTP 403)",
+        "sync_actions": [],
+        "sync_actions_count": 1,
+        "dry_run": False,
+        "head_sha": "sha-abc",
+        "writeback_failures": [failure],
+        "writeback_failure_count": 1,
+        "writeback_failure_reason": f"1 writeback operation failed; first: {operation} ({error_class}, HTTP {http_status})",
+    }
+
+
+def test_writeback_failure_warning_appears_in_comment() -> None:
+    from voyager.bots.clearance.enrichment import build_clearance_comment
+
+    automation = _automation_with_writeback_failure()
+    comment = build_clearance_comment(
+        _evaluation(status="clearance_blocked", label="clearance-2-blocked"),
+        automation=automation,
+        provenance={"updated_at": "2026-05-17T00:00:00Z"},
+    )
+
+    assert "⚠️ Automation writeback: resolveReviewThread failed" in comment
+    assert "HTTPStatusError" in comment
+    assert "HTTP 403" in comment
+    assert "iterwheel/sandbox#49" in comment
+    assert "thread PRRT_codex_alpha" in comment
+    assert "Verify the GitHub App permissions" in comment
+
+
+def test_writeback_failure_warning_contains_no_secrets() -> None:
+    from voyager.bots.clearance.enrichment import build_clearance_comment
+
+    # Use a failure dict that would be concerning if secrets leaked
+    automation = _automation_with_writeback_failure()
+    comment = build_clearance_comment(
+        _evaluation(status="clearance_blocked", label="clearance-2-blocked"),
+        automation=automation,
+        provenance={"updated_at": "2026-05-17T00:00:00Z"},
+    )
+
+    assert "ghp_" not in comment
+    assert "token=" not in comment
+    assert "Authorization" not in comment
+    assert "Bearer" not in comment
+
+
+def test_no_writeback_failure_warning_when_no_failures() -> None:
+    from voyager.bots.clearance.enrichment import build_clearance_comment
+
+    comment = build_clearance_comment(
+        _evaluation(status="clearance_ready", label="clearance-4-ready-for-merge"),
+        automation=_automation(),
+        provenance={"updated_at": "2026-05-17T00:00:00Z"},
+    )
+
+    assert "⚠️ Automation writeback:" not in comment
+    assert "writeback failure" not in comment.lower()
+
+
+def test_writeback_failure_warning_for_generic_issue_operation() -> None:
+    from voyager.bots.clearance.enrichment import build_clearance_comment
+
+    automation = _automation_with_writeback_failure(
+        operation="addLabels",
+        error_class="HTTPStatusError",
+        http_status=404,
+        pr=None,
+        issue=42,
+        thread_id=None,
+    )
+    comment = build_clearance_comment(
+        _evaluation(status="clearance_blocked", label="clearance-2-blocked"),
+        automation=automation,
+        provenance={"updated_at": "2026-05-17T00:00:00Z"},
+    )
+
+    assert "⚠️ Automation writeback: addLabels failed" in comment
+    assert "iterwheel/sandbox#42" in comment
+    assert "HTTP 404" in comment
+    # Should NOT have "thread" for issue-level operations
+    assert " thread " not in comment.split("iterwheel/sandbox#42")[1].split(".")[0]
+
+
+def test_writeback_failure_warning_malformed_dict_unknown_target() -> None:
+    """A10: When both pr and issue are absent, renders 'unknown target'."""
+    from voyager.bots.clearance.enrichment import build_clearance_comment
+
+    automation = _automation_with_writeback_failure(
+        pr=None,
+        issue=None,
+        thread_id=None,
+    )
+    comment = build_clearance_comment(
+        _evaluation(status="clearance_blocked", label="clearance-2-blocked"),
+        automation=automation,
+        provenance={"updated_at": "2026-05-17T00:00:00Z"},
+    )
+
+    assert "unknown target" in comment
+
+
+def test_writeback_warning_after_automation_status_line_before_deadlock_warning(
+    monkeypatch,
+) -> None:
+    """A9 + D3: Warning appears after automation status line and before deadlock warning."""
+    from voyager.bots.clearance.constants import reset_review_request_users_cache
+    from voyager.bots.clearance.enrichment import build_clearance_comment
+
+    monkeypatch.setenv("VOYAGER_CLEARANCE_REVIEW_REQUEST_USERS", "pr-author")
+    reset_review_request_users_cache()
+
+    review_request = {
+        "enabled": True,
+        "applied": False,
+        "requested": [],
+        "already_requested": [],
+        "planned": [],
+        "skipped_author": ["pr-author"],
+        "author_only_deadlock": True,
+    }
+
+    automation = _automation_with_writeback_failure()
+    comment = build_clearance_comment(
+        _evaluation(status="clearance_blocked", label="clearance-2-blocked"),
+        automation=automation,
+        review_request=review_request,
+        provenance={"updated_at": "2026-05-17T00:00:00Z"},
+    )
+
+    lines = comment.split("\n")
+    automation_line_idx = next(i for i, line in enumerate(lines) if "Automation:" in line)
+    warning_line_idx = next(i for i, line in enumerate(lines) if "⚠️ Automation writeback:" in line)
+    deadlock_line_idx = next(
+        i for i, line in enumerate(lines) if "only configured reviewer" in line
+    )
+    assert warning_line_idx > automation_line_idx, (
+        f"writeback warning at line {warning_line_idx} should be after automation status at {automation_line_idx}"
+    )
+    assert deadlock_line_idx > warning_line_idx, (
+        f"deadlock warning at line {deadlock_line_idx} should be after writeback warning at {warning_line_idx}"
+    )
+
+
 @pytest.mark.parametrize(
     ("status", "label", "stage", "stage_name"),
     [

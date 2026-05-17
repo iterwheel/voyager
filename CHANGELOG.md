@@ -8,6 +8,17 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+### Fixed — Clearance writeback failure visibility ([#45](https://github.com/iterwheel/voyager/issues/45))
+
+- Clearance now captures GitHub writeback failures, including
+  `resolveReviewThread` permission/API failures, as sanitized structured
+  metadata and surfaces a compact operator warning in the PR readiness panel.
+- Generic label, reaction, and comment writeback failures now return
+  `writeback_failures` metadata without leaking raw exception messages,
+  tokens, Authorization headers, or secret-bearing URLs.
+- GitHub GraphQL `data.errors` now raise a typed `GitHubGraphQLError` so
+  callers can distinguish GraphQL API failures from transport failures.
+
 ## [0.3.0] — 2026-05-17
 
 ### Changed — Clearance compact thread verification cards ([#40](https://github.com/iterwheel/voyager/issues/40))

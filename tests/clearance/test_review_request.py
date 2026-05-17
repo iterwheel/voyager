@@ -717,3 +717,111 @@ async def test_dispatch_failure_log_does_not_leak_secrets(monkeypatch, caplog) -
     assert "ghp_" not in log_text, f"log records leaked token: {log_text!r}"
     assert "token=" not in log_text, f"log records leaked token: {log_text!r}"
     assert secret_url not in log_text, f"log records leaked full URL: {log_text!r}"
+
+
+# ---------------------------------------------------------------------------
+# CHG-1813: writeback failure warning in enrichment panel
+# ---------------------------------------------------------------------------
+
+
+async def test_writeback_failure_warning_in_enrichment_panel() -> None:
+    """When automation has writeback_failures, the enrichment comment must include the warning."""
+    from voyager.bots.clearance.constants import reset_review_request_users_cache
+    from voyager.bots.clearance.enrichment import build_clearance_comment
+
+    reset_review_request_users_cache()
+
+    evaluation = {
+        "status": "clearance_blocked",
+        "conclusion": "failure",
+        "issue_number": 77,
+        "pr_number": 77,
+        "classifier": "clearance-v1",
+        "summary": "Blocked.",
+        "review_state": {
+            "current_approvals": [],
+            "stale_approvals": [],
+            "blocking_reviewers": [],
+            "unresolved_thread_count": 0,
+        },
+        "confidence": {"reasons": [], "semantic_fix_verified": False, "semantic_fix_note": ""},
+        "labels": {"add": ["clearance-2-blocked"], "remove": []},
+        "reactions": {"add": [], "remove": []},
+        "pr_url": "https://github.test/pull/77",
+        "head_sha": "sha-abc",
+        "target_kind": "pull_request",
+    }
+    automation = {
+        "enabled": True,
+        "status": "error",
+        "reason": "1 writeback operation failed; first: resolveReviewThread (HTTPStatusError, HTTP 403)",
+        "sync_actions": [],
+        "sync_actions_count": 1,
+        "dry_run": False,
+        "head_sha": "sha-abc",
+        "writeback_failures": [
+            {
+                "operation": "resolveReviewThread",
+                "error_class": "HTTPStatusError",
+                "status": 403,
+                "repo": "iterwheel/voyager",
+                "pr": 77,
+                "issue": None,
+                "thread_id": "PRRT_test",
+                "suggested_action": "Verify the GitHub App permissions.",
+            }
+        ],
+        "writeback_failure_count": 1,
+        "writeback_failure_reason": "1 writeback operation failed; first: resolveReviewThread (HTTPStatusError, HTTP 403)",
+    }
+
+    comment = build_clearance_comment(evaluation, automation=automation)
+    assert "⚠️ Automation writeback: resolveReviewThread failed" in comment
+    assert "HTTP 403" in comment
+    assert "iterwheel/voyager#77 thread PRRT_test" in comment
+    assert "Verify the GitHub App permissions" in comment
+    # No secrets
+    assert "ghp_" not in comment
+    assert "token=" not in comment
+
+
+async def test_no_writeback_warning_when_no_failures() -> None:
+    """When automation has no writeback_failures, no warning appears."""
+    from voyager.bots.clearance.constants import reset_review_request_users_cache
+    from voyager.bots.clearance.enrichment import build_clearance_comment
+
+    reset_review_request_users_cache()
+
+    evaluation = {
+        "status": "clearance_ready",
+        "conclusion": "success",
+        "issue_number": 77,
+        "pr_number": 77,
+        "classifier": "clearance-v1",
+        "summary": "Ready.",
+        "review_state": {
+            "current_approvals": ["alice"],
+            "stale_approvals": [],
+            "blocking_reviewers": [],
+            "unresolved_thread_count": 0,
+        },
+        "confidence": {"reasons": [], "semantic_fix_verified": False, "semantic_fix_note": ""},
+        "labels": {"add": ["clearance-4-ready-for-merge"], "remove": []},
+        "reactions": {"add": ["+1"], "remove": []},
+        "pr_url": "https://github.test/pull/77",
+        "head_sha": "sha-abc",
+        "target_kind": "pull_request",
+    }
+    automation = {
+        "enabled": True,
+        "status": "ready",
+        "reason": "all Codex review threads RESOLVED",
+        "sync_actions": [],
+        "sync_actions_count": 0,
+        "dry_run": False,
+        "head_sha": "sha-abc",
+    }
+
+    comment = build_clearance_comment(evaluation, automation=automation)
+    assert "⚠️ Automation writeback:" not in comment
+    assert "writeback failure" not in comment.lower()

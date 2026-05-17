@@ -173,11 +173,11 @@ Feature: GitHub App authentication — JWT and installation token machinery
   # GraphQL helper
   # ---------------------------------------------------------------------------
 
-  Scenario: graphql() raises RuntimeError when response contains errors
+  Scenario: graphql() raises GitHubGraphQLError when response contains errors
     Given GitHub returns a valid installation token response
     And GitHub returns a GraphQL response with errors
     When a GraphQL query is executed
-    Then a RuntimeError is raised mentioning "GitHub GraphQL errors"
+    Then a GitHubGraphQLError is raised
 
   # ---------------------------------------------------------------------------
   # PR reviews pagination (Codex round 3)

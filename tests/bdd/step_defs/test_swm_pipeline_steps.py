@@ -64,6 +64,10 @@ class _StubGitHubAppClient:
         self.fail_pull_request_httpx: bool = False  # Wave 7C-6: raises httpx.HTTPError
         self.pull_request_call_count: int = 0  # Wave 7C-6: tracks guard fetch calls
         self.fail_resolve: bool = False
+        self.fail_resolve_http_error: bool = False  # CHG-1813: httpx.HTTPError (non-status)
+        self.fail_resolve_status_error: int | None = None  # CHG-1813: HTTPStatusError with code
+        self.fail_resolve_graphql_error: bool = False  # CHG-1813: GitHubGraphQLError
+        self.fail_resolve_timeout: bool = False  # CHG-1813: builtin TimeoutError
         self.resolve_calls: list[tuple[str, str]] = []
         self.create_comment_calls: list[tuple[str, str, int, str]] = []
         self.review_thread_reply_calls: list[tuple[str, str, int, int, str]] = []
@@ -143,6 +147,26 @@ class _StubGitHubAppClient:
             import httpx
 
             raise httpx.HTTPError("simulated resolveReviewThread mutation failure")
+        if self.fail_resolve_http_error:
+            import httpx
+
+            raise httpx.HTTPError("simulated transport-level resolveReviewThread failure")
+        if self.fail_resolve_status_error is not None:
+            import httpx
+
+            raise httpx.HTTPStatusError(
+                "FORBIDDEN",
+                request=httpx.Request("POST", "https://api.github.com/graphql"),
+                response=httpx.Response(self.fail_resolve_status_error),
+            )
+        if self.fail_resolve_graphql_error:
+            from voyager.core.github_app import GitHubGraphQLError
+
+            raise GitHubGraphQLError(
+                [{"type": "FORBIDDEN", "message": "Resource not accessible by integration"}]
+            )
+        if self.fail_resolve_timeout:
+            raise TimeoutError("simulated resolveReviewThread timeout")
         return self.resolve_response
 
     async def graphql(
@@ -543,6 +567,30 @@ def given_pr_fetch_fails(ctx) -> None:
 @given("the stub GitHubAppClient fails on the resolveReviewThread mutation")
 def given_resolve_fails(ctx) -> None:
     ctx["client"].fail_resolve = True
+
+
+@given("the stub GitHubAppClient fails on the resolveReviewThread mutation with an HTTP error")
+def given_resolve_fails_http_error(ctx) -> None:
+    ctx["client"].fail_resolve_http_error = True
+
+
+@given(
+    parsers.parse(
+        "the stub GitHubAppClient fails on the resolveReviewThread mutation with HTTPStatusError {status:d}"
+    )
+)
+def given_resolve_fails_status_error(ctx, status: int) -> None:
+    ctx["client"].fail_resolve_status_error = status
+
+
+@given("the stub GitHubAppClient fails on the resolveReviewThread mutation with a GraphQL error")
+def given_resolve_fails_graphql_error(ctx) -> None:
+    ctx["client"].fail_resolve_graphql_error = True
+
+
+@given("the stub GitHubAppClient fails on the resolveReviewThread mutation with a TimeoutError")
+def given_resolve_fails_timeout(ctx) -> None:
+    ctx["client"].fail_resolve_timeout = True
 
 
 @given(parsers.parse('the stub PR "{repo}" #{pr:d} author is "{author_login}"'))
@@ -1175,6 +1223,90 @@ def then_snapshot_evidence_llm_error_contains(ctx, thread_id: str, substring: st
     assert llm_error != "", f"expected evidence.llm_error to be non-empty, got {llm_error!r}"
     assert substring.lower() in llm_error.lower(), (
         f"substring {substring!r} not in evidence.llm_error={llm_error!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# CHG-1813: Stage 1.5 writeback failure capture — Then steps
+# ---------------------------------------------------------------------------
+
+
+@then("the automation has writeback failure metadata")
+def then_automation_has_writeback_failure(ctx) -> None:
+    auto = ctx["automation"]
+    assert auto is not None, f"raised={ctx.get('raised')}"
+    assert "writeback_failures" in auto, (
+        f"writeback_failures absent from automation keys: {list(auto.keys())}"
+    )
+    assert auto["writeback_failure_count"] >= 1, (
+        f"writeback_failure_count={auto.get('writeback_failure_count')!r}"
+    )
+
+
+@then("the automation has no writeback failure metadata")
+def then_automation_has_no_writeback_failure(ctx) -> None:
+    auto = ctx["automation"]
+    assert auto is not None, f"raised={ctx.get('raised')}"
+    for key in ("writeback_failures", "writeback_failure_count", "writeback_failure_reason"):
+        assert key not in auto, f"expected {key!r} to be absent, but found value {auto[key]!r}"
+
+
+@then(parsers.parse("the automation writeback failure count is {count:d}"))
+def then_automation_writeback_failure_count(ctx, count: int) -> None:
+    auto = ctx["automation"]
+    assert auto is not None, f"raised={ctx.get('raised')}"
+    assert auto.get("writeback_failure_count") == count, (
+        f"writeback_failure_count={auto.get('writeback_failure_count')!r}, expected {count}"
+    )
+
+
+@then(parsers.parse('the automation writeback failure reason starts with "{prefix}"'))
+def then_automation_writeback_failure_reason_starts_with(ctx, prefix: str) -> None:
+    auto = ctx["automation"]
+    assert auto is not None, f"raised={ctx.get('raised')}"
+    reason = auto.get("writeback_failure_reason") or ""
+    assert reason.startswith(prefix), (
+        f"writeback_failure_reason={reason!r} does not start with {prefix!r}"
+    )
+
+
+@then(parsers.parse('the Stage 1.5 action result has applied false with operation "{operation}"'))
+def then_stage15_action_failed(ctx, operation: str) -> None:
+    auto = ctx["automation"]
+    assert auto is not None, f"raised={ctx.get('raised')}"
+    actions = auto.get("sync_actions") or []
+    failed = [a for a in actions if (a.get("result") or {}).get("applied") is False]
+    assert failed, f"no failed Stage 1.5 actions found in sync_actions: {actions!r}"
+    result = failed[0]["result"]
+    assert result.get("applied") is False, f"expected applied=False, got {result.get('applied')!r}"
+    assert result.get("operation") == operation, (
+        f"expected operation={operation!r}, got {result.get('operation')!r}"
+    )
+
+
+@then("the thread GitHub state was not mutated")
+def then_thread_github_state_was_not_mutated(ctx) -> None:
+    """Assert no thread was resolved in GitHub state (snapshots/threads unchanged)."""
+    auto = ctx["automation"]
+    assert auto is not None, f"raised={ctx.get('raised')}"
+    # Check the latest snapshot to ensure github_state.isResolved is still False
+    snap = ctx["store"].read_thread(REPO, PR, THREAD_ID)
+    if snap and snap.github_state:
+        assert snap.github_state.isResolved is False, (
+            f"Expected isResolved=False, got {snap.github_state.isResolved!r}"
+        )
+
+
+@then(parsers.parse('the Stage 1.5 action result error_class is "{expected_class}"'))
+def then_stage15_action_error_class(ctx, expected_class: str) -> None:
+    auto = ctx["automation"]
+    assert auto is not None, f"raised={ctx.get('raised')}"
+    actions = auto.get("sync_actions") or []
+    failed = [a for a in actions if (a.get("result") or {}).get("applied") is False]
+    assert failed, f"no failed Stage 1.5 actions found in sync_actions: {actions!r}"
+    result = failed[0]["result"]
+    assert result.get("error_class") == expected_class, (
+        f"expected error_class={expected_class!r}, got {result.get('error_class')!r}"
     )
 
 

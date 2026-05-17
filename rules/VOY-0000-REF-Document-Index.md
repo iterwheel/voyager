@@ -21,6 +21,8 @@
 | 1809 | CHG | Wave 7C Severity Demotion Stale Verdict Guard |
 | 1810 | SOP | Release Process |
 | 1811 | REF | Multi Agent Loop Configuration |
+| 1812 | REF | Discussion Tracker 2026 05 17 |
+| 1813 | CHG | Surface Clearance writeback failures in readiness panel |
 
 ---
 

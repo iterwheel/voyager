@@ -661,3 +661,295 @@ def then_no_direct_append_comments(state: WritebackState) -> None:
 def then_reason_mentions(state: WritebackState, text: str) -> None:
     reason = state.result.get("reason", "")
     assert text in reason, f"Expected {text!r} in reason: {reason!r}"
+
+
+# ---------------------------------------------------------------------------
+# CHG-1813: Generic writeback failure capture — Given steps
+# ---------------------------------------------------------------------------
+
+
+class _FailingLabelClient:
+    """Client that fails on add_labels but succeeds on everything else."""
+
+    def __init__(self) -> None:
+        self.comments: list[dict[str, Any]] = []
+        self.upsert_calls: list[dict[str, Any]] = []
+
+    async def remove_label(self, app_slug: str, repo: str, issue_number: int, label: str) -> Any:
+        return None
+
+    async def add_labels(
+        self, app_slug: str, repo: str, issue_number: int, labels: list[str]
+    ) -> Any:
+        raise httpx.HTTPError("transport error")
+
+    async def remove_issue_reaction(
+        self, app_slug: str, repo: str, issue_number: int, content: str
+    ) -> list[Any]:
+        return []
+
+    async def add_issue_reaction(
+        self, app_slug: str, repo: str, issue_number: int, content: str
+    ) -> Any:
+        return {"id": 1}
+
+    async def upsert_issue_comment(
+        self, app_slug: str, repo: str, issue_number: int, *, marker: str, body: str
+    ) -> dict[str, Any]:
+        self.upsert_calls.append(
+            {
+                "app_slug": app_slug,
+                "repo": repo,
+                "issue_number": issue_number,
+                "marker": marker,
+                "body": body,
+            }
+        )
+        comment = {
+            "id": len(self.comments) + 1,
+            "body": body,
+            "html_url": f"https://github.test/{repo}/issues/{issue_number}#issuecomment-1",
+        }
+        self.comments.append(comment)
+        return dict(comment)
+
+    async def create_issue_comment(
+        self, app_slug: str, repo: str, issue_number: int, *, body: str
+    ) -> dict[str, Any]:
+        comment = {
+            "id": len(self.comments) + 1,
+            "body": body,
+            "html_url": f"https://github.test/{repo}/issues/{issue_number}#issuecomment-new",
+        }
+        self.comments.append(comment)
+        return dict(comment)
+
+
+class _FailingReactionClient:
+    """Client that fails on add_issue_reaction but succeeds on everything else."""
+
+    def __init__(self) -> None:
+        self.comments: list[dict[str, Any]] = []
+        self.upsert_calls: list[dict[str, Any]] = []
+
+    async def remove_label(self, app_slug: str, repo: str, issue_number: int, label: str) -> Any:
+        return None
+
+    async def add_labels(
+        self, app_slug: str, repo: str, issue_number: int, labels: list[str]
+    ) -> Any:
+        return [{"name": n} for n in labels]
+
+    async def remove_issue_reaction(
+        self, app_slug: str, repo: str, issue_number: int, content: str
+    ) -> list[Any]:
+        return []
+
+    async def add_issue_reaction(
+        self, app_slug: str, repo: str, issue_number: int, content: str
+    ) -> Any:
+        raise httpx.HTTPError("transport error")
+
+    async def upsert_issue_comment(
+        self, app_slug: str, repo: str, issue_number: int, *, marker: str, body: str
+    ) -> dict[str, Any]:
+        self.upsert_calls.append(
+            {
+                "app_slug": app_slug,
+                "repo": repo,
+                "issue_number": issue_number,
+                "marker": marker,
+                "body": body,
+            }
+        )
+        comment = {
+            "id": len(self.comments) + 1,
+            "body": body,
+            "html_url": f"https://github.test/{repo}/issues/{issue_number}#issuecomment-1",
+        }
+        self.comments.append(comment)
+        return dict(comment)
+
+    async def create_issue_comment(
+        self, app_slug: str, repo: str, issue_number: int, *, body: str
+    ) -> dict[str, Any]:
+        comment = {
+            "id": len(self.comments) + 1,
+            "body": body,
+            "html_url": f"https://github.test/{repo}/issues/{issue_number}#issuecomment-new",
+        }
+        self.comments.append(comment)
+        return dict(comment)
+
+
+class _FailingCommentClient:
+    """Client that succeeds on labels/reactions but fails on comment upsert."""
+
+    def __init__(self) -> None:
+        self.comments: list[dict[str, Any]] = []
+
+    async def remove_label(self, app_slug: str, repo: str, issue_number: int, label: str) -> Any:
+        return None
+
+    async def add_labels(
+        self, app_slug: str, repo: str, issue_number: int, labels: list[str]
+    ) -> Any:
+        return [{"name": n} for n in labels]
+
+    async def remove_issue_reaction(
+        self, app_slug: str, repo: str, issue_number: int, content: str
+    ) -> list[Any]:
+        return []
+
+    async def add_issue_reaction(
+        self, app_slug: str, repo: str, issue_number: int, content: str
+    ) -> Any:
+        return {"id": 1}
+
+    async def upsert_issue_comment(
+        self, app_slug: str, repo: str, issue_number: int, *, marker: str, body: str
+    ) -> dict[str, Any]:
+        raise httpx.HTTPError("transport error")
+
+    async def create_issue_comment(
+        self, app_slug: str, repo: str, issue_number: int, *, body: str
+    ) -> dict[str, Any]:
+        raise httpx.HTTPError("transport error")
+
+
+@given(
+    "a writeback client that fails on addLabels and succeeds on comment upsert",
+    target_fixture="state",
+)
+def given_client_fails_add_labels() -> WritebackState:
+    s = WritebackState()
+    s.client = _FailingLabelClient()
+    return s
+
+
+@given(
+    "a writeback client that fails on addReaction and succeeds on comment upsert",
+    target_fixture="state",
+)
+def given_client_fails_add_reaction() -> WritebackState:
+    s = WritebackState()
+    s.client = _FailingReactionClient()
+    return s
+
+
+@given("a writeback client that fails on comment upsert", target_fixture="state")
+def given_client_fails_comment() -> WritebackState:
+    s = WritebackState()
+    s.client = _FailingCommentClient()
+    return s
+
+
+@given("a writeback client that fails on addLabels", target_fixture="state")
+def given_client_fails_add_labels_only() -> WritebackState:
+    s = WritebackState()
+    s.client = _FailingLabelClient()
+    return s
+
+
+# ---------------------------------------------------------------------------
+# CHG-1813: Route variants with reactions + comment
+# ---------------------------------------------------------------------------
+
+
+@given(
+    parsers.re(
+        r'a route for "(?P<slug>[^"]+)" on issue (?P<issue_number>\d+) with remove reaction "(?P<remove_reaction>[^"]+)" '
+        r'and add reaction "(?P<add_reaction>[^"]+)" and upsert comment "(?P<body>[^"]*)"'
+    )
+)
+def given_route_reactions_and_comment(
+    state: WritebackState,
+    slug: str,
+    issue_number: str,
+    remove_reaction: str,
+    add_reaction: str,
+    body: str,
+) -> None:
+    state.route = {
+        "agent": slug,
+        "kind": "issues",
+        "validation": {
+            "status": "routed",
+            "conclusion": "valid",
+            "issue_number": int(issue_number),
+        },
+        "writeback": {
+            "reactions": {"add": [add_reaction], "remove": [remove_reaction]},
+            "comment_body": body,
+            "comment_marker": "<!-- bot -->",
+            "comment_mode": "upsert",
+        },
+    }
+
+
+@given(
+    parsers.re(
+        r'a route for "(?P<slug>[^"]+)" on issue (?P<issue_number>\d+) with add label "(?P<add_label>[^"]+)" '
+        r'and remove label "(?P<remove_label>[^"]+)" and comment body "(?P<body>[^"]*)" '
+        r'marker "(?P<marker>[^"]*)" mode "(?P<mode>[^"]+)"'
+    )
+)
+def given_route_labels_and_comment(
+    state: WritebackState,
+    slug: str,
+    issue_number: str,
+    add_label: str,
+    remove_label: str,
+    body: str,
+    marker: str,
+    mode: str,
+) -> None:
+    state.route = {
+        "agent": slug,
+        "kind": "issues",
+        "validation": {
+            "status": "routed",
+            "conclusion": "valid",
+            "issue_number": int(issue_number),
+        },
+        "writeback": {
+            "labels": {"add": [add_label], "remove": [remove_label]},
+            "comment_body": body,
+            "comment_marker": marker,
+            "comment_mode": mode,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# CHG-1813: Generic writeback failure capture — Then steps
+# ---------------------------------------------------------------------------
+
+
+@then(parsers.parse("the result has writeback failure metadata with count {count:d}"))
+def then_result_has_writeback_failure(state: WritebackState, count: int) -> None:
+    assert state.result is not None
+    assert "writeback_failures" in state.result, (
+        f"writeback_failures absent from result keys: {list(state.result.keys())}"
+    )
+    assert state.result["writeback_failure_count"] == count, (
+        f"writeback_failure_count={state.result.get('writeback_failure_count')!r}, expected {count}"
+    )
+
+
+@then(parsers.parse('the result writeback failure operation is "{operation}"'))
+def then_result_writeback_failure_operation(state: WritebackState, operation: str) -> None:
+    assert state.result is not None
+    failures = state.result.get("writeback_failures") or []
+    assert failures, "no writeback failures in result"
+    assert failures[0].get("operation") == operation, (
+        f"expected operation={operation!r}, got {failures[0].get('operation')!r}"
+    )
+
+
+@then("the result has no comment_url")
+def then_result_has_no_comment_url(state: WritebackState) -> None:
+    assert state.result is not None
+    assert not state.result.get("comment_url"), (
+        f"expected no comment_url, got {state.result.get('comment_url')!r}"
+    )
