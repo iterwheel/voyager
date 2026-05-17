@@ -1,0 +1,9 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 37,
+    "title": "[Task]: Classify mixed governance work",
+    "html_url": "https://github.test/issues/37",
+    "body": "This task updates SOP rules and workflow loop bot details for the Stack classifier."
+  }
+}

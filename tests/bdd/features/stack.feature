@@ -139,6 +139,33 @@ Feature: Stack bot — issue classification and routing
     Then exactly one stack route is produced
     And the stack writeback comment includes "Review reasons:"
 
+  Scenario: Tied area scores without confirmed labels produce stack_needs_review
+    Given a webhook payload "stack_issues_opened_tied_area"
+    When Stack receives the "issues" event
+    Then exactly one stack route is produced
+    And the stack validation status is "stack_needs_review"
+    And the stack writeback adds label "stack-needs-review"
+    And the stack writeback comment includes "Top Stack area scores are tied."
+
+  Scenario: Tied area scores preserve confirmed Stack axis labels on rerun
+    Given a webhook payload "stack_issues_opened_tied_area_confirmed"
+    When Stack receives the "issues" event
+    Then exactly one stack route is produced
+    And the stack validation status is "stack_classified"
+    And the stack writeback adds label "stack-type-docs"
+    And the stack writeback adds label "stack-area-automation"
+    And the stack writeback adds label "stack-size-l"
+    And the stack writeback adds label "stack-risk-high"
+    And the stack writeback removes "stack-needs-review"
+    And the stack writeback comment includes "Preserved existing human-confirmed classification."
+
+  Scenario: Tied area scores with conflicting confirmed labels still need review
+    Given a webhook payload "stack_issues_opened_tied_area_conflicting"
+    When Stack receives the "issues" event
+    Then exactly one stack route is produced
+    And the stack validation status is "stack_needs_review"
+    And the stack writeback adds label "stack-needs-review"
+
   # ---------------------------------------------------------------------------
   # Type classification sources
   # ---------------------------------------------------------------------------

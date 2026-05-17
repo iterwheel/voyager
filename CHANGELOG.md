@@ -8,6 +8,14 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+### Fixed — Stack tied-area label preservation ([#37](https://github.com/iterwheel/voyager/issues/37))
+
+- Stack now preserves an existing human-confirmed issue classification when a
+  rerun only needs review because the top area scores are tied and the issue
+  already has exactly one Stack label per axis.
+- Stack still routes first-pass tied-area issues and incomplete or conflicting
+  existing classifications to `stack-needs-review`.
+
 ### Added — Multi-agent loop configuration ([#32](https://github.com/iterwheel/voyager/issues/32))
 
 - Added `VOY-1811`, Voyager's project-local COR-1622 parameter

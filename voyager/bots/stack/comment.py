@@ -18,6 +18,7 @@ def build_stack_comment(classification: dict[str, Any]) -> str:
         "",
     ]
     if classification["status"] == "stack_classified":
+        human_override = classification["confidence"].get("human_override", False)
         lines.extend(
             [
                 "Status: stack-classified",
@@ -28,6 +29,14 @@ def build_stack_comment(classification: dict[str, Any]) -> str:
             ]
         )
         lines.extend(f"- `{label}`" for label in labels["add"])
+        if human_override:
+            lines.extend(
+                [
+                    "",
+                    "Preserved existing human-confirmed classification.",
+                    classification["confidence"]["human_override_reason"],
+                ]
+            )
         return "\n".join(lines).strip()
 
     lines.extend(

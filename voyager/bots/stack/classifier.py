@@ -9,16 +9,34 @@ from .constants import (
     ALL_STACK_LABELS,
     AREA_ALIASES,
     AREA_FIELD_NAMES,
+    AREA_LABELS,
     AREA_SIGNALS,
     CONVENTIONAL_TYPE_TO_TYPE,
     ISSUE_KIND_TO_TYPE,
     RISK_KEYWORDS,
+    RISK_LABELS,
+    SIZE_LABELS,
     STACK_AREAS,
     STACK_CLASSIFIER_VERSION,
     STACK_NEEDS_REVIEW_LABEL,
     TYPE_ALIASES,
     TYPE_FIELD_NAMES,
+    TYPE_LABELS,
 )
+
+AXIS_LABELS: dict[str, tuple[str, ...]] = {
+    "type": TYPE_LABELS,
+    "area": AREA_LABELS,
+    "size": SIZE_LABELS,
+    "risk": RISK_LABELS,
+}
+
+AXIS_PREFIXES: dict[str, str] = {
+    "type": "stack-type-",
+    "area": "stack-area-",
+    "size": "stack-size-",
+    "risk": "stack-risk-",
+}
 
 
 def normalize_text(value: str) -> str:
@@ -99,6 +117,44 @@ def match_alias(value: str, aliases: dict[str, tuple[str, ...]]) -> tuple[str | 
             if has_signal(normalized, candidate):
                 return canonical, candidate
     return None, None
+
+
+def label_name(label: Any) -> str:
+    if isinstance(label, str):
+        return label
+    if isinstance(label, dict):
+        return str(label.get("name") or "")
+    return ""
+
+
+def existing_issue_axis_labels(target: dict[str, Any]) -> dict[str, str] | None:
+    if target.get("target_kind", "issue") != "issue" or target.get("pull_request"):
+        return None
+
+    names = {name for raw_label in target.get("labels") or [] if (name := label_name(raw_label))}
+    confirmed: dict[str, str] = {}
+    for axis, valid_labels in AXIS_LABELS.items():
+        matches = sorted(name for name in names if name in valid_labels)
+        if len(matches) != 1:
+            return None
+        confirmed[axis] = matches[0]
+    return confirmed
+
+
+def classification_from_axis_labels(axis_labels: dict[str, str]) -> dict[str, str]:
+    return {
+        axis: axis_labels[axis].removeprefix(AXIS_PREFIXES[axis])
+        for axis in ("type", "area", "size", "risk")
+    }
+
+
+def ordered_axis_labels(axis_labels: dict[str, str]) -> list[str]:
+    return [axis_labels[axis] for axis in ("type", "area", "size", "risk")]
+
+
+def area_tie_is_only_review_reason(reasons: list[str], area_result: dict[str, Any]) -> bool:
+    ambiguous_reason = area_result.get("ambiguous_reason") or "Stack area is ambiguous."
+    return bool(area_result.get("ambiguous") and reasons == [ambiguous_reason])
 
 
 def classify_type(title: str, body: str) -> tuple[str, str]:
@@ -270,11 +326,17 @@ def classify_stack_target(target: dict[str, Any]) -> dict[str, Any]:
     area, area_result = classify_area(title, body)
     size = classify_size(target, body)
     risk = classify_risk(size, title, body)
+    fresh_classification = {
+        "type": stack_type,
+        "area": area,
+        "size": size,
+        "risk": risk,
+    }
     selected = [
-        f"stack-type-{stack_type}",
-        f"stack-area-{area}",
-        f"stack-size-{size}",
-        f"stack-risk-{risk}",
+        f"stack-type-{fresh_classification['type']}",
+        f"stack-area-{fresh_classification['area']}",
+        f"stack-size-{fresh_classification['size']}",
+        f"stack-risk-{fresh_classification['risk']}",
     ]
     reasons = review_reasons(
         title=title,
@@ -284,6 +346,21 @@ def classify_stack_target(target: dict[str, Any]) -> dict[str, Any]:
         area_result=area_result,
     )
     needs_review = bool(reasons)
+    human_override = False
+    human_override_reason = ""
+    confirmed_axis_labels = existing_issue_axis_labels(target)
+    classification = fresh_classification
+    if (
+        needs_review
+        and confirmed_axis_labels is not None
+        and area_tie_is_only_review_reason(reasons, area_result)
+    ):
+        human_override = True
+        human_override_reason = "Preserved existing human-confirmed classification because top Stack area scores are tied."
+        classification = classification_from_axis_labels(confirmed_axis_labels)
+        selected = ordered_axis_labels(confirmed_axis_labels)
+        needs_review = False
+
     labels: dict[str, list[str]] = (
         {
             "add": [STACK_NEEDS_REVIEW_LABEL],
@@ -309,27 +386,27 @@ def classify_stack_target(target: dict[str, Any]) -> dict[str, Any]:
         "target_kind": target.get("target_kind", "issue"),
         "classifier": STACK_CLASSIFIER_VERSION,
         "title": title,
-        "classification": {
-            "type": stack_type,
-            "area": area,
-            "size": size,
-            "risk": risk,
-        },
+        "classification": classification,
         "confidence": {
             "needs_review": needs_review,
-            "reasons": reasons,
+            "reasons": [] if human_override else reasons,
             "type_source": type_source,
             "area_source": area_result.get("source"),
             "area_matches": [area_name for area_name, _ in area_result.get("scores", [])],
             "area_scores": dict(area_result.get("scores", [])),
             "area_hits": area_result.get("hits", {}),
             "area_ambiguous": area_result.get("ambiguous", False),
+            "human_override": human_override,
+            "human_override_reason": human_override_reason,
+            "suggested_classification": fresh_classification,
         },
         "labels": labels,
         "reactions": reactions,
         "summary": (
-            "Stack needs a human review before writing classification axis labels."
+            human_override_reason
+            if human_override
+            else "Stack needs a human review before writing classification axis labels."
             if needs_review
-            else f"Stack classified this issue as {stack_type}/{area}/{size}/{risk}."
+            else f"Stack classified this issue as {classification['type']}/{classification['area']}/{classification['size']}/{classification['risk']}."
         ),
     }

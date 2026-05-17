@@ -1,0 +1,26 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 39,
+    "title": "[Task]: Classify mixed governance work",
+    "html_url": "https://github.test/issues/39",
+    "body": "This task updates SOP rules and workflow loop bot details for the Stack classifier.",
+    "labels": [
+      {
+        "name": "stack-type-docs"
+      },
+      {
+        "name": "stack-area-automation"
+      },
+      {
+        "name": "stack-area-docs"
+      },
+      {
+        "name": "stack-size-l"
+      },
+      {
+        "name": "stack-risk-high"
+      }
+    ]
+  }
+}
