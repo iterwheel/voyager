@@ -116,7 +116,12 @@ install -d -m 700 /Users/frank/.voyager/state
 install -d -m 755 /Users/frank/Library/Logs/voyager
 install -d -m 755 /Users/frank/Library/LaunchAgents
 
-install -m 600 deploy/wukong/bridge.env.example /Users/frank/.voyager/bridge.env
+if [[ ! -f /Users/frank/.voyager/bridge.env ]]; then
+  install -m 600 deploy/wukong/bridge.env.example /Users/frank/.voyager/bridge.env
+else
+  install -m 600 /Users/frank/.voyager/bridge.env \
+    "/Users/frank/.voyager/bridge.env.backup.$(date -u +%Y%m%dT%H%M%SZ)"
+fi
 $EDITOR /Users/frank/.voyager/bridge.env
 
 plutil -lint deploy/launchd/com.iterwheel.voyager.bridge.plist

@@ -41,11 +41,15 @@ Stack Area:
 
 ## Acceptance Criteria
 
+<!--
 - [ ] The expected behavior is verified by a reproducible test, command, or manual check.
+-->
 
 ## Reproduction Steps / Task Plan
 
+<!--
 1. Describe the first concrete step.
+-->
 
 ## Priority
 
