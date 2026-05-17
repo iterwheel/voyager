@@ -27,7 +27,8 @@ def test_launchd_plist_defines_wukong_bridge_contract() -> None:
     assert len(args) == 3
     assert args[:2] == ["/bin/zsh", "-lc"]
     command = args[2]
-    assert "source /Users/frank/.voyager/bridge.env" in command
+    assert "set -a && source /Users/frank/.voyager/bridge.env && set +a && exec" in command
+    assert "; exec" not in command
     assert f"exec {WUKONG_PROJECT_DIR}/.venv/bin/python" in command
     assert "-m uvicorn voyager.server:app --host 127.0.0.1 --port 8787" in command
 
@@ -59,7 +60,9 @@ def test_launchd_sop_covers_operator_lifecycle_and_rollback() -> None:
 
     required_snippets = (
         "/Users/frank/.voyager/bridge.env",
+        "if [[ ! -f /Users/frank/.voyager/bridge.env ]]; then",
         "install -m 600 deploy/wukong/bridge.env.example /Users/frank/.voyager/bridge.env",
+        "/Users/frank/.voyager/bridge.env.backup.$(date -u +%Y%m%dT%H%M%SZ)",
         "DRY_RUN=false",
         "launchctl bootstrap gui/$(id -u)",
         "launchctl bootout gui/$(id -u)",
