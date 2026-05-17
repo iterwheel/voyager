@@ -45,6 +45,28 @@ def normalize_text(value: str) -> str:
     return re.sub(r"\s+", " ", lowered).strip()
 
 
+def strip_html_comments(value: str) -> str:
+    return re.sub(r"<!--.*?-->", "", value, flags=re.DOTALL)
+
+
+def strip_stack_metadata_scoring_noise(value: str) -> str:
+    """Remove template-only Stack metadata labels before weighted scoring."""
+    lines: list[str] = []
+    for line in strip_html_comments(value).splitlines():
+        stripped = line.strip()
+        heading = re.match(r"^#{1,6}\s+(?P<title>.+?)\s*$", stripped)
+        if heading and normalize_text(heading.group("title")) == "stack metadata":
+            continue
+        if re.match(
+            r"^(?:[-*]\s*)?(?:\*\*)?Stack (?:Type|Area)(?:\*\*)?\s*[:：]",  # noqa: RUF001
+            stripped,
+            flags=re.IGNORECASE,
+        ):
+            continue
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def has_signal(normalized_text: str, signal: str) -> bool:
     normalized_signal = normalize_text(signal)
     if not normalized_signal:
@@ -53,6 +75,7 @@ def has_signal(normalized_text: str, signal: str) -> bool:
 
 
 def extract_inline_field(body: str, field_names: tuple[str, ...]) -> str:
+    body = strip_html_comments(body)
     for line in body.splitlines():
         stripped = line.strip()
         for field_name in field_names:
@@ -67,6 +90,7 @@ def extract_inline_field(body: str, field_names: tuple[str, ...]) -> str:
 
 
 def extract_markdown_section(body: str, section_names: tuple[str, ...]) -> str:
+    body = strip_html_comments(body)
     wanted = {normalize_text(name) for name in section_names}
     lines = body.splitlines()
     start = None
@@ -158,6 +182,7 @@ def area_tie_is_only_review_reason(reasons: list[str], area_result: dict[str, An
 
 
 def classify_type(title: str, body: str) -> tuple[str, str]:
+    body = strip_html_comments(body)
     field_value = extract_field_value(body, TYPE_FIELD_NAMES)
     explicit_type, _ = match_alias(field_value, TYPE_ALIASES)
     if explicit_type:
@@ -175,7 +200,7 @@ def classify_type(title: str, body: str) -> tuple[str, str]:
         if mapped:
             return mapped, "conventional_title"
 
-    text = f" {normalize_text(title + chr(10) + body)} "
+    text = f" {normalize_text(title + chr(10) + strip_stack_metadata_scoring_noise(body))} "
     if any(has_signal(text, word) for word in ("bug", "error", "failure", "broken", "regression")):
         return "bug", "keyword"
     if any(
@@ -196,6 +221,7 @@ def classify_type(title: str, body: str) -> tuple[str, str]:
 
 
 def score_areas(title: str, body: str) -> tuple[list[tuple[str, int]], dict[str, list[str]]]:
+    body = strip_stack_metadata_scoring_noise(body)
     text = f" {normalize_text(title + chr(10) + body)} "
     scored: list[tuple[str, int]] = []
     hits_by_area: dict[str, list[str]] = {}
@@ -249,6 +275,7 @@ def classify_area(title: str, body: str) -> tuple[str, dict[str, Any]]:
 
 
 def classify_size(target: dict[str, Any], body: str) -> str:
+    body = strip_stack_metadata_scoring_noise(body)
     changed_files = int(target.get("changed_files") or 0)
     additions = int(target.get("additions") or 0)
     deletions = int(target.get("deletions") or 0)
@@ -281,6 +308,7 @@ def classify_size(target: dict[str, Any], body: str) -> str:
 
 
 def classify_risk(classified_size: str, title: str, body: str) -> str:
+    body = strip_stack_metadata_scoring_noise(body)
     text = f" {normalize_text(title + chr(10) + body)} "
     if any(keyword in text for keyword in RISK_KEYWORDS["high"]):
         return "high"
@@ -302,6 +330,7 @@ def review_reasons(
     area_result: dict[str, Any],
 ) -> list[str]:
     reasons: list[str] = []
+    body = strip_stack_metadata_scoring_noise(body)
     normalized_title = normalize_text(title)
     normalized_body = normalize_text(body)
     if len(normalized_title) < 8:
