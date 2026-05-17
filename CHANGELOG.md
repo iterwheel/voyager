@@ -8,6 +8,14 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+### Changed — Stack compact classification panel ([#38](https://github.com/iterwheel/voyager/issues/38))
+
+- Stack classification comments now render as a compact `## Stack` emoji
+  panel with type, area, size, risk, status, and next action at the top.
+- Detailed classifier metadata, review reasons, suggested/applied labels, and
+  area scores now live inside a collapsible `<details>` section while keeping
+  the existing Stack comment marker for upserts.
+
 ### Fixed — Stack tied-area label preservation ([#37](https://github.com/iterwheel/voyager/issues/37))
 
 - Stack now preserves an existing human-confirmed issue classification when a

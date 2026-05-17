@@ -131,7 +131,7 @@ Feature: Stack bot — issue classification and routing
     Given a webhook payload "stack_issues_opened_needs_review"
     When Stack receives the "issues" event
     Then exactly one stack route is produced
-    And the stack writeback comment includes "Suggested classification:"
+    And the stack writeback comment includes "Suggested labels:"
 
   Scenario: Needs-review comment includes review reasons
     Given a webhook payload "stack_issues_opened_needs_review"
@@ -273,13 +273,34 @@ Feature: Stack bot — issue classification and routing
     Given a webhook payload "stack_issues_opened_classified"
     When Stack receives the "issues" event
     Then exactly one stack route is produced
-    And the stack writeback comment includes "Status: stack-classified"
+    And the stack writeback comment includes "✅ Status: classified"
 
   Scenario: Classified comment body lists applied labels
     Given a webhook payload "stack_issues_opened_classified"
     When Stack receives the "issues" event
     Then exactly one stack route is produced
     And the stack writeback comment includes "Applied labels:"
+
+  Scenario: Classified comment body uses compact Stack emoji panel
+    Given a webhook payload "stack_issues_opened_classified"
+    When Stack receives the "issues" event
+    Then exactly one stack route is produced
+    And the stack writeback comment includes "## Stack"
+    And the stack writeback comment includes "🏷️ Type:"
+    And the stack writeback comment includes "🛰️ Area:"
+    And the stack writeback comment includes "📏 Size:"
+    And the stack writeback comment includes "🔥 Risk:"
+    And the stack writeback comment includes "<details>"
+
+  Scenario: Needs-review comment body uses compact Stack emoji panel
+    Given a webhook payload "stack_issues_opened_tied_area"
+    When Stack receives the "issues" event
+    Then exactly one stack route is produced
+    And the stack writeback comment includes "## Stack"
+    And the stack writeback comment includes "👀 Status: needs review"
+    And the stack writeback comment includes "Next: confirm one label per Stack axis or adjust the issue metadata."
+    And the stack writeback comment includes "<details>"
+    And the stack writeback comment includes "Area scores:"
 
   Scenario: Classifier version is recorded in the validation
     Given a webhook payload "stack_issues_opened_classified"
