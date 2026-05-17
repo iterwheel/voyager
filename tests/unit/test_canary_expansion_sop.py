@@ -13,10 +13,11 @@ def _text() -> str:
 def test_canary_expansion_sop_names_candidate_order_and_exclusion() -> None:
     text = _text()
 
-    assert "1. `frankyxhl/babs`" in text
+    assert "1. `frankyxhl/babs` if it is not already active" in text
     assert "2. `frankyxhl/screen-harness`" in text
     assert "`frankyxhl/sweeping-monk` is not a target" in text
-    assert "Current canary set, no expansion implied" in text
+    assert "Current verified canary set for issue #48, no expansion implied" in text
+    assert "`frankyxhl/fx_bin`" in text
 
 
 def test_canary_expansion_sop_requires_preflight_and_bot_scope() -> None:
@@ -26,6 +27,8 @@ def test_canary_expansion_sop_requires_preflight_and_bot_scope() -> None:
         "Issue #45 / PR #49 writeback failure observability",
         "Issue #44 / PR #50 launchd and rollback runbook",
         "must merge before this SOP is merged or used",
+        "reconcile this SOP with the live Wukong",
+        "Inventory the live app-specific Wukong allow-list values",
         "selected-repository GitHub App installation access",
         "Confirm required labels exist",
         "https://gh.iterwheel.com/github/webhook",

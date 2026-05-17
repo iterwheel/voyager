@@ -13,7 +13,7 @@
 The staged canary expansion SOP for adding more repositories to Voyager's
 managed bridge scope. It defines the candidate order, preflight checks,
 per-bot enablement plan, validation checklist, and rollback steps. It does not
-itself expand the Wukong allow-list.
+itself expand or narrow the Wukong allow-list.
 
 ## Why
 
@@ -29,6 +29,14 @@ restart/rollback path before broader repository coverage.
 
 Merge order matters: issue #44 / PR #50, which introduces the VOY-1814 launchd
 and rollback runbook, must merge before this SOP is merged or used.
+
+Historical records in VOY-1807 and VOY-1808 may list broader selected-repository
+installation, webhook, label, or allow-list state for `frankyxhl/babs`,
+`frankyxhl/fx_bin`, and `frankyxhl/sweeping-monk`. Treat those records as
+inventory inputs, not proof that the repository is in the current verified
+canary. Before any rollout action, reconcile this SOP with the live Wukong
+allow-list values and record whether the repository is being added, validated as
+already enabled, narrowed out, or deferred.
 
 ## When to Use
 
@@ -64,23 +72,29 @@ Do not expand beyond the current canary until these gates are complete:
 
 ### 2. Use This Candidate Order
 
-Current canary set, no expansion implied by this SOP:
+Current verified canary set for issue #48, no expansion implied by this SOP:
 
 1. `iterwheel/voyager`
 2. `frankyxhl/alfred`
 3. `frankyxhl/trinity`
 
-Expansion candidates:
+Expansion candidates after live allow-list reconciliation:
 
-1. `frankyxhl/babs`
+1. `frankyxhl/babs` if it is not already active in the live app-specific
+   allow-lists; if it is already active, validate it as an existing rollout
+   entry instead of adding it again.
 2. `frankyxhl/screen-harness`
 
 Explicitly excluded:
 
-- `frankyxhl/sweeping-monk` is not a target for this rollout.
+- `frankyxhl/sweeping-monk` is not a target for this rollout. If live Wukong
+  allow-lists still include it from earlier VOY-1808 work, do not treat that as
+  approval to expand or smoke-test it under this SOP; create a separate
+  rollback/narrowing record if removal is required.
 
 Deferred until separately approved:
 
+- `frankyxhl/fx_bin`.
 - Any repository not listed above, including previously documented or
   experimental repositories.
 
@@ -89,6 +103,8 @@ Deferred until separately approved:
 For each candidate, complete this checklist before editing any Wukong
 allow-list:
 
+- Inventory the live app-specific Wukong allow-list values and compare them to
+  VOY-1807, VOY-1808, and this SOP.
 - Confirm the repository exists, visibility is expected, and default branch is
   `main`.
 - Confirm selected-repository GitHub App installation access for each enabled
