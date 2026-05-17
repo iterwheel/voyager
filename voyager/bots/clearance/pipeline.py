@@ -724,13 +724,22 @@ async def compute_clearance_automation(
     open_count = sum(1 for t in threads if t.verdict != Verdict.RESOLVED)
     resolved_count = sum(1 for t in threads if t.verdict == Verdict.RESOLVED)
 
+    # CHG-1813: Aggregate Stage 1.5 writeback failures before persistence so
+    # state/history consumers see the same error status as the readiness panel.
+    wb_failures = _stage15_writeback_failures(sync_actions)
+    persisted_status = status
+    persisted_reason = reason
+    if wb_failures:
+        persisted_status = Status.ERROR
+        persisted_reason = wb_failures["writeback_failure_reason"]
+
     record = PollRecord(
         ts=now,
         repo=repository,
         pr=pr_number,
         title=pr_title,
         head_sha=head_sha,
-        status=status,
+        status=persisted_status,
         codex_open=open_count,
         codex_resolved=resolved_count,
         threads=threads,
@@ -743,8 +752,8 @@ async def compute_clearance_automation(
 
     result_dict: dict[str, Any] = {
         "enabled": True,
-        "status": status.value,
-        "reason": reason,
+        "status": persisted_status.value,
+        "reason": persisted_reason,
         "sync_actions": [a.model_dump() for a in sync_actions],
         "sync_actions_count": len(sync_actions),
         "dry_run": dry_run,
@@ -756,16 +765,8 @@ async def compute_clearance_automation(
         result_dict["investigator_error_thread_ids"] = [tid for tid, _ in investigator_failures]
         result_dict["investigator_error_reason"] = investigator_failures[0][1]
 
-    # CHG-1813: Aggregate Stage 1.5 writeback failures.
     # Only add keys when failures are present; successful results omit them.
-    wb_failures = _stage15_writeback_failures(sync_actions)
     if wb_failures:
         result_dict.update(wb_failures)
-        # If any intended Stage 1.5 write failed, surface as ERROR status
-        # so apply_swm_overlay handles it via the existing "error" path.
-        result_dict["status"] = Status.ERROR.value
-        # Keep the original pipeline-level reason alongside failure metadata;
-        # override reason with the failure summary.
-        result_dict["reason"] = wb_failures["writeback_failure_reason"]
 
     return result_dict

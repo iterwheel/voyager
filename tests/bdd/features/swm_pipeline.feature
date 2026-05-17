@@ -56,6 +56,7 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     And the stub GitHubAppClient fails on the resolveReviewThread mutation with an HTTP error
     When compute_clearance_automation runs with DRY_RUN false
     Then the automation status is "error"
+    And the latest poll status is "error"
     And exactly 1 resolveReviewThread mutation was invoked
     And no in-thread reply was posted
     And the automation has writeback failure metadata
@@ -512,6 +513,7 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     And the stub GitHubAppClient fails on the resolveReviewThread mutation with HTTPStatusError 403
     When compute_clearance_automation runs with DRY_RUN false
     Then the automation status is "error"
+    And the latest poll status is "error"
     And exactly 1 resolveReviewThread mutation was invoked
     And no in-thread reply was posted
     And the automation has writeback failure metadata
