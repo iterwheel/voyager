@@ -17,6 +17,14 @@ release note for the explicit migration path.
   commands, healthchecks, and rollback to a previous git tag while preserving
   `DRY_RUN=false` plus app-specific repository allow-lists.
 
+### Changed — Clearance DeepSeek profile policy ([#46](https://github.com/iterwheel/voyager/issues/46))
+
+- Documented Flash, Flash no-thinking, Pro, and Pro max investigator
+  profiles with separate confidence thresholds and production-use guidance.
+- Made Flash/unknown-model startup warnings actionable while preserving the
+  current Flash no-thinking canary behavior until an operator changes
+  `[voyager].default_profile`.
+
 ### Fixed — Clearance writeback failure visibility ([#45](https://github.com/iterwheel/voyager/issues/45))
 
 - Clearance now captures GitHub writeback failures, including

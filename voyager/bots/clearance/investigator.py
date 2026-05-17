@@ -32,11 +32,13 @@ _log = logging.getLogger(__name__)
 # substantially cheaper but weaker at multi-step semantic reasoning, so we
 # warn when the factory builds an investigator targeting it. DeepSeek M3
 # review flag — the confidence threshold was tuned against Pro.
-_KNOWN_PRO_MODELS = frozenset({"deepseek-v4-pro", "deepseek-reasoner"})
+_KNOWN_PRO_MODELS = frozenset({"deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"})
 # Recognized Flash-tier models. When the operator picks one of these we know
 # it's intentional; when they pick something *else* we surface a stronger
 # "unknown model" warning in build_investigator_from_env.
-_KNOWN_FLASH_MODELS = frozenset({"deepseek-v4-flash", "deepseek-chat"})
+_KNOWN_FLASH_MODELS = frozenset({"deepseek-v4-flash"})
+_RECOMMENDED_PRO_MIN_CONFIDENCE = 0.78
+_RECOMMENDED_FLASH_MIN_CONFIDENCE = 0.90
 
 InvestigatorVerdict = Literal["RESOLVED", "OPEN", "NEEDS_HUMAN_JUDGMENT"]
 
@@ -90,6 +92,57 @@ class InvestigationError(RuntimeError):
 
 def _truthy(value: str | None) -> bool:
     return bool(value) and (value or "").lower() not in {"0", "false", "no", "off"}
+
+
+def _model_policy_tier(model: str) -> str:
+    if model in _KNOWN_PRO_MODELS:
+        return "pro"
+    if model in _KNOWN_FLASH_MODELS:
+        return "flash"
+    return "unknown"
+
+
+def _profile_policy_warning(
+    *,
+    profile_name: str,
+    model: str,
+    min_confidence: float,
+) -> str | None:
+    """Return an actionable startup warning for non-recommended profile policy.
+
+    VOY-1815 keeps behavior backward-compatible: selecting a Flash profile still
+    builds an investigator, but startup logs tell operators the policy boundary
+    and the exact config action to take before wider production auto-resolve.
+    """
+    tier = _model_policy_tier(model)
+    if tier == "pro":
+        if min_confidence < _RECOMMENDED_PRO_MIN_CONFIDENCE:
+            return (
+                f"investigator: profile {profile_name!r} uses Pro-tier model {model!r} "
+                f"with min_confidence={min_confidence:.2f}, below the recommended "
+                f"{_RECOMMENDED_PRO_MIN_CONFIDENCE:.2f} production auto-resolve floor. "
+                "Raise min_confidence or document the exception before enabling "
+                "review-thread auto-resolve."
+            )
+        return None
+    if tier == "flash":
+        threshold_action = (
+            f"raise min_confidence to at least {_RECOMMENDED_FLASH_MIN_CONFIDENCE:.2f}"
+            if min_confidence < _RECOMMENDED_FLASH_MIN_CONFIDENCE
+            else f"keep min_confidence >= {_RECOMMENDED_FLASH_MIN_CONFIDENCE:.2f}"
+        )
+        return (
+            f"investigator: profile {profile_name!r} uses Flash-tier model {model!r}. "
+            "Clearance profile policy preserves Flash for the current canary/advisory "
+            "path only; use a Pro-tier profile such as [profiles.pro] for production "
+            f"review-thread auto-resolve, or {threshold_action} while the canary remains active."
+        )
+    return (
+        f"investigator: profile {profile_name!r} uses unrecognized model {model!r}. "
+        f"Known Pro models are {', '.join(sorted(_KNOWN_PRO_MODELS))}. Pin to a "
+        "known Pro-tier model for review-thread auto-resolve or document the model "
+        "tier and min_confidence policy before enabling it."
+    )
 
 
 def _truncate(value: str, limit: int) -> str:
@@ -361,28 +414,13 @@ def build_investigator_from_env() -> DeepSeekInvestigator | None:
     max_diff = int(os.environ.get("VOYAGER_INVESTIGATOR_MAX_DIFF_CHARS", "20000"))
     min_confidence = float(os.environ.get("VOYAGER_INVESTIGATOR_MIN_CONFIDENCE", "0.78"))
 
-    # MiniMax M2.7 + DeepSeek M3 review flag: routing Pro vs Flash should be a
-    # deliberate per-deployment choice. Flash is ~4x cheaper but materially
-    # weaker on multi-step semantic reasoning, and the 0.78 min_confidence
-    # threshold was calibrated against Pro. Warn loudly when a non-Pro model
-    # is wired up via env so the operator notices in logs. The Flash allowlist
-    # lets us tailor the warning: "this is a known Flash, did you mean it?"
-    # vs "we don't recognize this model at all".
-    if model not in _KNOWN_PRO_MODELS:
-        # Carry the article in the tier phrase so the rendered sentence
-        # reads "is a Flash-tier model" / "is an unrecognized model"
-        # — DeepSeek round-3 R3-N2 grammar fix.
-        tier = "a Flash-tier" if model in _KNOWN_FLASH_MODELS else "an unrecognized"
-        _log.warning(
-            "investigator: VOYAGER_INVESTIGATOR_MODEL=%r is %s model "
-            "(known Pro: %s). The min_confidence=%.2f threshold was tuned against "
-            "Pro, so verdicts may bypass the gate with lower-quality reasoning. "
-            "Re-evaluate the threshold or pin to a Pro model.",
-            model,
-            tier,
-            ", ".join(sorted(_KNOWN_PRO_MODELS)),
-            min_confidence,
-        )
+    warning = _profile_policy_warning(
+        profile_name="env:VOYAGER_INVESTIGATOR_MODEL",
+        model=model,
+        min_confidence=min_confidence,
+    )
+    if warning:
+        _log.warning("%s", warning)
 
     from voyager.llm.deepseek import DeepSeekClient
 
@@ -410,19 +448,13 @@ def build_investigator_from_profile(
     Phase 7B-3 will use this from the webhook dispatch layer; 7B-2 just exposes
     the construction path.
     """
-    if profile.model not in _KNOWN_PRO_MODELS:
-        tier = "a Flash-tier" if profile.model in _KNOWN_FLASH_MODELS else "an unrecognized"
-        _log.warning(
-            "investigator: profile %r uses %s model %r "
-            "(known Pro: %s). The min_confidence=%.2f threshold was tuned against "
-            "Pro, so verdicts may bypass the gate with lower-quality reasoning. "
-            "Re-evaluate the threshold or pin to a Pro model.",
-            profile.name,
-            tier,
-            profile.model,
-            ", ".join(sorted(_KNOWN_PRO_MODELS)),
-            profile.min_confidence,
-        )
+    warning = _profile_policy_warning(
+        profile_name=profile.name,
+        model=profile.model,
+        min_confidence=profile.min_confidence,
+    )
+    if warning:
+        _log.warning("%s", warning)
 
     from voyager.llm.deepseek import DeepSeekClient
 

@@ -47,10 +47,10 @@ class AppConfig:
 class Profile:
     """LLM investigator profile — a named bag of params for one verdict-investigation flavor.
 
-    Loaded from ``[profiles.<name>]`` TOML tables. Schema A (user-decided) ships
-    five named profiles: pro / pro_max / pro_fast / flash / flash_fast. The 7B-3
-    investigator wiring will look up profiles by name from ``cfg.profiles`` and
-    use them to construct a ``DeepSeekInvestigator``.
+    Loaded from ``[profiles.<name>]`` TOML tables. Voyager's current policy
+    documents four template profiles: pro / pro_max / flash / flash_no_thinking.
+    The investigator wiring looks up profiles by name from ``cfg.profiles`` and
+    uses them to construct a ``DeepSeekInvestigator``.
     """
 
     name: str

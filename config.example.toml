@@ -13,7 +13,11 @@
 work_dir = "~/.voyager/state"
 
 # Optional: default investigator profile name (must match a [profiles.*] key below).
-default_profile = "flash"
+#
+# Current Wukong canary behavior uses Flash no-thinking. Keep this default
+# unless the operator explicitly promotes Clearance auto-resolve to a Pro-tier
+# profile. Recommended production auto-resolve profile: "pro".
+default_profile = "flash_no_thinking"
 
 # Optional: DeepSeek API key. Read by the investigator at request time.
 # Precedence (12-factor): if VOYAGER_DEEPSEEK_API_KEY is exported in the shell,
@@ -61,13 +65,26 @@ installation_id = "REPLACE_ME_INSTALLATION_ID"
 
 
 # --- Investigator profiles -----------------------------------------------
-# Named param bundles for DeepSeek verdict investigation. Schema A (five
-# profiles) suggested; pick the ones you need.
+# Named param bundles for DeepSeek verdict investigation.
+#
+# Policy:
+#   - Pro-tier profiles are the recommended production review-thread
+#     auto-resolve path.
+#   - Flash profiles are allowed for the current canary/advisory path only.
+#     Keep min_confidence >= 0.90 while Flash remains selected.
+#   - Promotion from Flash to Pro should be an explicit operator config change.
 
 [profiles.flash]
 model = "deepseek-v4-flash"
+thinking = true
+max_diff_chars = 12000
+min_confidence = 0.90
+
+[profiles.flash_no_thinking]
+model = "deepseek-v4-flash"
 thinking = false
-min_confidence = 0.85
+max_diff_chars = 12000
+min_confidence = 0.90
 
 [profiles.pro]
 model = "deepseek-v4-pro"
@@ -75,3 +92,10 @@ thinking = true
 reasoning_effort = "medium"
 max_diff_chars = 20000
 min_confidence = 0.78
+
+[profiles.pro_max]
+model = "deepseek-v4-pro"
+thinking = true
+reasoning_effort = "max"
+max_diff_chars = 40000
+min_confidence = 0.85
