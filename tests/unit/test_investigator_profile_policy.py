@@ -102,6 +102,7 @@ def test_unknown_model_policy_warning_requires_documented_tier() -> None:
 
 def test_model_policy_tier_classifies_known_models() -> None:
     assert _model_policy_tier("deepseek-v4-pro") == "pro"
+    assert _model_policy_tier("deepseek-chat") == "pro"
     assert _model_policy_tier("deepseek-reasoner") == "pro"
     assert _model_policy_tier("deepseek-v4-flash") == "flash"
     assert _model_policy_tier("deepseek-v5-preview") == "unknown"
@@ -135,3 +136,17 @@ def test_build_investigator_from_env_logs_unknown_model_policy_warning(monkeypat
     assert investigator is not None
     assert investigator._client._model == "deepseek-v5-preview"
     assert any("unrecognized model" in record.message for record in caplog.records)
+
+
+def test_build_investigator_from_env_logs_flash_canary_policy_warning(monkeypatch, caplog) -> None:
+    monkeypatch.setenv("VOYAGER_INVESTIGATOR_ENABLED", "1")
+    monkeypatch.setenv("VOYAGER_DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setenv("VOYAGER_INVESTIGATOR_MODEL", "deepseek-v4-flash")
+    monkeypatch.setenv("VOYAGER_INVESTIGATOR_MIN_CONFIDENCE", "0.90")
+
+    with caplog.at_level(logging.WARNING):
+        investigator = build_investigator_from_env()
+
+    assert investigator is not None
+    assert investigator._client._model == "deepseek-v4-flash"
+    assert any("current canary/advisory" in record.message for record in caplog.records)

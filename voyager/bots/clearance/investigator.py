@@ -32,11 +32,11 @@ _log = logging.getLogger(__name__)
 # substantially cheaper but weaker at multi-step semantic reasoning, so we
 # warn when the factory builds an investigator targeting it. DeepSeek M3
 # review flag — the confidence threshold was tuned against Pro.
-_KNOWN_PRO_MODELS = frozenset({"deepseek-v4-pro", "deepseek-reasoner"})
+_KNOWN_PRO_MODELS = frozenset({"deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"})
 # Recognized Flash-tier models. When the operator picks one of these we know
 # it's intentional; when they pick something *else* we surface a stronger
 # "unknown model" warning in build_investigator_from_env.
-_KNOWN_FLASH_MODELS = frozenset({"deepseek-v4-flash", "deepseek-chat"})
+_KNOWN_FLASH_MODELS = frozenset({"deepseek-v4-flash"})
 _RECOMMENDED_PRO_MIN_CONFIDENCE = 0.78
 _RECOMMENDED_FLASH_MIN_CONFIDENCE = 0.90
 
