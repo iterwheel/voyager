@@ -23,6 +23,7 @@
 | 1811 | REF | Multi Agent Loop Configuration |
 | 1812 | REF | Discussion Tracker 2026 05 17 |
 | 1813 | CHG | Surface Clearance writeback failures in readiness panel |
+| 1816 | SOP | Managed Repository Canary Expansion |
 
 ---
 
