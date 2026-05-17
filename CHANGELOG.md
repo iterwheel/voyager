@@ -15,6 +15,8 @@ release note for the explicit migration path.
   repository identity, fork PR topology, panel providers, worker dispatch,
   bot actors, runtime profile, invocation variants, adoption status, and
   known schema limitations.
+- Updated `VOY-1807` to reflect that Clearance readiness panels now run on
+  `iterwheel/voyager`, matching the `VOY-1811` bot-actor configuration.
 
 ### Changed — Clearance author-only reviewer deadlock warning ([#28](https://github.com/iterwheel/voyager/issues/28))
 

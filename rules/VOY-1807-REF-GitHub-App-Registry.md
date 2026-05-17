@@ -2,7 +2,7 @@
 
 **Applies to:** VOY project
 **Last updated:** 2026-05-17
-**Last reviewed:** 2026-05-09
+**Last reviewed:** 2026-05-17
 **Status:** Active
 **Related:** VOY-1805, VOY-1806, VOY-1808
 
@@ -22,7 +22,7 @@ organization for the Voyager bot roster.
 | `iterwheel-blueprint` | `3646512` | `https://github.com/apps/iterwheel-blueprint` | No | Stored on Wukong: `~/github-openclaw-agent/secrets/iterwheel-blueprint.private-key.pem` | `iterwheel/voyager`, `iterwheel/voyager-sandbox` (`130630088`); `frankyxhl/alfred`, `frankyxhl/babs`, `frankyxhl/fx_bin`, `frankyxhl/sweeping-monk`, `frankyxhl/trinity` (`130696149`) |
 | `iterwheel-stack` | `3646534` | `https://github.com/apps/iterwheel-stack` | No | Stored on Wukong: `~/github-openclaw-agent/secrets/iterwheel-stack.private-key.pem` | `iterwheel/voyager`, `iterwheel/voyager-sandbox` (`130630216`); `frankyxhl/alfred`, `frankyxhl/babs`, `frankyxhl/fx_bin`, `frankyxhl/sweeping-monk`, `frankyxhl/trinity` (`130716196`) |
 | `iterwheel-staticfire` | `3646537` | `https://github.com/apps/iterwheel-staticfire` | No | Stored on Wukong: `~/github-openclaw-agent/secrets/iterwheel-staticfire.private-key.pem` | `iterwheel/voyager-sandbox` (`130630275`) |
-| `iterwheel-clearance` | `3646538` | `https://github.com/apps/iterwheel-clearance` | No | Stored on Wukong: `~/github-openclaw-agent/secrets/iterwheel-clearance.private-key.pem` | `iterwheel/voyager-sandbox` (`130630338`) |
+| `iterwheel-clearance` | `3646538` | `https://github.com/apps/iterwheel-clearance` | No | Stored on Wukong: `~/github-openclaw-agent/secrets/iterwheel-clearance.private-key.pem` | `iterwheel/voyager`, `iterwheel/voyager-sandbox` (`130630338`) |
 | `iterwheel-countdown` | `3646540` | `https://github.com/apps/iterwheel-countdown` | No | Stored on Wukong: `~/github-openclaw-agent/secrets/iterwheel-countdown.private-key.pem` | `iterwheel/voyager-sandbox` (`130630407`) |
 
 Current repository event source:
@@ -30,7 +30,7 @@ Current repository event source:
 | Repository | Webhook ID | URL | Active | Events | Last delivery state |
 |------------|------------|-----|--------|--------|---------------------|
 | `iterwheel/voyager-sandbox` | `619824421` | `https://gh.iterwheel.com/github/webhook` | Yes | `check_run`, `check_suite`, `issues`, `issue_comment`, `label`, `pull_request`, `pull_request_review`, `pull_request_review_comment`, `status`, `workflow_run` | `200 OK` |
-| `iterwheel/voyager` | `619976821` | `https://gh.iterwheel.com/github/webhook` | Yes | `issues`, `issue_comment` | `200 OK` |
+| `iterwheel/voyager` | `619976821` | `https://gh.iterwheel.com/github/webhook` | Yes | `issues`, `issue_comment`, `pull_request`, `pull_request_review`, `pull_request_review_comment` | `200 OK` |
 | `frankyxhl/alfred` | `619961538` | `https://gh.iterwheel.com/github/webhook` | Yes | `issues`, `issue_comment` | `200 OK` |
 | `frankyxhl/babs` | `619961554` | `https://gh.iterwheel.com/github/webhook` | Yes | `issues`, `issue_comment` | `200 OK` |
 | `frankyxhl/fx_bin` | `619961564` | `https://gh.iterwheel.com/github/webhook` | Yes | `issues`, `issue_comment` | `200 OK` |
@@ -43,7 +43,7 @@ Current bridge write-back:
 |-------|------------------|---------|------------|
 | `iterwheel-blueprint` | `iterwheel/voyager`, `iterwheel/voyager-sandbox`, `frankyxhl/alfred`, `frankyxhl/babs`, `frankyxhl/fx_bin`, `frankyxhl/sweeping-monk`, `frankyxhl/trinity` | `issues.opened`, `issues.edited`, `issues.reopened`, or `/blueprint` issue comment | Validates issue title format and intake fields, maintains exactly one Blueprint state label from `blueprint-needed`, `blueprint-ready`, and `blueprint-requests-revision`, upserts one Blueprint intake comment, and adds a `rocket` issue reaction when the issue is Blueprint-ready |
 | `iterwheel-stack` | `iterwheel/voyager`, `iterwheel/voyager-sandbox`, `frankyxhl/alfred`, `frankyxhl/babs`, `frankyxhl/fx_bin`, `frankyxhl/sweeping-monk`, `frankyxhl/trinity` | `issues.opened`, `issues.edited`, `issues.reopened`, or `/stack` issue comment on a non-PR issue | Maintains one issue label from each Stack axis (`stack-type-*`, `stack-area-*`, `stack-size-*`, and `stack-risk-*`) when confident; otherwise applies `stack-needs-review`; upserts one Stack classification comment; adds `rocket` on successful issue classification and `eyes` when human review is needed |
-| `iterwheel-clearance` | `iterwheel/voyager-sandbox` | `pull_request.opened`, `pull_request.edited`, `pull_request.reopened`, `pull_request.ready_for_review`, `pull_request.converted_to_draft`, `pull_request.synchronize`, `pull_request_review.submitted`, `pull_request_review.dismissed`, `pull_request_review_comment.*`, or `/clearance` PR comment | Maintains one PR review-readiness label from `clearance-1-pending`, `clearance-2-blocked`, `clearance-3-ready-for-approval`, and `clearance-4-ready-for-merge`; upserts one Clearance comment; adds `rocket` when ready and `eyes` otherwise |
+| `iterwheel-clearance` | `iterwheel/voyager`, `iterwheel/voyager-sandbox` | `pull_request.opened`, `pull_request.edited`, `pull_request.reopened`, `pull_request.ready_for_review`, `pull_request.converted_to_draft`, `pull_request.synchronize`, `pull_request_review.submitted`, `pull_request_review.dismissed`, `pull_request_review_comment.*`, or `/clearance` PR comment | Maintains one PR review-readiness label from `clearance-1-pending`, `clearance-2-blocked`, `clearance-3-ready-for-approval`, and `clearance-4-ready-for-merge`; upserts one Clearance comment; adds `rocket` when ready and `eyes` otherwise |
 
 Cross-account installation:
 
@@ -87,10 +87,11 @@ Operational notes:
   as `Work Type`, `Stack Type`, and `Stack Area`, then uses weighted area
   signals so long issues do not fall into `stack-needs-review` only because they
   mention many generic terms.
-- Clearance v1 is active only for `iterwheel/voyager-sandbox`. It verifies
-  current GitHub review state and review-thread resolution, but does not claim
-  AI-level semantic repair verification. The sandbox now uses four numbered
-  Clearance labels: `clearance-1-pending`, `clearance-2-blocked`,
+- Clearance v1 is active for `iterwheel/voyager` and
+  `iterwheel/voyager-sandbox`. It verifies current GitHub review state and
+  review-thread resolution, but does not claim AI-level semantic repair
+  verification. Both repositories use four numbered Clearance labels:
+  `clearance-1-pending`, `clearance-2-blocked`,
   `clearance-3-ready-for-approval`, and `clearance-4-ready-for-merge`.
   Legacy labels (`clearance-pending`, `clearance-blocked`, `clearance-ready`)
   are removed on every write-back as part of the migration (issue #25).
@@ -122,3 +123,4 @@ Operational notes:
 | 2026-05-09 | Changed the bridge webhook path to ACK first and perform GitHub write-back in a background task                   | Frank Xu + Codex |
 | 2026-05-17 | Updated Clearance label set to four numbered labels; added legacy-migration note (issue #25)                      | Claude Code      |
 | 2026-05-17 | Replaced legacy label names in main registry table write-back row with four numbered clearance labels (issue #25) | Claude Code      |
+| 2026-05-17 | Recorded Clearance activation on `iterwheel/voyager` after PR #36 showed live Clearance readiness panels on the main repository. | Codex |
