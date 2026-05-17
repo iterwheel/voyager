@@ -71,7 +71,9 @@ jobs:
           # `[[ =~ ]]` matches against the entire variable value, so any
           # embedded control character (newline, CR, tab) fails the regex.
           # Codex bot review on PR #33 (multiline-bypass P1).
-          version_re='^[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.-]+)?$'
+          # Allow prerelease AND build-metadata combined (e.g. 1.0.0-rc.1+build.5),
+          # matching SemVer and the `version_no_build` stripping below.
+          version_re='^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?(\+[A-Za-z0-9.-]+)?$'
           if [[ ! "$version" =~ $version_re ]]; then
             echo "::error::Version '$version' does not match required format X.Y.Z (with optional pre-release/build suffix), or contains forbidden control characters."
             exit 1
