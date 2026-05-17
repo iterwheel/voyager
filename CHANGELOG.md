@@ -8,6 +8,14 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+### Changed — Clearance compact thread verification cards ([#40](https://github.com/iterwheel/voyager/issues/40))
+
+- Clearance review-thread conclusion replies now render as compact emoji
+  cards for resolved, still-open, and needs-human-judgment outcomes.
+- The existing close-reason/conclusion HTML markers are preserved for
+  duplicate-reply prevention, while detailed verifier evidence moves into a
+  collapsible `<details>` section.
+
 ### Changed — Stack compact classification panel ([#38](https://github.com/iterwheel/voyager/issues/38))
 
 - Stack classification comments now render as a compact `## Stack` emoji

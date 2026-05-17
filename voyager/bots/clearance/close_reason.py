@@ -40,6 +40,33 @@ def _verdict_value(thread: Thread) -> str:
     return getattr(thread.verdict, "value", thread.verdict)
 
 
+def _status_heading(verdict: str) -> str:
+    if verdict == "RESOLVED":
+        return "✅ **Clearance: resolved**"
+    if verdict == "NEEDS_HUMAN_JUDGMENT":
+        return "⚠️ **Clearance: needs human judgment**"
+    return "👀 **Clearance: still open**"
+
+
+def _action_line(verdict: str) -> str:
+    if verdict == "RESOLVED":
+        return "✅ Action: conversation resolved"
+    if verdict == "NEEDS_HUMAN_JUDGMENT":
+        return "🧑 Action: left open for reviewer"
+    return "⏳ Action: left open"
+
+
+def _checker_line(*, llm_reason: str | None, model: str | None) -> str:
+    if llm_reason:
+        verifier = f"Clearance Investigator (`{model}`)" if model else "Clearance Investigator"
+        return f"🤖 Check: {verifier}"
+    return "🧭 Check: Clearance deterministic verifier"
+
+
+def _location(thread: Thread) -> str:
+    return _sanitize_markdown(f"{thread.path}:{thread.line}" if thread.line else thread.path)
+
+
 def conclusion_marker(thread: Thread, *, head_sha: str) -> str:
     return f"clearance-thread-conclusion:{thread.id}:{head_sha[:12]}"
 
@@ -77,6 +104,45 @@ def _evidence_lines(thread: Thread, snapshot: ThreadSnapshot | None) -> list[str
     return lines
 
 
+def _detail_lines(
+    thread: Thread,
+    snapshot: ThreadSnapshot | None,
+    *,
+    verdict: str,
+    model: str | None,
+    llm_reason: str | None,
+) -> list[str]:
+    evidence = snapshot.evidence if snapshot else None
+    lines = [f"- Verdict: `{verdict}`"]
+
+    if llm_reason:
+        if model:
+            lines.append(f"- Model: `{_sanitize_markdown(model)}`")
+        if evidence and evidence.llm_verdict:
+            lines.append(f"- LLM verdict: `{_sanitize_markdown(evidence.llm_verdict)}`")
+    else:
+        lines.append("- Rule: SWM-1101 step 4-5")
+
+    thread_state = evidence.thread_state if evidence else None
+    if thread_state:
+        lines.append(f"- Thread state: `{_sanitize_markdown(str(thread_state))}`")
+
+    author_reply_id = (
+        evidence.author_reply_id
+        if evidence and evidence.author_reply_id
+        else thread.author_reply_id
+    )
+    if author_reply_id:
+        lines.append(f"- Author reply: review comment `{author_reply_id}`")
+
+    if evidence and evidence.llm_evidence:
+        lines.extend(f"- {_clip(item)}" for item in evidence.llm_evidence[:4])
+    else:
+        lines.extend(f"- {_clip(item)}" for item in _evidence_lines(thread, snapshot))
+
+    return lines
+
+
 def build_thread_conclusion_comment(
     thread: Thread,
     snapshot: ThreadSnapshot | None,
@@ -107,40 +173,29 @@ def build_thread_conclusion_comment(
             else "Clearance did not find enough evidence to close this review thread."
         )
     )
-    if llm_reason:
-        verifier = f"Clearance Investigator (`{model}`)" if model else "Clearance Investigator"
-    else:
-        verifier = "Clearance deterministic verifier"
     confidence = thread.llm_confidence or (evidence.llm_confidence if evidence else None)
-    confidence_line = f"\n- Confidence: `{confidence:.2f}`" if confidence is not None else ""
-    location = _sanitize_markdown(f"{thread.path}:{thread.line}" if thread.line else thread.path)
     marker_name = (
         close_reason_marker(thread, head_sha=head_sha)
         if resolved
         else conclusion_marker(thread, head_sha=head_sha)
     )
-    bullets = "\n".join(f"  - {_clip(item)}" for item in _evidence_lines(thread, snapshot))
-    intro = (
-        "Clearance verification before resolving this review thread:"
-        if resolved
-        else "Clearance conclusion for this review thread:"
+    detail_lines = "\n".join(
+        _detail_lines(thread, snapshot, verdict=verdict, model=model, llm_reason=llm_reason)
     )
-    result = (
-        "The conversation can be resolved now."
-        if resolved
-        else "The conversation is left open for another author response or human review."
-    )
+    confidence_line = f"\n🎯 Confidence: `{confidence:.2f}`" if confidence is not None else ""
     return (
         f"<!-- {marker_name} -->\n"
-        f"{intro}\n\n"
-        f"- Verdict: `{verdict}`\n"
-        f"- Verified by: {verifier}\n"
-        f"- Head: `{head_sha[:12]}`\n"
-        f"- Location: `{location}`{confidence_line}\n"
-        f"- Why: {_clip(reason)}\n"
-        f"- Result: {result}\n"
-        "- Evidence:\n"
-        f"{bullets}"
+        f"{_status_heading(verdict)}\n\n"
+        f"{_checker_line(llm_reason=llm_reason, model=model)}"
+        f"{confidence_line}\n"
+        f"📍 Location: `{_location(thread)}`\n"
+        f"🔖 Head: `{head_sha[:12]}`\n"
+        f"💡 Why: {_clip(reason)}\n"
+        f"{_action_line(verdict)}\n\n"
+        "<details>\n"
+        "<summary>Evidence</summary>\n\n"
+        f"{detail_lines}\n\n"
+        "</details>"
     )
 
 

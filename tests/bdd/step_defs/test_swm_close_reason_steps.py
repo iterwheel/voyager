@@ -183,6 +183,21 @@ def resolved_thread_with_llm(llm_reason: str, conf: float) -> dict:
     }
 
 
+@given(
+    parsers.parse(
+        'a NEEDS_HUMAN_JUDGMENT thread with llm_reason "{llm_reason}" and llm_confidence {conf:f}'
+    ),
+    target_fixture="comment_thread",
+)
+def needs_human_judgment_thread_with_llm(llm_reason: str, conf: float) -> dict:
+    return {
+        "thread": _make_thread(
+            verdict="NEEDS_HUMAN_JUDGMENT", llm_reason=llm_reason, llm_confidence=conf
+        ),
+        "snapshot": None,
+    }
+
+
 # ---------------------------------------------------------------------------
 # When — build_thread_conclusion_comment
 # ---------------------------------------------------------------------------

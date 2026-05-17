@@ -51,14 +51,24 @@ Feature: SWM close_reason — review-thread conclusion comment rendering
     When build_thread_conclusion_comment is called with head_sha "abc1234def56"
     Then the comment contains "RESOLVED"
     And the comment contains "clearance-close-reason"
-    And the comment contains "The conversation can be resolved now."
+    And the comment contains "✅ **Clearance: resolved**"
+    And the comment contains "✅ Action: conversation resolved"
 
   Scenario: OPEN comment contains conclusion marker and left-open message
     Given an OPEN thread with verdict_reason "non-substantive reply"
     When build_thread_conclusion_comment is called with head_sha "abc1234def56"
     Then the comment contains "OPEN"
     And the comment contains "clearance-thread-conclusion"
-    And the comment contains "left open"
+    And the comment contains "👀 **Clearance: still open**"
+    And the comment contains "⏳ Action: left open"
+
+  Scenario: NEEDS_HUMAN_JUDGMENT comment contains compact human-judgment card
+    Given a NEEDS_HUMAN_JUDGMENT thread with llm_reason "ambiguous evidence" and llm_confidence 0.63
+    When build_thread_conclusion_comment is called with head_sha "abc1234def56" and model "deepseek-v4-flash"
+    Then the comment contains "NEEDS_HUMAN_JUDGMENT"
+    And the comment contains "clearance-thread-conclusion"
+    And the comment contains "⚠️ **Clearance: needs human judgment**"
+    And the comment contains "🧑 Action: left open for reviewer"
 
   Scenario: Comment with llm_reason and explicit model uses Clearance Investigator label
     Given a RESOLVED thread with llm_reason "diff clears the issue" and llm_confidence 0.92
