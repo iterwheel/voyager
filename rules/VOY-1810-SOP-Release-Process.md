@@ -158,7 +158,11 @@ Before merging the release PR:
   expected SHA and proceeds to create only the release. If the tag
   points at a *different* SHA, the workflow exits with an error
   requiring manual recovery (`git push origin :refs/tags/vX.Y.Z` then
-  re-run).
+  re-run). The SHA comparison works for both lightweight and annotated
+  tags: the step queries the peeled ref (`refs/tags/X^{}`) first, which
+  dereferences an annotated tag to its underlying commit SHA; it falls
+  back to the direct ref for lightweight tags (which already point at
+  the commit SHA).
 - **Version input must match strict semver format.** When using
   `workflow_dispatch`, the `version` input is validated against
   `^[0-9]+\.[0-9]+\.[0-9]+([-+][A-Za-z0-9.-]+)?$` before any
@@ -184,3 +188,4 @@ Before merging the release PR:
 |------|--------|----|
 | 2026-05-17 | Initial version — accompanies `.github/workflows/release.yml` for v0.2.0+ releases. | Claude Opus 4.7 |
 | 2026-05-17 | Security/correctness hardening: replace HEAD~1 with github.event.before, shell-injection fix via env vars, strict version regex, idempotent tag-stranded recovery, awk literal index match, --latest=auto, commit-comment on failure. | Claude Sonnet 4.6 |
+| 2026-05-17 | Fix annotated-tag SHA comparison: query peeled ref (refs/tags/X^{}) then fall back to direct ref; update §Pitfalls "Tagging mid-flight" note. Codex bot PR #33 review. | Claude Sonnet 4.6 |
