@@ -24,6 +24,8 @@ release note for the explicit migration path.
 - Made Flash/unknown-model startup warnings actionable while preserving the
   current Flash no-thinking canary behavior until an operator changes
   `[voyager].default_profile`.
+- Treats moving public aliases such as `deepseek-chat` as unknown until a
+  rollout document pins them to a Voyager policy tier.
 
 ### Added — Stack metadata issue template ([#47](https://github.com/iterwheel/voyager/issues/47))
 

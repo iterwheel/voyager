@@ -80,6 +80,8 @@ default_profile = "pro"
   with `min_confidence >= 0.90`.
 - Unknown models must not be treated as production-ready until their tier and
   threshold are documented.
+- Moving public aliases such as `deepseek-chat` must be treated as unknown
+  until the rollout document pins them to a Voyager policy tier.
 - Lowering a Pro threshold below `0.78` or a Flash threshold below `0.90`
   requires a written exception in the rollout issue or deployment handoff.
 
@@ -97,6 +99,8 @@ Operator actions:
 - Production auto-resolve desired: set `[voyager].default_profile = "pro"`.
 - Unknown model selected: pin to `deepseek-v4-pro` or document the model tier
   and threshold before enabling auto-resolve.
+- Public alias selected: prefer an explicit Voyager profile model such as
+  `deepseek-v4-pro` or `deepseek-v4-flash`, or document why the alias is safe.
 
 ### 5. Verify Profile Selection
 

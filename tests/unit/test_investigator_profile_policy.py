@@ -102,10 +102,22 @@ def test_unknown_model_policy_warning_requires_documented_tier() -> None:
 
 def test_model_policy_tier_classifies_known_models() -> None:
     assert _model_policy_tier("deepseek-v4-pro") == "pro"
-    assert _model_policy_tier("deepseek-chat") == "pro"
     assert _model_policy_tier("deepseek-reasoner") == "pro"
     assert _model_policy_tier("deepseek-v4-flash") == "flash"
+    assert _model_policy_tier("deepseek-chat") == "unknown"
     assert _model_policy_tier("deepseek-v5-preview") == "unknown"
+
+
+def test_moving_deepseek_chat_alias_requires_documented_tier() -> None:
+    warning = _profile_policy_warning(
+        profile_name="legacy_chat",
+        model="deepseek-chat",
+        min_confidence=0.80,
+    )
+
+    assert warning is not None
+    assert "unrecognized model" in warning
+    assert "document the model tier" in warning
 
 
 def test_build_investigator_from_profile_logs_flash_policy_warning(caplog) -> None:
