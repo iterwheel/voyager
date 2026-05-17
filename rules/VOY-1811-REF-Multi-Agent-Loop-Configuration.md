@@ -1,8 +1,8 @@
 # REF-1811: Multi-Agent Loop Configuration
 
 **Applies to:** VOY project (`iterwheel/voyager`)
-**Last updated:** 2026-05-17
-**Last reviewed:** 2026-05-17
+**Last updated:** 2026-05-18
+**Last reviewed:** 2026-05-18
 **Status:** Active
 **Related:** COR-1617 (Multi-Agent Workflow Loop), COR-1618 (Out-of-Band Consent Auto-Pick), COR-1622 (Multi-Agent Loop Project Configuration), VOY-1805 (GitHub Bot Accounts), VOY-1807 (GitHub App Registry), VOY-1810 (Release Process)
 
@@ -167,6 +167,132 @@ under this REF.
 
 ---
 
+## Completion Gate (COR-1617 Phase 11 Binding)
+
+**Status:** Active (2026-05-18)
+**Motivating incident:** PR [#49](https://github.com/iterwheel/voyager/pull/49)
+(merged) with unresolved Codex P2 review thread; follow-up
+[PR #55](https://github.com/iterwheel/voyager/pull/55) required to close the
+finding.
+
+### Why a Completion Gate?
+
+VOY-1811 Phase 11 (Retrospective) must not report completion while any related
+PR carries unresolved actionable review feedback. The 2026-05-17 open-issue batch
+run closed target issues and merged the integration PR, but missed a Codex P2
+thread on already-merged PR #49. That thread was actionable and required
+follow-up PR #55 before it could be resolved.
+
+Without a hard gate, an agent can declare the task done while review feedback
+survives on merged or superseded PRs that are no longer in the agent's active
+working set.
+
+### Related PR Set
+
+Before declaring Phase 11 complete, the agent MUST assemble the **Related PR
+Set** for the current task. The set includes every PR that is linked to the
+target issue(s) or was created during the VOY-1811 run:
+
+| Source | Scope | Rationale |
+|--------|-------|-----------|
+| Current PR(s) | Open PRs created by this run | Primary work artifact |
+| Integration PR | The PR that closes the target issue(s) | If distinct from current PR |
+| Superseded PR(s) | PRs closed/superseded by the current work | May carry unresolved threads that were never addressed |
+| Merged PR(s) | PRs merged during this run or linked to the same issue(s) | Review threads survive merge; GitHub does not auto-resolve them |
+| Referenced PR(s) | PRs cited in PR bodies, comments, or closing references of any PR in the set | Transitive sweep to catch collateral unresolved feedback |
+
+The Related PR Set is **transitive**: if a PR in the set references another PR,
+the referenced PR joins the set. The agent must expand the set until no new
+cross-references are discovered.
+
+### Review-Thread Sweep
+
+For every PR in the Related PR Set, regardless of whether the PR is open,
+merged, or closed, the agent MUST:
+
+1. Fetch all review threads (`gh api /repos/{owner}/{repo}/pulls/{number}/comments` or equivalent).
+2. For each thread, determine its resolution state.
+3. Classify every unresolved thread as actionable or non-actionable (see below).
+4. For actionable threads: fix + resolve, or create a linked follow-up issue/PR.
+5. For non-actionable threads: document the rationale for non-action.
+
+The sweep applies to **all** PRs in the set — merged PRs are not excluded.
+GitHub preserves review threads after merge; a merged PR with unresolved
+threads is still carrying actionable feedback.
+
+### Actionable Classification
+
+An unresolved review thread is **actionable** when:
+
+- Severity P0/P1/P2 (blocker, major, minor per COR-1609/COR-1610), OR
+- The reviewer explicitly requested a change that was not applied, OR
+- The thread asks a question that was never answered.
+
+A thread is **non-actionable** only when:
+
+- The feedback was applied in a different commit/PR (cite the commit or PR), OR
+- The thread is purely conversational/emojis with no change request, OR
+- The thread was superseded by a later review round that explicitly reversed
+  the request.
+
+If classification is ambiguous, the thread is actionable by default.
+
+### Delayed-Review Sweep
+
+After final push, approval, or merge of the current PR(s), the agent MUST
+perform a **delayed-review sweep** before reporting completion:
+
+1. Wait for bot polling windows to complete (Clearance re-evaluates, Codex
+   may post delayed follow-ups).
+2. Re-fetch review threads for all PRs in the Related PR Set.
+3. If any new unresolved actionable threads appear, restart from the
+   resolution step — do not report completion.
+
+The delayed sweep catches review feedback that arrives after the agent's
+last push — for example, a Codex review that was triggered by the final
+commit and completed after the agent moved on.
+
+### Completion Criteria
+
+Phase 11 completion requires **both** conditions to be true:
+
+| Condition | Check |
+|-----------|-------|
+| **Target issue closure** | All target issues are closed, OR a linked PR with closing keywords is merged. |
+| **Review-thread closure** | For every PR in the Related PR Set, zero unresolved actionable P0/P1/P2 threads remain. Non-actionable threads are documented with rationale. |
+
+The agent MUST NOT report completion when target issues are closed but
+actionable review threads exist on any PR in the Related PR Set.
+Issue closure and review-thread closure are distinct gates; both must pass.
+
+### Concrete Checks
+
+The agent MUST perform these checks (or equivalents for non-GitHub-API
+runtimes) before reporting Phase 11 complete:
+
+```bash
+# 1. Assemble the Related PR Set from issue cross-references
+gh issue list --state closed --search "<issue-number>" --json number,title
+
+# 2. For each PR in the set: fetch review threads
+gh api "/repos/iterwheel/voyager/pulls/{pr_number}/comments" \
+  --jq '.[] | select(.in_reply_to_id == null) | {id, path, body, created_at, html_url}'
+
+# 3. For each thread: check resolution state
+gh api "/repos/iterwheel/voyager/pulls/{pr_number}/comments" \
+  --jq '[.[] | select(.in_reply_to_id != null) | .in_reply_to_id] | unique'
+# Compare thread root IDs against resolved reply IDs.
+
+# 4. Cross-reference: check PR bodies/comments for mentions of other PRs
+gh pr view {pr_number} --json body,comments
+```
+
+If a runtime cannot execute these checks (e.g., no GitHub CLI access), the
+agent MUST explicitly record the limitation and report it as an open
+completion-gate blocker rather than proceeding.
+
+---
+
 ## Known Limitations
 
 1. **No COR-1622 `<runtime>` key.** Voyager records runtime substitution in
@@ -186,4 +312,5 @@ under this REF.
 
 | Date | Change | By |
 |------|--------|----|
+| 2026-05-18 | Added Completion Gate (COR-1617 Phase 11 Binding): Related PR Set, review-thread sweep, actionable classification, delayed-review sweep, completion criteria with distinct issue/thread closure, and concrete `gh` checks. Motivated by PR #49 P2 thread missed during VOY-1811 open-issue batch. | DeepSeek (via VOY-1811) |
 | 2026-05-17 | Initial Voyager instantiation of COR-1622 for the COR-1617 multi-agent workflow loop. Uses VOY-1811 because VOY-1810 is already the Release Process SOP. | Codex |
