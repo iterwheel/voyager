@@ -1,0 +1,9 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 147,
+    "title": "[Task]: Add Stack metadata to the issue template",
+    "html_url": "https://github.test/issues/147",
+    "body": "## Work Type\n\nTemplate guidance for issue authors.\n\nStack Type: feature\nStack Area: github\n\n## Problem / Goal\n\nThis template mentions automation, docs, tests, CI, workflow, labels, webhooks, and deployment enough to confuse weighted routing.\n\n## Context\n\nThe issue body deliberately contains docs, automation, tests, CI, workflow, labels, webhook, Cloudflare, deployment, and runbook terms so weighted signals are noisy.\n\n## Expected Outcome\n\nStack still classifies the work as feature/github because the explicit template fields win.\n\n## Acceptance Criteria\n\n- [ ] The explicit Stack Type field beats the task title kind.\n- [ ] The explicit Stack Area field beats noisy weighted body signals.\n\n## Reproduction Steps / Task Plan\n\n1. Open a templated issue.\n2. Fill Stack Type and Stack Area.\n3. Trigger Stack classification.\n\n## Priority\n\nP2 - template ergonomics.\n\n## Requester / Owner\n\nRequester: @frankyxhl\nOwner: Iterwheel Stack\n"
+  }
+}
