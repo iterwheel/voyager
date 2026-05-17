@@ -27,6 +27,9 @@ Issue #48 also depends on the hardening work from issue #45 and issue #44:
 writeback failures must be visible, and the bridge must have an operator
 restart/rollback path before broader repository coverage.
 
+Merge order matters: issue #44 / PR #50, which introduces the VOY-1814 launchd
+and rollback runbook, must merge before this SOP is merged or used.
+
 ## When to Use
 
 - Planning the next managed repository after the current canary.
@@ -193,6 +196,7 @@ external installation state intact until the incident is understood.
 
    ```bash
    curl -fsS http://127.0.0.1:8787/healthz
+   curl -fsS https://gh.iterwheel.com/healthz
    ```
 
 4. Trigger or replay a safe issue event for the rolled-back repository.

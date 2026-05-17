@@ -25,6 +25,7 @@ def test_canary_expansion_sop_requires_preflight_and_bot_scope() -> None:
     required = (
         "Issue #45 / PR #49 writeback failure observability",
         "Issue #44 / PR #50 launchd and rollback runbook",
+        "must merge before this SOP is merged or used",
         "selected-repository GitHub App installation access",
         "Confirm required labels exist",
         "https://gh.iterwheel.com/github/webhook",
@@ -48,6 +49,7 @@ def test_canary_expansion_sop_covers_allowlist_rollback_and_denied_routes() -> N
         "/Users/frank/.voyager/bridge.env",
         "launchctl kickstart -kp gui/$(id -u)/com.iterwheel.voyager.bridge",
         "Remove the repository from each app-specific allow-list",
+        "curl -fsS https://gh.iterwheel.com/healthz",
         "repository_allowlist_denied",
         "no bot marker comment is created or updated",
     )
