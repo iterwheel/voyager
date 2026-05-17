@@ -116,8 +116,7 @@ install -d -m 700 /Users/frank/.voyager/state
 install -d -m 755 /Users/frank/Library/Logs/voyager
 install -d -m 755 /Users/frank/Library/LaunchAgents
 
-cp deploy/wukong/bridge.env.example /Users/frank/.voyager/bridge.env
-chmod 600 /Users/frank/.voyager/bridge.env
+install -m 600 deploy/wukong/bridge.env.example /Users/frank/.voyager/bridge.env
 $EDITOR /Users/frank/.voyager/bridge.env
 
 plutil -lint deploy/launchd/com.iterwheel.voyager.bridge.plist
@@ -229,6 +228,10 @@ handoff or PR:
   plist.
 - launchd does not parse dotenv files. The template uses zsh to source the env
   file before `exec`ing uvicorn.
+- The plist uses `/bin/zsh -lc`, so the operator's login shell files may run
+  before `bridge.env` is sourced. Keep shell startup files free of
+  stdout-producing commands and env overrides that conflict with
+  `/Users/frank/.voyager/bridge.env`.
 - A missing env file or syntax error causes fast launchd restart loops. Use
   `launchctl print` and `bridge.err.log` first when diagnosing.
 - Do not enable a global repository allow-list casually. A global allow-list can

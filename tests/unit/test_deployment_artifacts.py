@@ -7,23 +7,28 @@ ROOT = Path(__file__).resolve().parents[2]
 PLIST_PATH = ROOT / "deploy/launchd/com.iterwheel.voyager.bridge.plist"
 ENV_PATH = ROOT / "deploy/wukong/bridge.env.example"
 SOP_PATH = ROOT / "rules/VOY-1814-SOP-Wukong-Bridge-Launchd-and-Rollback.md"
+WUKONG_PROJECT_DIR = "/Users/frank/Projects/voyager"
+WUKONG_LOG_DIR = "/Users/frank/Library/Logs/voyager"
 
 
 def test_launchd_plist_defines_wukong_bridge_contract() -> None:
     plist = plistlib.loads(PLIST_PATH.read_bytes())
 
     assert plist["Label"] == "com.iterwheel.voyager.bridge"
-    assert plist["WorkingDirectory"] == "/Users/frank/Projects/voyager"
+    assert plist["WorkingDirectory"] == WUKONG_PROJECT_DIR
     assert plist["RunAtLoad"] is True
     assert plist["KeepAlive"] is True
-    assert plist["StandardOutPath"] == "/Users/frank/Library/Logs/voyager/bridge.out.log"
-    assert plist["StandardErrorPath"] == "/Users/frank/Library/Logs/voyager/bridge.err.log"
+    assert plist["ThrottleInterval"] == 10
+    assert plist["Umask"] == 63
+    assert plist["StandardOutPath"] == f"{WUKONG_LOG_DIR}/bridge.out.log"
+    assert plist["StandardErrorPath"] == f"{WUKONG_LOG_DIR}/bridge.err.log"
 
     args = plist["ProgramArguments"]
+    assert len(args) == 3
     assert args[:2] == ["/bin/zsh", "-lc"]
     command = args[2]
     assert "source /Users/frank/.voyager/bridge.env" in command
-    assert "exec /Users/frank/Projects/voyager/.venv/bin/python" in command
+    assert f"exec {WUKONG_PROJECT_DIR}/.venv/bin/python" in command
     assert "-m uvicorn voyager.server:app --host 127.0.0.1 --port 8787" in command
 
 
@@ -52,7 +57,7 @@ def test_launchd_sop_covers_operator_lifecycle_and_rollback() -> None:
 
     required_snippets = (
         "/Users/frank/.voyager/bridge.env",
-        "chmod 600 /Users/frank/.voyager/bridge.env",
+        "install -m 600 deploy/wukong/bridge.env.example /Users/frank/.voyager/bridge.env",
         "DRY_RUN=false",
         "launchctl bootstrap gui/$(id -u)",
         "launchctl bootout gui/$(id -u)",
