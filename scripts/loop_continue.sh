@@ -68,7 +68,18 @@ acquire_lock() {
 }
 
 release_lock() {
-    rm -f "$LOCK_FILE"
+    # Only remove the lock file if this process owns it.
+    # Defense-in-depth: the trap is only installed after acquire_lock
+    # succeeds, but verifying PID prevents an accidental double-release
+    # or a stale trap from removing another process's lock.
+    if [[ -f "$LOCK_FILE" ]]; then
+        local lock_pid
+        lock_pid=$(cat "$LOCK_FILE" 2>/dev/null || echo "")
+        if [[ "$lock_pid" == "$$" ]] || [[ -z "$lock_pid" ]]; then
+            rm -f "$LOCK_FILE"
+        fi
+        # If lock_pid != $$, do NOT remove — another process owns the lock.
+    fi
 }
 
 # ── Environment ──────────────────────────────────────────────────────────────
@@ -110,9 +121,9 @@ check_prereqs() {
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 main() {
+    acquire_lock
     trap release_lock EXIT INT TERM
 
-    acquire_lock
     log "=== Loop wakeup starting (PID $$) ==="
 
     source_env
