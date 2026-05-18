@@ -112,7 +112,7 @@ Voyager treats runtime as an explicit local convention because COR-1622 has no
 | Runtime | Status for Voyager | Invocation | Panel dispatch | Wakeup primitive |
 |---------|--------------------|------------|----------------|------------------|
 | Claude Code | Primary documented runtime today | `follow VOY-1811...` in the Claude Code session | Trinity skill / `trinity review` with `<panel-providers>` | `ScheduleWakeup` when available; otherwise the runtime's documented loop primitive |
-| DeepSeek TUI | Verified (2026-05-18). Durable-wakeup-capable (2026-05-18). | `follow VOY-1811` in the DeepSeek TUI session | Trinity skill / `trinity review` with `<panel-providers>`; sub-agent dispatch via `agent_open` | External launchd timer via `deploy/launchd/com.iterwheel.voyager.loop.plist` + `scripts/loop_continue.sh`; see §Durable Wakeup: DeepSeek TUI |
+| DeepSeek TUI | Verified (2026-05-18). Durable-wakeup-capable (2026-05-18). | `follow VOY-1811` in the DeepSeek TUI session | Trinity skill / `trinity review` with `<panel-providers>`; sub-agent dispatch via `agent_open` | `task_create` self-bootstrapping chain; see §Durable Wakeup: DeepSeek TUI |
 | Codex CLI | Supported operator runtime | Codex session prompt using the same invocation phrases | Local shell `trinity review` and `gh` commands | No durable native wakeup assumed; use bounded `sleep`/poll in-session or an external scheduler |
 | Droid | Worker/runtime alternative | `droid exec` or `droid exec --mission` with explicit model and cwd | Provider CLIs through Droid or Trinity provider wrappers | External scheduler or Droid/factory session re-entry; do not assume `ScheduleWakeup` |
 | Gemini CLI | Reviewer/runtime alternative | `gemini -p` review prompts or project wrapper | Direct Gemini CLI for escalation review | External scheduler/manual re-entry |
@@ -126,100 +126,52 @@ the loop in manual/bounded-poll mode rather than claiming full COR-1617 adoption
 
 ## Durable Wakeup: DeepSeek TUI
 
-DeepSeek TUI does not ship a native `ScheduleWakeup` primitive (the wakeup
-mechanism that Claude Code uses for autonomous Phase 12 loop restart). This
-section documents the external-scheduler pattern that makes DeepSeek TUI a
-viable autonomous runtime for VOY-1811.
+DeepSeek TUI provides `task_create` — a restart-aware durable task primitive.
+This replaces the external-scheduler (launchd timer) pattern with a self-
+bootstrapping chain that survives session restarts.
 
 ### Architecture
 
 ```
-launchd timer (every 15 min)
+Phase 11 (Retrospective) completion
   │
-  └─▶ scripts/loop_continue.sh
-        │
-        ├─ acquire lock file (/tmp/voyager-loop.lock)
-        ├─ source bridge.env (API keys, gh auth)
-        ├─ deepseek --yolo exec --auto "follow VOY-1811 once"
-        │     │
-        │     ├─ Phase 1: auto-pick (consent-gated)
-        │     ├─ Phases 2-11: execute for one issue
-        │     └─ Phase 11: stop (no Phase 12 restart)
-        │
-        └─ release lock file
+  └─▶ task_create(
+         prompt: "follow VOY-1811 once",
+         auto_approve: true,
+         trust_mode: true,
+         mode: "agent"
+       )
+         │
+         ├─ Task enqueued in TaskManager (survives restarts)
+         ├─ When ready: runs Phases 1-11 for one issue
+         ├─ Phase 11 enqueues the next task_create
+         └─ Chain continues indefinitely
 ```
 
-The timer itself is the Phase 12 restart primitive. Each wakeup runs exactly
-one `follow VOY-1811 once` stanza — one issue, stop after Phase 11. The next
-timer tick picks the next consent-gated issue.
+Each `task_create` call enqueues exactly one `follow VOY-1811 once` run —
+one issue, stop after Phase 11. Phase 11 itself enqueues the next wakeup,
+forming a durable chain with no external scheduler dependency.
 
-### Files
+### Key Properties
 
-| File | Purpose |
-|------|---------|
-| `deploy/launchd/com.iterwheel.voyager.loop.plist` | launchd timer agent (StartInterval: 900s). Install to `~/Library/LaunchAgents/`. |
-| `scripts/loop_continue.sh` | Wrapper script: lock guard, env sourcing, CLI prerequisite checks, headless invocation. |
-
-### Installation
-
-```bash
-# 1. Create the log directory (launchd opens stdout/stderr before spawning zsh)
-install -d -m 755 ~/Library/Logs/voyager
-
-# 2. Copy and lint the plist
-cp deploy/launchd/com.iterwheel.voyager.loop.plist ~/Library/LaunchAgents/
-plutil -lint ~/Library/LaunchAgents/com.iterwheel.voyager.loop.plist
-
-# 3. Ensure the wrapper script is executable
-chmod +x scripts/loop_continue.sh
-
-# 4. Bootstrap the timer
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.iterwheel.voyager.loop.plist
-
-# 5. Verify it is loaded (last exit code is 0 when healthy; empty if not yet run)
-launchctl print gui/$(id -u)/com.iterwheel.voyager.loop
-
-# 6. To stop
-launchctl bootout gui/$(id -u)/com.iterwheel.voyager.loop
-```
-
-> **Security:** The bridge environment file (`~/.voyager/bridge.env`) must be
-> readable by the loop timer. Ensure `chmod 600` on the env file and verify
-> that the launchd agent runs as the correct user.
-
-### Concurrency Guard
-
-The wrapper script uses a lock file (`/tmp/voyager-loop.lock`) to prevent
-overlapping runs. A full COR-1617 loop can take longer than the 15-minute
-timer interval; if the lock is held and younger than `VOYAGER_LOOP_INTERVAL`
-(default 7200s = 2h), the new invocation exits immediately with code 1.
-
-Locks older than `VOYAGER_LOOP_INTERVAL` are treated as stale and removed
-(exit code 5). Stale locks indicate a previous run may have crashed or hung;
-the operator should investigate the logs before the next tick.
-
-### Environment
-
-The wrapper script sources `~/.voyager/bridge.env` (the same file used by the
-bridge service) to load API keys, webhook secrets, allowed repositories, and
-other runtime configuration. The following variables can be overridden:
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `VOYAGER_PROJECT_ROOT` | `$HOME/Projects/voyager` | Project working directory |
-| `VOYAGER_ENV_FILE` | `$HOME/.voyager/bridge.env` | Environment file to source |
-| `VOYAGER_LOCK_FILE` | `/tmp/voyager-loop.lock` | Concurrency lock file |
-| `VOYAGER_LOG_DIR` | `$HOME/Library/Logs/voyager` | Log output directory |
-| `VOYAGER_LOOP_INTERVAL` | `7200` | Stale lock threshold (seconds) |
+| Property | Description |
+|----------|-------------|
+| **No external scheduler** | Does not require launchd, cron, systemd, or GitHub Actions. |
+| **Restart-aware** | `task_create` persists in TaskManager; chain resumes after TUI restart. |
+| **No lock files** | TaskManager serializes durable tasks; no concurrency guard needed. |
+| **No env sourcing** | Agent inherits the TUI session environment (API keys, gh auth, cwd). |
+| **No shell scripting** | All loop logic lives in VOY-1811; no wrapper script required. |
+| **Cross-platform** | Works on any OS where DeepSeek TUI runs. |
 
 ### Limitations
 
-- **No native wakeup.** `deepseek exec --auto` is a headless invocation, not a
-  native scheduler primitive. Persistent session state (session resumption) is
-  not used; each wakeup is a fresh invocation.
-- **macOS only.** The launchd timer pattern is macOS-specific. Non-macOS
-  deployments should substitute cron, systemd timer, or a GitHub Actions
-  scheduled workflow using the same `deepseek exec --auto` invocation.
+- **Session must be running.** TaskManager only dispatches when the TUI process
+  is alive. If the TUI is quit, queued tasks wait until the next launch.
+- **No inter-task concurrency guard.** TaskManager serializes durable tasks;
+  two `follow VOY-1811 once` tasks cannot overlap. If a task is long-running,
+  the next waits in queue — no race condition, but no parallelism either.
+- **Bootstrap requires operator.** The first task in the chain must be enqueued
+  manually (e.g. `follow VOY-1811 once`). After that, the chain self-sustains.
 
 ## Invocation
 
@@ -464,7 +416,8 @@ completion-gate blocker rather than proceeding.
 
 | Date | Change | By |
 |------|--------|----|
-| 2026-05-18 | Added §Durable Wakeup: DeepSeek TUI — launchd timer + `scripts/loop_continue.sh` wrapper with lock guard as the external-scheduler wakeup primitive. Created `deploy/launchd/com.iterwheel.voyager.loop.plist`. Runtime Profile row updated. | DeepSeek (via VOY-1811 #59) |
+| 2026-05-19 | Replaced launchd external-scheduler pattern with `task_create` self-bootstrapping chain. Removed `deploy/launchd/com.iterwheel.voyager.loop.plist` and `scripts/loop_continue.sh`. Rewrote §Durable Wakeup: DeepSeek TUI and updated Runtime Profile row. | DeepSeek (via VOY-1811 #59) |
+| 2026-05-18 | Added §Durable Wakeup: DeepSeek TUI (launchd timer pattern, superseded). | DeepSeek (via VOY-1811 #59) |
 | 2026-05-18 | Added DeepSeek TUI row to Runtime Profile (verified via issue #56 loop). Wakeup uses `task_shell_start` with shell poll loop in bounded-poll mode. | DeepSeek (via VOY-1811) |
 | 2026-05-18 | Added Completion Gate (COR-1617 Phase 11 Binding): Related PR Set, review-thread sweep, actionable classification, delayed-review sweep, completion criteria with distinct issue/thread closure, and concrete `gh` checks. Motivated by PR #49 P2 thread missed during VOY-1811 open-issue batch. | DeepSeek (via VOY-1811) |
 | 2026-05-17 | Initial Voyager instantiation of COR-1622 for the COR-1617 multi-agent workflow loop. Uses VOY-1811 because VOY-1810 is already the Release Process SOP. | Codex |
