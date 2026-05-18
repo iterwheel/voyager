@@ -140,7 +140,7 @@ launchd timer (every 15 min)
         │
         ├─ acquire lock file (/tmp/voyager-loop.lock)
         ├─ source bridge.env (API keys, gh auth)
-        ├─ deepseek exec --auto "follow VOY-1811 once"
+        ├─ deepseek --yolo exec --auto "follow VOY-1811 once"
         │     │
         │     ├─ Phase 1: auto-pick (consent-gated)
         │     ├─ Phases 2-11: execute for one issue
@@ -163,20 +163,23 @@ timer tick picks the next consent-gated issue.
 ### Installation
 
 ```bash
-# 1. Copy and lint the plist
+# 1. Create the log directory (launchd opens stdout/stderr before spawning zsh)
+install -d -m 755 ~/Library/Logs/voyager
+
+# 2. Copy and lint the plist
 cp deploy/launchd/com.iterwheel.voyager.loop.plist ~/Library/LaunchAgents/
 plutil -lint ~/Library/LaunchAgents/com.iterwheel.voyager.loop.plist
 
-# 2. Ensure the wrapper script is executable
+# 3. Ensure the wrapper script is executable
 chmod +x scripts/loop_continue.sh
 
-# 3. Bootstrap the timer
+# 4. Bootstrap the timer
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.iterwheel.voyager.loop.plist
 
-# 4. Verify it is loaded (Status should be non-zero)
+# 5. Verify it is loaded (last exit code is 0 when healthy; empty if not yet run)
 launchctl print gui/$(id -u)/com.iterwheel.voyager.loop
 
-# 5. To stop
+# 6. To stop
 launchctl bootout gui/$(id -u)/com.iterwheel.voyager.loop
 ```
 
