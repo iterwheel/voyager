@@ -274,11 +274,12 @@ runtimes) before reporting Phase 11 complete:
 ```bash
 # 1. Assemble the Related PR Set from issue cross-references (GraphQL)
 gh api graphql -F owner="iterwheel" -F repo="voyager" -F issue=<issue_number> \
+  -F endCursor="" \
   -f query='
-    query($owner:String!, $repo:String!, $issue:Int!) {
+    query($owner:String!, $repo:String!, $issue:Int!, $endCursor:String) {
       repository(owner:$owner, name:$repo) {
         issue(number:$issue) {
-          timelineItems(first:50, itemTypes:[CROSS_REFERENCED_EVENT, CLOSED_EVENT]) {
+          timelineItems(first:50, after: $endCursor, itemTypes:[CROSS_REFERENCED_EVENT, CLOSED_EVENT]) {
             pageInfo { hasNextPage endCursor }
             nodes {
               ... on CrossReferencedEvent {
@@ -299,11 +300,12 @@ gh api "/repos/iterwheel/voyager/pulls/{pr_number}/comments" \
 
 # 3. For each thread: check resolved state (GraphQL isResolved)
 gh api graphql -F owner="iterwheel" -F repo="voyager" -F pr=<pr_number> \
+  -F endCursor="" \
   -f query='
-    query($owner:String!, $repo:String!, $pr:Int!) {
+    query($owner:String!, $repo:String!, $pr:Int!, $endCursor:String) {
       repository(owner:$owner, name:$repo) {
         pullRequest(number:$pr) {
-          reviewThreads(first:100) {
+          reviewThreads(first:100, after: $endCursor) {
             pageInfo { hasNextPage endCursor }
             nodes {
               isResolved
