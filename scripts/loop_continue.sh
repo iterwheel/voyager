@@ -35,7 +35,10 @@ LOCK_FILE="${VOYAGER_LOCK_FILE:-/tmp/voyager-loop.lock}"
 LOG_DIR="${VOYAGER_LOG_DIR:-$HOME/Library/Logs/voyager}"
 LOOP_INTERVAL="${VOYAGER_LOOP_INTERVAL:-7200}"
 
-LOOP_CMD="deepseek exec --auto follow VOY-1811 once"
+# Verified on DeepSeek CLI v0.8.39. --yolo enables auto-approval for headless
+# launchd invocations; exec --auto enables agentic mode. The prompt is quoted
+# as a single string to survive shell word-splitting.
+LOOP_CMD='deepseek --yolo exec --auto "follow VOY-1811 once"'
 
 # ── Logging setup ───────────────────────────────────────────────────────────
 
@@ -156,9 +159,10 @@ main() {
     log "Running: $LOOP_CMD"
     log "Working directory: $(pwd)"
 
-    # deepseek exec auto-accepts approval requests when --auto is set.
+    # deepseek --yolo exec --auto handles tool approval in headless mode.
     # The loop_continue.sh wrapper is a non-interactive scheduler; there is
-    # no operator to approve prompts. Run with --auto.
+    # no operator to approve prompts. If the CLI version changes, verify
+    # that --yolo and exec --auto are still the correct flags.
     if eval "$LOOP_CMD" >>"$LOG_FILE" 2>>"$ERR_FILE"; then
         log "=== Loop wakeup completed successfully ==="
     else
