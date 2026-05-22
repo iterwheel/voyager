@@ -432,19 +432,11 @@ async def _maybe_sync_stage_15(
 
         comment_body = build_close_reason_comment(thread, snap, head_sha=head_sha)
 
-        if dry_run:
-            actions.append(
-                Stage15Action(
-                    mutation=Stage15Mutation.RESOLVE_REVIEW_THREAD,
-                    threadId=thread.id,
-                    result={"dry_run": True},
-                )
-            )
-            continue
-
         # Issue #62: skip resolveReviewThread on fork PRs where the head repo
         # is not accessible. This produces a specific unsupported-context action
         # instead of a generic permission error that repeats on every webhook.
+        # Must run before the dry_run gate so dry-run output also surfaces the
+        # UnsupportedContext result instead of a misleading resolvable path.
         if fork_head_blocked:
             skip_reason = (
                 f"Unsupported context: PR #{pr} is from fork {head_repo}. "
@@ -466,6 +458,16 @@ async def _maybe_sync_stage_15(
                         "thread_id": thread.id,
                         "suggested_action": skip_reason,
                     },
+                )
+            )
+            continue
+
+        if dry_run:
+            actions.append(
+                Stage15Action(
+                    mutation=Stage15Mutation.RESOLVE_REVIEW_THREAD,
+                    threadId=thread.id,
+                    result={"dry_run": True},
                 )
             )
             continue
