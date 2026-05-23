@@ -233,7 +233,7 @@ not customizable per invocation.
     "dry_run": bool,                # echo of DRY_RUN
     "execution_backend": str,       # "dry-run" | "pi-oh-my-pi-deepseek"
     "refusal": {                    # only when preconditions failed
-        "reason": str,
+        "reason": str,              # see refusal enum below
         "missing_labels": list[str],
         "outside_allow_list": bool,
     } | None,
@@ -258,6 +258,23 @@ not customizable per invocation.
     "writeback_failures": [...]     # per CHG-1813
 }
 ```
+
+Refusal reasons (`refusal.reason`) — order matches the routing/precondition
+gates in `voyager/bots/assembly/`:
+
+```
+"pr_not_issue"
+"issue_closed"                    # added per CHG-1819 F6
+"missing_blueprint_ready_label"
+"missing_stack_type_label"
+"repository_not_allowed"
+"unauthorized_actor"              # from VOY-1818
+```
+
+Order is implementation-stable: it mirrors the constants in
+`voyager/bots/assembly/constants.py` and the routing order (PR-shape check
+→ closed-state check → label checks → repository allow-list → actor
+authorization). Not alphabetical.
 
 ## Testing / Verification
 
@@ -310,3 +327,4 @@ failure semantics is now resolved by D11.)
 | 2026-05-23 | Round 1 plan-review remediation (GLM 9.0 PASS, MiniMax 8.8 FIX, DeepSeek 7.7 FIX): added §Gate Corner Table (P0-A/P0-C); resolved D7 vs OQ#2 contradiction in favor of per-push trigger per VOY-1811 (P0-B); added D11 partial-failure semantics; D12 codex bot identity pinning; D13 install vs allow-list scope split; D14 acceptance-criteria extraction fallback; D8 empty-slug fallback; split Surface 11 unit test into dedicated Surface 19/20; expanded Testing to five BDD scenarios; concrete VOY-1807 row text in Surface 24; clarified Surface 25 stays commented out. | Claude (via VOY-1811) |
 | 2026-05-23 | Round 2 plan-review remediation (GLM 9.2 PASS, DeepSeek 9.2 PASS, MiniMax 9.83 PASS): P2 only — corrected Gate Corner Table install-scope wording (no webhook delivery rather than "401"); explicitly stated progress-comment-always-runs in D11; fixed Testing § "three scenarios" typo to "five scenarios". | Claude (via VOY-1811) |
 | 2026-05-23 | Phase 6 cross-test divergence fix (DeepSeek finding): Gate Corner Table Row 5 amended to match implementation — `pull_request: {action: "skipped_no_changes"}` instead of `null`. Rows 4 and 5 share the "no commits → no PR" code path; the BE=dry / BE=pi distinction is visible via `adapter_result.status` and the progress comment body, not the `pull_request` field. | Claude (via VOY-1811) |
+| 2026-05-23 | CHG-1819 amendment: added `issue_closed` to the refusal enum list (implementation-added during VOY-1817 Phase 5). | Claude (via CHG-1819) |
