@@ -136,3 +136,72 @@ def test_crlf_line_endings_accepted(body: str) -> None:
     command parser must accept /assembly even when the line ends with
     \\r\\n, not just \\n."""
     assert parse_assembly_command(body) is not None
+
+
+# ---------------------------------------------------------------------------
+# CHG-1819 Surface 8 (F2, part a) — parser MUST NOT emit a ``backend`` key.
+# ---------------------------------------------------------------------------
+#
+# Upstream regression gate: ``parse_assembly_command`` only recognizes
+# ``--dry-run`` and ``--allow-missing-stack``.  No invocation — even one
+# containing the literal substring ``--backend foo`` — may surface a
+# ``backend`` field on the returned ``AssemblyCommand``, because the
+# dispatcher's backend selection is env-only (``ASSEMBLY_EXECUTION_BACKEND``)
+# per VOY-1817 D3 and CHG-1819 F2.  Wiring ``--backend`` as a real flag is
+# explicitly deferred (CHG-1819 §Out of Scope).
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "/assembly",
+        "/assembly --dry-run",
+        "/assembly --allow-missing-stack",
+        "/assembly --dry-run --allow-missing-stack",
+        # Adversarial: a flag-shaped substring that mimics the deferred
+        # ``--backend`` feature.  Must NOT surface as a parsed field.
+        "/assembly --backend pi-oh-my-pi-deepseek",
+        "/assembly --dry-run --backend pi-oh-my-pi-deepseek",
+        "/implement --dry-run --allow-missing-stack",
+        "/implement --backend dry-run",
+    ],
+)
+def test_parse_command_never_emits_backend_key(body: str) -> None:
+    """F2 (part a): every parsed command's serialized fields expose
+    EXACTLY ``{"dry_run", "allow_missing_stack"}`` for flag-shaped state.
+
+    The check has three layers:
+      1. The frozen dataclass has no ``backend`` attribute.
+      2. ``dataclasses.asdict`` never contains a ``backend`` key.
+      3. The downstream ``command_flags`` dict (built by ``routing.py``
+         as ``{"dry_run": cmd.dry_run, "allow_missing_stack":
+         cmd.allow_missing_stack}``) has exactly that key set.
+    """
+    from dataclasses import asdict
+
+    cmd = parse_assembly_command(body)
+    assert cmd is not None, body
+
+    # (1) — attribute-level check.
+    assert not hasattr(cmd, "backend"), (
+        f"AssemblyCommand for {body!r} unexpectedly grew a `backend` attr"
+    )
+
+    # (2) — serialization-level check.
+    serialized = asdict(cmd)
+    assert "backend" not in serialized, (
+        f"asdict() for {body!r} surfaced a `backend` key: {serialized!r}"
+    )
+
+    # (3) — downstream `command_flags` dict shape gate (matches
+    # voyager/bots/assembly/routing.py:56 and :140).  This is the wire
+    # format consumed by the dispatcher; it MUST contain exactly the two
+    # known flags, regardless of what extra `--foo` tokens appeared in
+    # the body.
+    command_flags = {
+        "dry_run": cmd.dry_run,
+        "allow_missing_stack": cmd.allow_missing_stack,
+    }
+    assert set(command_flags.keys()) == {"dry_run", "allow_missing_stack"}, (
+        f"command_flags set for {body!r}: {set(command_flags.keys())!r}"
+    )

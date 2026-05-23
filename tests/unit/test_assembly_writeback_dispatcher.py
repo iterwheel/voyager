@@ -608,3 +608,35 @@ def test_distinct_branches_are_parallel(monkeypatch) -> None:
     # (repo, branch) keys, the second `entered_*` event never fires and
     # `asyncio.wait_for` raises TimeoutError.
     asyncio.run(driver())
+
+
+# ---------------------------------------------------------------------------
+# CHG-1819 Surface 8 (F2, part b) — dispatcher does not read backend
+# from command_flags.  Structural source-inspection gate.
+# ---------------------------------------------------------------------------
+
+
+def test_dispatcher_does_not_read_backend_from_command_flags() -> None:
+    """F2: assert the dispatcher source code never reads ``backend`` from
+    ``command_flags`` (or any other attribute-style access).
+
+    The dispatcher's comment block legitimately mentions ``backend`` in
+    prose; strip comment-only lines before checking for attribute/subscript
+    access patterns. This guards against the dead lookup re-appearing in a
+    future refactor.
+    """
+    import inspect
+
+    from voyager.bots.assembly.writeback import dispatch_assembly_writeback
+
+    source = inspect.getsource(dispatch_assembly_writeback)
+    # Drop comment-only lines (first non-whitespace char is `#`).  We keep
+    # docstring text — the docstring on `dispatch_assembly_writeback` does
+    # not mention `backend`, so leaving it in does not produce false
+    # positives, and dropping it would over-fit the test.
+    code_lines = [line for line in source.splitlines() if line.lstrip()[:1] != "#"]
+    code_text = "\n".join(code_lines)
+    # Both attribute and subscript styles must be absent.
+    assert 'command_flags.get("backend")' not in code_text
+    assert "command_flags['backend']" not in code_text
+    assert 'command_flags["backend"]' not in code_text
