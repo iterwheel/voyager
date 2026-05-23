@@ -9,6 +9,7 @@ dispatch branch is in ``voyager/core/writeback.py``
 
 from __future__ import annotations
 
+from .actor import ActorAuthorization, evaluate_actor_authorization
 from .adapters import (
     AdapterResult,
     DryRunAdapter,
@@ -27,9 +28,13 @@ from .constants import (
     ASSEMBLY_COMMANDS,
     ASSEMBLY_COMMENT_MARKER,
     ASSEMBLY_EXECUTION_BACKEND_ENV,
+    AUTHORIZED_ACTORS_ENV,
+    AUTHORIZED_ASSOCIATIONS_ENV,
     CODEX_REVIEW_BOT_LOGIN,
     CODEX_REVIEW_TRIGGER_BODY,
+    DEFAULT_AUTHORIZED_ASSOCIATIONS,
     FORBIDDEN_OPERATIONS,
+    REFUSAL_UNAUTHORIZED_ACTOR,
     VERIFICATION_COMMANDS,
 )
 from .job_contract import AssemblyJobContract, build_job_contract
@@ -44,10 +49,15 @@ __all__ = [
     "ASSEMBLY_COMMANDS",
     "ASSEMBLY_COMMENT_MARKER",
     "ASSEMBLY_EXECUTION_BACKEND_ENV",
+    "AUTHORIZED_ACTORS_ENV",
+    "AUTHORIZED_ASSOCIATIONS_ENV",
     "CODEX_REVIEW_BOT_LOGIN",
     "CODEX_REVIEW_TRIGGER_BODY",
+    "DEFAULT_AUTHORIZED_ASSOCIATIONS",
     "FORBIDDEN_OPERATIONS",
+    "REFUSAL_UNAUTHORIZED_ACTOR",
     "VERIFICATION_COMMANDS",
+    "ActorAuthorization",
     "AdapterResult",
     "AssemblyCommand",
     "AssemblyJobContract",
@@ -57,6 +67,7 @@ __all__ = [
     "PreconditionResult",
     "build_assembly_comment",
     "build_job_contract",
+    "evaluate_actor_authorization",
     "make_branch_name",
     "parse_assembly_command",
     "route_assembly_event",

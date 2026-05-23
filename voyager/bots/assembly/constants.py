@@ -44,6 +44,12 @@ REFUSAL_MISSING_STACK_TYPE = "missing_stack_type_label"
 REFUSAL_REPOSITORY_NOT_ALLOWED = "repository_not_allowed"
 REFUSAL_ISSUE_CLOSED = "issue_closed"
 
+# Actor authorization (VOY-1818).
+REFUSAL_UNAUTHORIZED_ACTOR = "unauthorized_actor"
+AUTHORIZED_ACTORS_ENV = "BRIDGE_ASSEMBLY_AUTHORIZED_ACTORS"
+AUTHORIZED_ASSOCIATIONS_ENV = "BRIDGE_ASSEMBLY_AUTHORIZED_ASSOCIATIONS"
+DEFAULT_AUTHORIZED_ASSOCIATIONS: tuple[str, ...] = ("OWNER", "MEMBER", "COLLABORATOR")
+
 # Verification commands the adapter is expected to run before pushing
 # commits. Locked per D9 so a future backend cannot silently weaken
 # verification.
