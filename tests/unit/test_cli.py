@@ -13,7 +13,12 @@ from typer.testing import CliRunner
 
 from voyager.cli import app
 
-runner = CliRunner()
+# Force a wide terminal in tests so Typer/Rich does not wrap `--host`
+# across lines (CI defaults to ~80 cols and the help table breaks the
+# flag names mid-token, e.g. `--ho\nst`, causing literal-substring
+# assertions to fail on Linux runners while passing on a 200-col local
+# terminal). `terminal_width` is the documented Click/Typer escape hatch.
+runner = CliRunner(env={"COLUMNS": "200", "NO_COLOR": "1", "TERM": "dumb"})
 
 
 def test_vyg_help_lists_commands() -> None:
