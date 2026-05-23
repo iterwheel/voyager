@@ -1,8 +1,8 @@
 # SOP-1806: GitHub App Permission Matrix
 
 **Applies to:** VOY project
-**Last updated:** 2026-05-09
-**Last reviewed:** 2026-05-09
+**Last updated:** 2026-05-23
+**Last reviewed:** 2026-05-23
 **Status:** Active
 **Related:** VOY-1802, VOY-1804, VOY-1805
 
@@ -84,7 +84,7 @@ repositories, manage secrets, deploy production, or merge code directly.
    |-----|----------|----------|--------|---------------|--------|---------|-----------------|
    | `iterwheel-blueprint` | Read | No access | Read & write | No access | Read & write | No access | No access |
    | `iterwheel-stack` | Read | No access | Read & write | No access | No access | No access | No access |
-   | `iterwheel-assembly` | Read | Read & write | Read-only | Read & write | Read-only | Read-only | Read-only |
+   | `iterwheel-assembly` | Read | Read & write | Read & write | Read & write | Read-only | Read-only | Read-only |
    | `iterwheel-staticfire` | Read | Read-only | No access | Read-only | Read & write | Read-only | Read-only |
    | `iterwheel-clearance` | Read | Read-only | Read & write | Read & write | Read & write | No access | Read-only |
    | `iterwheel-countdown` | Read | Read-only | Read & write | Read & write | Read & write | Read-only | Read-only |
@@ -97,10 +97,11 @@ repositories, manage secrets, deploy production, or merge code directly.
    - `Issues: read & write` allows issue comments, labels, issue reactions, and
      PR comments that flow through issue APIs. This is required for
      `iterwheel-blueprint` ready-state rocket reactions, plus Stack label
-      management and issue timeline emoji reactions. Assembly needs `read-only`
-      issue access to read issue bodies for implementation context.
-      For Blueprint, label
-     write-back is limited to the VOY-1805 standard labels:
+     management and issue timeline emoji reactions. Assembly also needs
+     Issues write access for issue progress comments and future `/assembly`
+     command acknowledgements; any Assembly label writes must remain
+     implementation allow-list controlled.
+     For Blueprint, label write-back is limited to the VOY-1805 standard labels:
      `blueprint-needed`, `blueprint-ready`, and
      `blueprint-requests-revision`.
      For Stack, label write-back is limited to the VOY-1805 `stack-*`
@@ -198,3 +199,4 @@ modes.
 | 2026-05-09 | Added Clearance v1 PR review-readiness event ownership                                                    | Frank Xu + Codex |
 | 2026-05-09 | Tightened Stack to issue-only labels and removed Stack PR event ownership                                 | Frank Xu + Codex |
 | 2026-05-23 | Added Assembly bot: app settings, permission row (Contents write exception with merge prohibition), webhook events, and note on dangerous defaults (issue #67) | DeepSeek (via VOY-1811) |
+| 2026-05-23 | Updated Assembly issue permission to read/write to match the created App and planned issue progress comments for issue #68 | Codex |
