@@ -100,6 +100,48 @@ def test_to_dict_returns_list_for_tuples() -> None:
     assert isinstance(data["verification_commands"], list)
 
 
+def test_acceptance_criteria_empty_when_title_and_body_empty() -> None:
+    """CHG-1819 F4 / D7 / D8: when BOTH the body's AC section AND the title
+    are empty, ``acceptance_criteria`` must be ``[]`` (NOT ``[""]``) and
+    ``acceptance_criteria_source`` must be ``"empty_fallback"``.
+
+    Rationale (D7): the downstream comment renderer iterates
+    ``acceptance_criteria`` and bullets each entry. ``[""]`` renders as a
+    blank bullet (visible empty-bullet bug); ``[]`` renders as no bullets
+    (honest "no data"). The new ``empty_fallback`` source string lets the
+    audit log distinguish "title-derived" from "no-data" cases without
+    re-deriving from the contract body.
+
+    Asymmetry guard (D8): the matching ``_extract_task_summary`` branch is
+    intentionally NOT changed — an empty ``task_summary`` renders
+    harmlessly ("Task summary: " disappears under markdown), while an
+    empty-bulleted criterion looks like a Blueprint failure. Pin the
+    asymmetry here so a future cleanup that unifies both fallbacks under
+    one helper makes a deliberate, reviewer-visible choice rather than a
+    silent change in behavior.
+    """
+    contract = build_job_contract(
+        issue={
+            "number": 91,
+            "title": "",
+            "html_url": "https://example/issues/91",
+            "body": "",
+        },
+        repository="iterwheel/voyager-sandbox",
+        branch_name="91-empty",
+        delivery_id="d",
+    ).to_dict()
+    # F4 / D7 — acceptance_criteria branch changed to empty_fallback.
+    assert contract["acceptance_criteria"] == []
+    assert contract["acceptance_criteria_source"] == "empty_fallback"
+    # D8 asymmetry guard — task_summary still falls back to the title (the
+    # empty string here) and tags itself ``title_fallback``.  If a future
+    # refactor changes this without a corresponding CHG, the assertion
+    # below fires and surfaces the omission.
+    assert contract["task_summary"] == ""
+    assert contract["task_summary_source"] == "title_fallback"
+
+
 def test_section_extractor_returns_first_matching_block_only() -> None:
     """Codex round-3 P2: when an issue body repeats a matching heading
     (e.g. a quoted template appended below the real section), the
