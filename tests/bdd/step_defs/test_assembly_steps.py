@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from unittest.mock import AsyncMock
 
 import pytest
@@ -48,6 +49,25 @@ def set_dry_run(monkeypatch, value: str) -> None:
 @given(parsers.parse('ASSEMBLY_EXECUTION_BACKEND is "{value}"'))
 def set_backend(monkeypatch, value: str) -> None:
     monkeypatch.setenv("ASSEMBLY_EXECUTION_BACKEND", value)
+
+
+@given("the fake subprocess backend is allowed")
+def fake_subprocess_allowed(monkeypatch) -> None:
+    monkeypatch.setenv("ASSEMBLY_FAKE_SUBPROCESS_ALLOW", "1")
+
+
+@given(parsers.parse('the fake subprocess backend will return executed with commit SHA "{sha}"'))
+def fake_subprocess_returns_commit(monkeypatch, sha: str) -> None:
+    monkeypatch.setenv(
+        "ASSEMBLY_FAKE_SUBPROCESS_OUTPUT",
+        json.dumps(
+            {
+                "status": "executed",
+                "commit_shas": [sha],
+                "summary": "BDD fake subprocess commit",
+            }
+        ),
+    )
 
 
 @given("the repository allow-list is empty")
@@ -238,6 +258,30 @@ def dispatcher_no_branch_pr(dispatch_outcome: dict) -> None:
 def dispatcher_progress_comment(dispatch_outcome: dict) -> None:
     client = dispatch_outcome["client"]
     assert client.upsert_issue_comment.await_count >= 1
+
+
+@then("the dispatcher created a branch and opened a pull request")
+def dispatcher_branch_and_pr(dispatch_outcome: dict) -> None:
+    result = dispatch_outcome["result"]
+    client = dispatch_outcome["client"]
+    assert result["branch"]["created"] is True
+    assert result["pull_request"]["action"] == "opened"
+    assert result["pull_request"]["number"] == 999
+    assert client.create_branch_ref.await_count == 1
+    assert client.create_pull_request.await_count == 1
+
+
+@then("the dispatcher posted a Codex review trigger")
+def dispatcher_codex_trigger(dispatch_outcome: dict) -> None:
+    client = dispatch_outcome["client"]
+    assert client.create_issue_comment.await_count == 1
+    assert client.create_issue_comment.await_args.kwargs["body"] == "@codex review"
+
+
+@then("the dispatcher upserted progress comments on the issue and pull request")
+def dispatcher_issue_and_pr_progress_comments(dispatch_outcome: dict) -> None:
+    client = dispatch_outcome["client"]
+    assert client.upsert_issue_comment.await_count == 2
 
 
 @then(parsers.parse('the dispatcher result writeback_failures includes "{op}"'))
