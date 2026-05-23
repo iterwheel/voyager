@@ -4,9 +4,9 @@ Covers all five rows of the §Gate Corner Table:
 
   AL- / *                — denied upstream (server-level filter, not here)
   AL+ / DR+ / BE=dry     — adapter runs, no GitHub writes, returns plan
-  AL+ / DR+ / BE=pi      — adapter raises NotImplementedError, caught
+  AL+ / DR+ / BE=pi      — adapter fails without dry-run token, no GitHub writes
   AL+ / DR- / BE=dry     — comment-only (skipped_no_changes)
-  AL+ / DR- / BE=pi      — progress comment only, branch/PR/codex skipped
+  AL+ / DR- / BE=pi      — adapter failure surfaced, progress comment still upserts
 """
 
 from __future__ import annotations
@@ -85,6 +85,7 @@ def _mock_client_for_writes() -> Any:
     client.update_pull_request = AsyncMock(return_value={})
     client.create_issue_comment = AsyncMock(return_value={"id": 999})
     client.upsert_issue_comment = AsyncMock(return_value={"id": 777})
+    client.installation_token = AsyncMock(return_value="")
     return client
 
 
@@ -113,11 +114,11 @@ def test_dry_run_true_dry_run_backend(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# AL+ / DR+ / BE=pi  — adapter raises, caught
+# AL+ / DR+ / BE=pi  — adapter fails without dry-run token, no writes
 # ---------------------------------------------------------------------------
 
 
-def test_dry_run_true_pi_backend_catches_not_implemented(monkeypatch) -> None:
+def test_dry_run_true_pi_backend_returns_failed_without_writes(monkeypatch) -> None:
     monkeypatch.setenv("DRY_RUN", "true")
     monkeypatch.setenv(ASSEMBLY_EXECUTION_BACKEND_ENV, ASSEMBLY_BACKEND_PI_OH_MY_PI_DEEPSEEK)
     client = _mock_client_for_writes()
@@ -127,10 +128,9 @@ def test_dry_run_true_pi_backend_catches_not_implemented(monkeypatch) -> None:
     assert result["dry_run"] is True
     assert result["applied"] is False
     assert result["adapter_result"]["status"] == "failed"
-    assert "deferred" in result["adapter_result"]["summary"]
-    failures = result["writeback_failures"]
-    assert failures
-    assert failures[0]["error_class"] == "NotImplementedError"
+    assert "installation token" in result["adapter_result"]["summary"].lower()
+    assert result["writeback_failures"] == []
+    client.installation_token.assert_not_awaited()
     assert client.create_branch_ref.await_count == 0
 
 
@@ -157,7 +157,7 @@ def test_dry_run_false_dry_run_backend_comments_only(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# AL+ / DR- / BE=pi  — adapter raises, progress comment still upserts
+# AL+ / DR- / BE=pi  — adapter failure surfaced, progress comment still upserts
 # ---------------------------------------------------------------------------
 
 
@@ -170,12 +170,13 @@ def test_dry_run_false_pi_backend_progress_comment_runs_anyway(monkeypatch) -> N
     )
     assert result["applied"] is True
     assert result["adapter_result"]["status"] == "failed"
+    assert "installation token" in result["adapter_result"]["summary"].lower()
     assert result["branch"] is None
     assert result["pull_request"]["action"] == "skipped_no_changes"
     # Per D11: progress comment always runs.
     assert client.upsert_issue_comment.await_count == 1
-    failures = result["writeback_failures"]
-    assert any(f["error_class"] == "NotImplementedError" for f in failures)
+    client.installation_token.assert_awaited_once()
+    assert result["writeback_failures"] == []
 
 
 # ---------------------------------------------------------------------------

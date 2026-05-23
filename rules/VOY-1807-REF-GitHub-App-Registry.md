@@ -97,10 +97,11 @@ Operational notes:
   implementation route active until issue #69 lands.
 - VOY-1821 adds `ASSEMBLY_EXECUTION_BACKEND=fake-subprocess` as a deterministic
   Assembly dispatcher verification backend under the existing
-  `iterwheel-assembly` App; it does not create a new GitHub App. The later real
-  Pi canary remains post-merge/deploy, explicitly approved, and limited to
-  `iterwheel/voyager-sandbox`; it must not be enabled for `iterwheel/voyager`,
-  `frankyxhl/alfred`, or `frankyxhl/trinity`.
+  `iterwheel-assembly` App; it does not create a new GitHub App. The real
+  `pi-oh-my-pi-deepseek` backend invokes the Oh My Pi CLI as `omp -p` and
+  remains explicitly approved and limited to `iterwheel/voyager-sandbox`; it
+  must not be enabled for `iterwheel/voyager`, `frankyxhl/alfred`, or
+  `frankyxhl/trinity`.
 - Clearance v1 is active for `iterwheel/voyager` and
   `iterwheel/voyager-sandbox`. It verifies current GitHub review state and
   review-thread resolution, but does not claim AI-level semantic repair
@@ -144,4 +145,5 @@ Operational notes:
 | 2026-05-23 | Recorded created `iterwheel-assembly` App `3821103`, Wukong PEM paths, and selected-repository installations `134829044` and `134830000` for issue #68 | Codex |
 | 2026-05-23 | Activated Assembly bridge write-back row per CHG-1817 (issue #69 first safe MVP): documented `/assembly` / `/implement` trigger, branch + PR + `@codex review` + progress-comment write-back, and operator-controlled `BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_ASSEMBLY` allow-list. | Claude (via VOY-1811) |
 | 2026-05-23 | Added actor authorization requirement (VOY-1818) to `iterwheel-assembly` write-back row | Claude (via VOY-1811 #76) |
-| 2026-05-23 | Documented VOY-1821 `fake-subprocess` Assembly backend selection under the existing `iterwheel-assembly` App and the sandbox-only gate for the later real Pi canary | Codex |
+| 2026-05-23 | Documented VOY-1821 `fake-subprocess` Assembly backend selection under the existing `iterwheel-assembly` App and the sandbox-only gate for the later real OMP canary | Codex |
+| 2026-05-23 | Recorded that the real Assembly backend uses the Oh My Pi CLI command `omp -p` and remains sandbox-only for the first canary | Codex |

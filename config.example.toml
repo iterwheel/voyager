@@ -61,15 +61,20 @@ default_profile = "flash_no_thinking"
 #
 # Select the execution backend (default: dry-run records the contract without
 # spawning any subprocess). fake-subprocess is a deterministic VOY-1821
-# verification backend: it never invokes Pi, requires
+# verification backend: it never invokes OMP, requires
 # ASSEMBLY_FAKE_SUBPROCESS_ALLOW to be truthy before returning commits, and
 # reads fixture JSON from ASSEMBLY_FAKE_SUBPROCESS_OUTPUT. The real
-# pi-oh-my-pi-deepseek path remains gated for a post-merge/deploy
+# pi-oh-my-pi-deepseek path invokes the Oh My Pi CLI (`omp -p`) and remains
+# gated for a post-merge/deploy
 # iterwheel/voyager-sandbox canary only.
 #   ASSEMBLY_EXECUTION_BACKEND=dry-run
 #   ASSEMBLY_EXECUTION_BACKEND=fake-subprocess
 #   ASSEMBLY_FAKE_SUBPROCESS_ALLOW=1
 #   ASSEMBLY_FAKE_SUBPROCESS_OUTPUT='{"status":"executed","commit_shas":["0123456789abcdef0123456789abcdef01234567"],"summary":"fake canary"}'
+#   ASSEMBLY_EXECUTION_BACKEND=pi-oh-my-pi-deepseek
+#   ASSEMBLY_PI_COMMAND_PATH=omp
+#   ASSEMBLY_PI_TIMEOUT_SECONDS=900
+#   ASSEMBLY_PI_WORKDIR=~/.voyager/state/assembly
 #
 # Activate actor authorization (default: empty / deny). Either env var alone is
 # sufficient — a comment is authorized when its login is on the allow-list OR

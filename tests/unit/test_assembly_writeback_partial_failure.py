@@ -170,17 +170,16 @@ def test_all_steps_fail_progress_comment_still_runs(commit_adapter) -> None:
     assert result["assembly_comment_id"] == 9999
 
 
-def test_adapter_failure_does_not_abort_progress_comment(monkeypatch) -> None:
-    """BE=pi corner: NotImplementedError caught, progress comment still upserts."""
+def test_adapter_failure_result_does_not_abort_progress_comment(monkeypatch) -> None:
+    """BE=pi corner: failed AdapterResult still upserts the progress comment."""
 
-    class _PiAdapter:
-        name = "pi"
-
-        async def execute(self, contract):
-            raise NotImplementedError("execution backend deferred")
-
-    monkeypatch.setattr(wb_module, "select_execution_adapter", lambda backend=None: _PiAdapter())
+    monkeypatch.setattr(
+        wb_module,
+        "select_execution_adapter",
+        lambda backend=None: adapters.PiOhMyPiDeepSeekAdapter(),
+    )
     client = _base_client()
+    client.installation_token = AsyncMock(return_value="")
     result = asyncio.run(
         wb_module.dispatch_assembly_writeback(
             client, _route(), repository="iterwheel/voyager-sandbox"
@@ -189,6 +188,6 @@ def test_adapter_failure_does_not_abort_progress_comment(monkeypatch) -> None:
     assert result["branch"] is None
     assert result["pull_request"]["action"] == "skipped_no_changes"
     assert result["adapter_result"]["status"] == "failed"
-    failures = result["writeback_failures"]
-    assert any(f["error_class"] == "NotImplementedError" for f in failures)
+    assert "installation token" in result["adapter_result"]["summary"].lower()
+    assert result["writeback_failures"] == []
     assert client.upsert_issue_comment.await_count == 1

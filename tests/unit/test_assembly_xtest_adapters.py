@@ -1,8 +1,8 @@
 """Cross-test for Assembly adapters — independent env-routing + contract shape.
 
 Covers: select_execution_adapter env routing (default + each backend),
-DryRunAdapter contract recording, PiOhMyPiDeepSeekAdapter NotImplementedError
-message content per D1.
+DryRunAdapter contract recording, PiOhMyPiDeepSeekAdapter context validation
+failure content per D1.
 """
 
 from __future__ import annotations
@@ -79,6 +79,7 @@ class TestSelectExecutionAdapterPi:
         adapter = select_execution_adapter("pi-oh-my-pi-deepseek")
         assert isinstance(adapter, PiOhMyPiDeepSeekAdapter)
         assert adapter.name == "pi-oh-my-pi-deepseek"
+        assert adapter.requires_installation_token is True
 
     def test_env_set_to_pi(self) -> None:
         with patch.dict(os.environ, {ASSEMBLY_EXECUTION_BACKEND_ENV: "pi-oh-my-pi-deepseek"}):
@@ -138,39 +139,43 @@ class TestDryRunAdapterContract:
 
 
 # ---------------------------------------------------------------------------
-# PiOhMyPiDeepSeekAdapter NotImplementedError
+# PiOhMyPiDeepSeekAdapter context validation
 # ---------------------------------------------------------------------------
 
 
 class TestPiOhMyPiDeepSeekAdapter:
     @pytest.mark.asyncio
-    async def test_raises_not_implemented_error(self) -> None:
+    async def test_missing_context_returns_failed_result(self) -> None:
         adapter = PiOhMyPiDeepSeekAdapter()
         contract = _make_contract()
-        with pytest.raises(NotImplementedError) as exc_info:
-            await adapter.execute(contract)
-        assert "execution backend deferred" in str(exc_info.value)
+        result = await adapter.execute(contract)
+        assert result.status == "failed"
+        assert result.commit_shas == []
+        assert "context" in result.summary.lower()
 
     @pytest.mark.asyncio
-    async def test_message_mentions_follow_up(self) -> None:
+    async def test_missing_context_mentions_required_context(self) -> None:
         adapter = PiOhMyPiDeepSeekAdapter()
         contract = _make_contract()
-        with pytest.raises(NotImplementedError) as exc_info:
-            await adapter.execute(contract)
-        assert "follow-up" in str(exc_info.value).lower()
+        result = await adapter.execute(contract)
+        assert "requires" in result.summary.lower()
+        assert "adapter execution context" in result.summary.lower()
 
     @pytest.mark.asyncio
-    async def test_message_mentions_pi_oh_my_pi_deepseek(self) -> None:
+    async def test_missing_context_mentions_pi_oh_my_pi_deepseek(self) -> None:
         adapter = PiOhMyPiDeepSeekAdapter()
         contract = _make_contract()
-        with pytest.raises(NotImplementedError) as exc_info:
-            await adapter.execute(contract)
-        msg = str(exc_info.value).lower()
+        result = await adapter.execute(contract)
+        msg = result.summary.lower()
         assert "pi" in msg or "deepseek" in msg
 
     def test_name_attribute(self) -> None:
         adapter = PiOhMyPiDeepSeekAdapter()
         assert adapter.name == "pi-oh-my-pi-deepseek"
+
+    def test_requires_installation_token(self) -> None:
+        adapter = PiOhMyPiDeepSeekAdapter()
+        assert adapter.requires_installation_token is True
 
 
 # ---------------------------------------------------------------------------

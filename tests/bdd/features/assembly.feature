@@ -69,7 +69,7 @@ Feature: Assembly bot — code implementation routing and writeback
     And the route writeback contract has issue number 71
 
   # ---------------------------------------------------------------------------
-  # Scenario 5 — BE=pi corner: adapter raises NotImplementedError; progress
+  # Scenario 5 — BE=pi corner: adapter returns a failed result; progress
   # comment upserts the failure; no branch / PR / codex writes.
   # ---------------------------------------------------------------------------
 
@@ -82,7 +82,7 @@ Feature: Assembly bot — code implementation routing and writeback
     Then the dispatcher result adapter_result status is "failed"
     And the dispatcher upserted at least one progress comment
     And the dispatcher made no branch or pull-request writes
-    And the dispatcher result writeback_failures includes "adapter.execute"
+    And the dispatcher result writeback_failures is empty
 
   # ---------------------------------------------------------------------------
   # Scenario 5b (VOY-1821 RED) — BE=fake-subprocess exercises the real

@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -30,6 +31,12 @@ from .constants import (
     ASSEMBLY_AGENT_SLUG,
     ASSEMBLY_COMMENT_MARKER,
     ASSEMBLY_EXECUTION_BACKEND_ENV,
+    ASSEMBLY_PI_COMMAND_PATH_ENV,
+    ASSEMBLY_PI_DEFAULT_COMMAND_PATH,
+    ASSEMBLY_PI_DEFAULT_TIMEOUT_SECONDS,
+    ASSEMBLY_PI_DEFAULT_WORKDIR,
+    ASSEMBLY_PI_TIMEOUT_SECONDS_ENV,
+    ASSEMBLY_PI_WORKDIR_ENV,
     CODEX_REVIEW_TRIGGER_BODY,
 )
 from .job_contract import AssemblyJobContract, build_job_contract
@@ -58,6 +65,23 @@ def _get_lock(repository: str, branch_name: str) -> asyncio.Lock:
 
 
 _log = logging.getLogger(__name__)
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _path_env(name: str, default: str) -> Path:
+    raw = os.environ.get(name)
+    value = raw.strip() if raw else default
+    return Path(value).expanduser()
 
 
 def _cached_issue_from_route(route: dict[str, Any]) -> dict[str, Any]:
@@ -106,9 +130,14 @@ async def _build_adapter_context(
         )
     return AdapterExecutionContext(
         repository=repository,
-        workdir=Path.cwd(),
-        timeout_seconds=900,
-        command_path="pi",
+        workdir=_path_env(ASSEMBLY_PI_WORKDIR_ENV, ASSEMBLY_PI_DEFAULT_WORKDIR),
+        timeout_seconds=_positive_int_env(
+            ASSEMBLY_PI_TIMEOUT_SECONDS_ENV,
+            ASSEMBLY_PI_DEFAULT_TIMEOUT_SECONDS,
+        ),
+        command_path=(
+            os.environ.get(ASSEMBLY_PI_COMMAND_PATH_ENV) or ASSEMBLY_PI_DEFAULT_COMMAND_PATH
+        ),
         installation_token=installation_token,
     )
 

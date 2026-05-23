@@ -158,6 +158,9 @@ def dispatch_route(routes: list, payload: dict) -> dict:
     client.update_pull_request = AsyncMock(return_value={})
     client.create_issue_comment = AsyncMock(return_value={"id": 1})
     client.upsert_issue_comment = AsyncMock(return_value={"id": 2})
+    # Real OMP adapter scenarios should fail at context validation in BDD,
+    # not spawn local git/omp subprocesses.
+    client.installation_token = AsyncMock(return_value="")
 
     repo = (payload.get("repository") or {}).get("full_name")
     result = asyncio.run(dispatch_assembly_writeback(client, route, repository=repo))
@@ -288,6 +291,11 @@ def dispatcher_issue_and_pr_progress_comments(dispatch_outcome: dict) -> None:
 def dispatcher_failures_include(dispatch_outcome: dict, op: str) -> None:
     failures = dispatch_outcome["result"]["writeback_failures"]
     assert any(f["operation"] == op for f in failures), f"expected {op} in failures, got {failures}"
+
+
+@then("the dispatcher result writeback_failures is empty")
+def dispatcher_failures_empty(dispatch_outcome: dict) -> None:
+    assert dispatch_outcome["result"]["writeback_failures"] == []
 
 
 @then("the Assembly route is denied")

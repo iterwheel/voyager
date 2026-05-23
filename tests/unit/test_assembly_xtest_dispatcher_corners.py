@@ -168,13 +168,13 @@ class TestGateCornerRow2DryRunDryAdapter:
 
 
 # ---------------------------------------------------------------------------
-# Row 3: AL+, DR+, BE=pi → adapter raises NotImplementedError
+# Row 3: AL+, DR+, BE=pi -> adapter fails without dry-run token
 # ---------------------------------------------------------------------------
 
 
 class TestGateCornerRow3DryRunPiAdapter:
     @pytest.mark.asyncio
-    async def test_pi_adapter_not_implemented_under_dry_run(self) -> None:
+    async def test_pi_adapter_fails_without_token_under_dry_run(self) -> None:
         client = AsyncMock()
         route = _make_route(contract=_contract_dict())
 
@@ -192,9 +192,9 @@ class TestGateCornerRow3DryRunPiAdapter:
         assert result["execution_backend"] == "pi-oh-my-pi-deepseek"
         assert result["adapter_result"] is not None
         assert result["adapter_result"]["status"] == "failed"
-        assert "execution backend deferred" in result["adapter_result"]["summary"]
-        assert len(result["writeback_failures"]) >= 1
-        assert result["writeback_failures"][0]["operation"] == "adapter.execute"
+        assert "installation token" in result["adapter_result"]["summary"].lower()
+        assert result["writeback_failures"] == []
+        client.installation_token.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_pi_adapter_dry_run_no_github_writes(self) -> None:
@@ -267,7 +267,7 @@ class TestGateCornerRow4LiveDryAdapter:
 
 
 # ---------------------------------------------------------------------------
-# Row 5: AL+, DR- (live), BE=pi -> adapter raises, progress comment only
+# Row 5: AL+, DR- (live), BE=pi -> adapter failure, progress comment only
 # ---------------------------------------------------------------------------
 
 
@@ -276,6 +276,7 @@ class TestGateCornerRow5LivePiAdapter:
     async def test_pi_adapter_fails_but_progress_comment_still_upserted(self) -> None:
         client = AsyncMock()
         client.upsert_issue_comment = AsyncMock(return_value={"id": 777})
+        client.installation_token = AsyncMock(return_value="")
         route = _make_route(contract=_contract_dict())
 
         with (
@@ -289,6 +290,7 @@ class TestGateCornerRow5LivePiAdapter:
 
         assert result["applied"] is True
         assert result["adapter_result"]["status"] == "failed"
+        assert "installation token" in result["adapter_result"]["summary"].lower()
         assert result["assembly_comment_id"] == 777
         assert result["branch"] is None
         # Progress comment was always upserted despite adapter failure
@@ -297,6 +299,7 @@ class TestGateCornerRow5LivePiAdapter:
     async def test_pi_adapter_no_branch_pr_codex_writes(self) -> None:
         client = AsyncMock()
         client.upsert_issue_comment = AsyncMock(return_value={"id": 1})
+        client.installation_token = AsyncMock(return_value="")
         route = _make_route(contract=_contract_dict())
 
         with (
@@ -313,9 +316,10 @@ class TestGateCornerRow5LivePiAdapter:
         client.update_pull_request.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_writeback_failure_recorded_for_adapter_error(self) -> None:
+    async def test_adapter_failure_result_does_not_record_writeback_failure(self) -> None:
         client = AsyncMock()
         client.upsert_issue_comment = AsyncMock(return_value={"id": 1})
+        client.installation_token = AsyncMock(return_value="")
         route = _make_route(contract=_contract_dict())
 
         with (
@@ -327,8 +331,9 @@ class TestGateCornerRow5LivePiAdapter:
         ):
             result = await dispatch_assembly_writeback(client, route, repository="o/r")
 
-        assert len(result["writeback_failures"]) >= 1
-        assert result["writeback_failures"][0]["error_class"] == "NotImplementedError"
+        assert result["adapter_result"]["status"] == "failed"
+        assert result["writeback_failures"] == []
+        client.installation_token.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

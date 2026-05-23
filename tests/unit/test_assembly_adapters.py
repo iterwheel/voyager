@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
-
 from voyager.bots.assembly.adapters import (
     DryRunAdapter,
     PiOhMyPiDeepSeekAdapter,
@@ -42,10 +40,13 @@ def test_dry_run_adapter_returns_dry_run_status() -> None:
     assert adapter.last_contract is not None
 
 
-def test_pi_oh_my_pi_deepseek_adapter_raises_not_implemented() -> None:
+def test_pi_oh_my_pi_deepseek_adapter_missing_context_returns_failed() -> None:
     adapter = PiOhMyPiDeepSeekAdapter()
-    with pytest.raises(NotImplementedError, match="execution backend deferred"):
-        asyncio.run(adapter.execute(_contract()))
+    result = asyncio.run(adapter.execute(_contract()))
+    assert result.status == "failed"
+    assert result.commit_shas == []
+    assert "adapter execution context" in result.summary.lower()
+    assert adapter.requires_installation_token is True
 
 
 def test_select_execution_adapter_defaults_to_dry_run(monkeypatch) -> None:
@@ -59,6 +60,7 @@ def test_select_execution_adapter_pi_path(monkeypatch) -> None:
     monkeypatch.setenv(ASSEMBLY_EXECUTION_BACKEND_ENV, ASSEMBLY_BACKEND_PI_OH_MY_PI_DEEPSEEK)
     adapter = select_execution_adapter()
     assert isinstance(adapter, PiOhMyPiDeepSeekAdapter)
+    assert adapter.requires_installation_token is True
 
 
 def test_select_execution_adapter_unknown_backend_falls_back_to_dry_run(monkeypatch) -> None:
