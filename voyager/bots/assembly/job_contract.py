@@ -82,7 +82,12 @@ def _extract_section(body: str, headings: set[str]) -> str:
             heading = _normalize_heading(match.group(2))
             if heading in headings:
                 if capturing:
+                    # Codex round-3 P2: docstring contract is "first matching
+                    # heading". Return immediately rather than concatenating
+                    # multiple matching sections (e.g., quoted issue templates
+                    # that repeat the heading).
                     out.extend(current)
+                    return "\n".join(out).strip()
                 current = []
                 capturing = True
                 current_level = level

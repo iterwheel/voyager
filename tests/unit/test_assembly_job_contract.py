@@ -98,3 +98,46 @@ def test_to_dict_returns_list_for_tuples() -> None:
     data = _build()
     assert isinstance(data["forbidden_operations"], list)
     assert isinstance(data["verification_commands"], list)
+
+
+def test_section_extractor_returns_first_matching_block_only() -> None:
+    """Codex round-3 P2: when an issue body repeats a matching heading
+    (e.g. a quoted template appended below the real section), the
+    extractor must return only the FIRST matching block — not the merged
+    concatenation of every matching block."""
+    body = """## Problem / Goal
+
+The real summary line.
+
+## Acceptance Criteria
+
+- [ ] Real criterion one
+- [ ] Real criterion two
+
+---
+
+> Quoted from the issue template for reference:
+>
+## Acceptance Criteria
+
+- [ ] Template placeholder
+- [ ] Should not appear in the contract
+"""
+    contract = build_job_contract(
+        issue={
+            "number": 90,
+            "title": "[Feature]: Repeated heading test",
+            "html_url": "https://example/issues/90",
+            "body": body,
+        },
+        repository="iterwheel/voyager-sandbox",
+        branch_name="90-repeated-heading",
+        delivery_id="d",
+    ).to_dict()
+    assert contract["acceptance_criteria_source"] == "section"
+    # Only the first block's bullets should appear
+    assert contract["acceptance_criteria"] == [
+        "Real criterion one",
+        "Real criterion two",
+    ]
+    assert "Template placeholder" not in " ".join(contract["acceptance_criteria"])
