@@ -25,6 +25,14 @@ trap 'rm -f voyager/_build_info.py' EXIT INT TERM HUP
 
 printf 'BUILD_COMMIT = "%s"\n' "$commit" > voyager/_build_info.py
 
+# Remove pre-existing same-version artifacts from `dist/` so `uv build`
+# rebuilds the sdist and wheel from scratch. Without this, uv-build reuses
+# the cached sdist (which may predate the [tool.hatch.build] artifacts
+# config and therefore exclude `voyager/_build_info.py`), producing a wheel
+# that silently ships `BUILD_COMMIT="dev"` to production.
+mkdir -p dist
+rm -f dist/iterwheel_voyager-*.tar.gz dist/iterwheel_voyager-*.whl
+
 uv build
 
 wheel=$(ls -t dist/iterwheel_voyager-*.whl | head -1)
