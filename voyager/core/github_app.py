@@ -343,6 +343,23 @@ class GitHubAppClient:
 
         return threads
 
+    async def check_head_repo_accessible(self, app_slug: str, head_repo: str) -> bool:
+        """Check whether *app_slug* has an installation that covers *head_repo*.
+
+        Used by Clearance Stage 1.5 before attempting ``resolveReviewThread`` on
+        fork PRs.  When ``False`` the head repository does not have an
+        installation for this app, so the mutation would fail with
+        ``Resource not accessible by integration``.
+
+        Deliberately does NOT cache negative results — if an operator installs
+        the app on the fork after a previous check returned ``False``, the next
+        webhook must re-discover and pick up the new installation without
+        requiring a process restart.  ``_discover_installation_id`` provides its
+        own positive cache via ``_installation_ids``.
+        """
+        installation_id = await self._discover_installation_id(self._apps[app_slug], head_repo)
+        return bool(installation_id)
+
     async def resolve_review_thread(
         self, app_slug: str, repository: str, thread_id: str
     ) -> dict[str, Any]:

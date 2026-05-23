@@ -53,8 +53,14 @@ class _StubGitHubAppClient:
     def __init__(self) -> None:
         self.threads: list[dict[str, Any]] = []
         self.pr_payload: dict[str, Any] = {
-            "head": {"sha": "head-sha-abc1234"},
-            "base": {"ref": "main"},
+            "head": {
+                "sha": "head-sha-abc1234",
+                "repo": {"full_name": "iterwheel/sandbox"},
+            },
+            "base": {
+                "ref": "main",
+                "repo": {"full_name": "iterwheel/sandbox"},
+            },
             "title": "Fix the bug",
             "number": PR,
             "user": {"login": "ryosaeba1985"},  # default PR author for existing scenarios
@@ -84,6 +90,11 @@ class _StubGitHubAppClient:
         # Wave 7C-3: branch_protected stub controls
         self._branch_protected_result: bool = True
         self._branch_protected_raise: BaseException | None = None
+
+        # Issue #62: fork PR head-repo accessibility stub
+        self._head_repo_accessible: bool = True  # default: head repo IS accessible
+        self._head_repo_check_call_count: int = 0
+        self._head_repo_check_calls: list[str] = []
 
     # Wave 7B-3: pull_request_diff — optional diff text + call counter for
     # lazy-memoize scenarios. When diff_raise is set, pull_request_diff raises
@@ -117,6 +128,12 @@ class _StubGitHubAppClient:
         if self._branch_protected_raise is not None:
             raise self._branch_protected_raise
         return self._branch_protected_result
+
+    async def check_head_repo_accessible(self, app_slug: str, head_repo: str) -> bool:
+        self._head_repo_check_call_count += 1
+        self._head_repo_check_calls.append(head_repo)
+        # Cache simulation: once False, stays False (matching production behavior)
+        return self._head_repo_accessible
 
     async def pull_request_review_threads(
         self, app_slug: str, repo: str, pr: int
@@ -1690,17 +1707,17 @@ def given_webhook_expected_sha(ctx, sha: str) -> None:
 
 @given(parsers.parse('the stub PR current head sha advanced to "{sha}"'))
 def given_stub_pr_head_advanced(ctx, sha: str) -> None:
-    ctx["client"].pr_payload["head"] = {"sha": sha}
+    ctx["client"].pr_payload["head"] = {**ctx["client"].pr_payload["head"], "sha": sha}
 
 
 @given(parsers.parse('the stub PR current head sha is "{sha}"'))
 def given_stub_pr_current_head_sha(ctx, sha: str) -> None:
-    ctx["client"].pr_payload["head"] = {"sha": sha}
+    ctx["client"].pr_payload["head"] = {**ctx["client"].pr_payload["head"], "sha": sha}
 
 
 @given(parsers.parse('the stub PR initial head sha is "{sha}"'))
 def given_stub_pr_initial_head_sha(ctx, sha: str) -> None:
-    ctx["client"].pr_payload["head"] = {"sha": sha}
+    ctx["client"].pr_payload["head"] = {**ctx["client"].pr_payload["head"], "sha": sha}
 
 
 @given(parsers.parse('the stub PR head advances on the second pull_request call to "{sha}"'))
@@ -1710,7 +1727,7 @@ def given_stub_pr_head_advances_on_second_call(ctx, sha: str) -> None:
 
 @given(parsers.parse('the stub PR head is stable at "{sha}" on all fetches'))
 def given_stub_pr_head_stable(ctx, sha: str) -> None:
-    ctx["client"].pr_payload["head"] = {"sha": sha}
+    ctx["client"].pr_payload["head"] = {**ctx["client"].pr_payload["head"], "sha": sha}
     ctx["client"].pr_payload_second_fetch = None
 
 
@@ -1752,3 +1769,47 @@ def given_pr_pushed_after_codex(ctx) -> None:
 def given_pr_not_pushed_after_codex(ctx) -> None:
     """Set pushed_at to a timestamp older than _fresh_codex_thread's createdAt."""
     ctx["client"].pr_payload["pushed_at"] = "2026-05-10T00:00:00Z"
+
+
+# Issue #62: fork PR head-repo accessibility (UnsupportedContext)
+# ---------------------------------------------------------------------------
+
+
+@given(parsers.parse('the stub PR is from fork "{head_repo}"'))
+def given_fork_pr(ctx, head_repo: str) -> None:
+    """Configure the stub PR payload as a fork PR."""
+    ctx["client"].pr_payload["head"]["repo"]["full_name"] = head_repo
+    # base repo stays as iterwheel/sandbox (the default)
+
+
+@given("the fork head repo is accessible")
+def given_fork_head_accessible(ctx) -> None:
+    ctx["client"]._head_repo_accessible = True
+
+
+@given("the fork head repo is not accessible")
+def given_fork_head_not_accessible(ctx) -> None:
+    ctx["client"]._head_repo_accessible = False
+
+
+@then("exactly 0 resolveReviewThread mutations were invoked")
+def then_zero_resolve_mutations(ctx) -> None:
+    count = len(ctx["client"].resolve_calls)
+    assert count == 0, f"expected 0 resolveReviewThread calls, got {count}"
+
+
+@then("the Stage 1.5 action suggested_action mentions the fork repo")
+def then_stage15_suggested_fork(ctx) -> None:
+    auto = ctx["automation"]
+    assert auto is not None, f"raised={ctx.get('raised')}"
+    actions = auto.get("sync_actions") or []
+    unsupported = [
+        a for a in actions if (a.get("result") or {}).get("error_class") == "UnsupportedContext"
+    ]
+    assert unsupported, f"no UnsupportedContext actions found in sync_actions: {actions!r}"
+    result = unsupported[0]["result"]
+    suggested = result.get("suggested_action") or ""
+    assert "fork" in suggested.lower(), f"expected 'fork' in suggested_action, got {suggested!r}"
+    assert "install" in suggested.lower(), (
+        f"expected 'install' in suggested_action, got {suggested!r}"
+    )

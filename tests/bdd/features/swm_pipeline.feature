@@ -569,3 +569,31 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     And the investigator was never called
     And the thread llm_verdict is None
     And no resolveReviewThread mutation was invoked
+
+  # ---------------------------------------------------------------------------
+  # Issue #62: fork PR head-repo accessibility (UnsupportedContext)
+  # ---------------------------------------------------------------------------
+
+  Scenario: Issue #62 fork PR with inaccessible head repo — resolveReviewThread skipped with UnsupportedContext
+    Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with substantive author reply and isResolved false
+    And the stub PR is from fork "ryosaeba1985/voyager"
+    And the fork head repo is not accessible
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "error"
+    And exactly 0 resolveReviewThread mutations were invoked
+    And the Stage 1.5 action result error_class is "UnsupportedContext"
+    And the Stage 1.5 action suggested_action mentions the fork repo
+
+  Scenario: Issue #62 fork PR with accessible head repo — resolveReviewThread runs normally
+    Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with substantive author reply and isResolved false
+    And the stub PR is from fork "ryosaeba1985/voyager"
+    And the fork head repo is accessible
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "ready"
+    And exactly 1 resolveReviewThread mutation was invoked
+
+  Scenario: Issue #62 non-fork PR — no head-repo check, resolveReviewThread runs normally
+    Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with substantive author reply and isResolved false
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "ready"
+    And exactly 1 resolveReviewThread mutation was invoked
