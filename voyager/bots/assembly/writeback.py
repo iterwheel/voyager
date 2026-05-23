@@ -13,6 +13,7 @@ No automatic cleanup on failure (retry is the recovery path).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -34,6 +35,25 @@ from .preconditions import validate_preconditions
 
 if TYPE_CHECKING:
     from voyager.core.github_app import GitHubAppClient
+
+_assembly_writeback_locks: dict[tuple[str, str], asyncio.Lock] = {}
+
+
+def _get_lock(repository: str, branch_name: str) -> asyncio.Lock:
+    """Return (creating if needed) the per-(repo, branch) writeback lock.
+
+    Lock dict grows monotonically (no TTL). At Voyager's ~50 issues/year
+    cadence x 64 bytes/lock the worst-case footprint is ~3 KB until bridge
+    restart, which is well within acceptable. WeakValueDictionary migration
+    trigger is documented in CHG-1819 D6 / Out of Scope.
+    """
+    key = (repository, branch_name)
+    lock = _assembly_writeback_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _assembly_writeback_locks[key] = lock
+    return lock
+
 
 _log = logging.getLogger(__name__)
 
@@ -232,105 +252,116 @@ async def dispatch_assembly_writeback(
     base_result["contract"] = contract_dict
 
     # ------------------------------------------------------------------
-    # Adapter execution.  Failures are captured but do NOT abort the
-    # progress-comment step (D11 "always runs").
+    # CHG-1819 F3 — per-(repository, branch_name) asyncio lock.
+    #
+    # Serialises concurrent `/assembly` deliveries that target the same
+    # branch so two background tasks cannot both compute the same commits
+    # and race on `create_branch_ref` (which would 422 the second caller).
+    # Scope per CHG-1819 D5: branch is the shared GitHub resource; the
+    # delivery_id is unique per webhook and would never block. Lock dict
+    # growth is documented on `_get_lock`.
     # ------------------------------------------------------------------
-    adapter_result: AdapterResult | None = None
-    adapter_failure: dict[str, Any] | None = None
-    try:
-        adapter_result = await adapter.execute(contract)
-    except NotImplementedError as exc:
-        adapter_failure = {
-            "operation": "adapter.execute",
-            "error_class": type(exc).__name__,
-            "status": None,
-            "repo": repository,
-            "pr": None,
-            "issue": contract.issue_number,
-            "thread_id": None,
-            "suggested_action": (
-                "Wire the production execution backend before flipping "
-                f"{ASSEMBLY_EXECUTION_BACKEND_ENV}=pi-oh-my-pi-deepseek."
-            ),
-        }
-        base_result["writeback_failures"].append(adapter_failure)
-    except Exception as exc:
-        adapter_failure = {
-            "operation": "adapter.execute",
-            "error_class": type(exc).__name__,
-            "status": None,
-            "repo": repository,
-            "pr": None,
-            "issue": contract.issue_number,
-            "thread_id": None,
-            "suggested_action": (
-                "Inspect adapter logs; the Assembly progress comment surfaces "
-                "the failure so an operator can retry the invocation."
-            ),
-        }
-        base_result["writeback_failures"].append(adapter_failure)
+    async with _get_lock(repository, contract.branch_name):
+        # --------------------------------------------------------------
+        # Adapter execution.  Failures are captured but do NOT abort the
+        # progress-comment step (D11 "always runs").
+        # --------------------------------------------------------------
+        adapter_result: AdapterResult | None = None
+        adapter_failure: dict[str, Any] | None = None
+        try:
+            adapter_result = await adapter.execute(contract)
+        except NotImplementedError as exc:
+            adapter_failure = {
+                "operation": "adapter.execute",
+                "error_class": type(exc).__name__,
+                "status": None,
+                "repo": repository,
+                "pr": None,
+                "issue": contract.issue_number,
+                "thread_id": None,
+                "suggested_action": (
+                    "Wire the production execution backend before flipping "
+                    f"{ASSEMBLY_EXECUTION_BACKEND_ENV}=pi-oh-my-pi-deepseek."
+                ),
+            }
+            base_result["writeback_failures"].append(adapter_failure)
+        except Exception as exc:
+            adapter_failure = {
+                "operation": "adapter.execute",
+                "error_class": type(exc).__name__,
+                "status": None,
+                "repo": repository,
+                "pr": None,
+                "issue": contract.issue_number,
+                "thread_id": None,
+                "suggested_action": (
+                    "Inspect adapter logs; the Assembly progress comment surfaces "
+                    "the failure so an operator can retry the invocation."
+                ),
+            }
+            base_result["writeback_failures"].append(adapter_failure)
 
-    if adapter_result is not None:
-        base_result["adapter_result"] = {
-            "status": adapter_result.status,
-            "commit_shas": list(adapter_result.commit_shas),
-            "summary": adapter_result.summary,
-        }
-    else:
-        base_result["adapter_result"] = {
-            "status": "failed",
-            "commit_shas": [],
-            "summary": (
-                "execution backend deferred"
-                if adapter_failure and adapter_failure["error_class"] == "NotImplementedError"
-                else "adapter raised; see writeback_failures"
-            ),
-        }
+        if adapter_result is not None:
+            base_result["adapter_result"] = {
+                "status": adapter_result.status,
+                "commit_shas": list(adapter_result.commit_shas),
+                "summary": adapter_result.summary,
+            }
+        else:
+            base_result["adapter_result"] = {
+                "status": "failed",
+                "commit_shas": [],
+                "summary": (
+                    "execution backend deferred"
+                    if adapter_failure and adapter_failure["error_class"] == "NotImplementedError"
+                    else "adapter raised; see writeback_failures"
+                ),
+            }
 
-    # ------------------------------------------------------------------
-    # GitHub mutation gates.  Four independent dimensions (Codex round-2
-    # P1 added per-command `--dry-run`):
-    #   - ``DRY_RUN`` env short-circuits all mutations globally.
-    #   - The parsed ``--dry-run`` command flag short-circuits mutations
-    #     for a single invocation (e.g. ``/assembly --dry-run``).
-    #   - adapter_result must produce commits before branch/PR steps run.
-    #   - codex-trigger only fires when the PR open / update succeeded.
-    # ------------------------------------------------------------------
-    if is_dry_run:
-        base_result["pull_request"] = {
-            "number": None,
-            "url": None,
-            "action": "dry_run_skipped",
-        }
-        return base_result
+        # --------------------------------------------------------------
+        # GitHub mutation gates.  Four independent dimensions (Codex
+        # round-2 P1 added per-command `--dry-run`):
+        #   - ``DRY_RUN`` env short-circuits all mutations globally.
+        #   - The parsed ``--dry-run`` command flag short-circuits
+        #     mutations for a single invocation (e.g. ``/assembly --dry-run``).
+        #   - adapter_result must produce commits before branch/PR steps run.
+        #   - codex-trigger only fires when the PR open / update succeeded.
+        # --------------------------------------------------------------
+        if is_dry_run:
+            base_result["pull_request"] = {
+                "number": None,
+                "url": None,
+                "action": "dry_run_skipped",
+            }
+            return base_result
 
-    base_result["applied"] = True
+        base_result["applied"] = True
 
-    # Per D11, when the adapter produced no commits, skip branch/PR/codex
-    # steps but still upsert the progress comment so the operator sees the
-    # plan / dry-run / failure surface.
-    commit_shas = list(adapter_result.commit_shas) if adapter_result is not None else []
-    if not commit_shas:
-        base_result["pull_request"] = {
-            "number": None,
-            "url": None,
-            "action": "skipped_no_changes",
-        }
+        # Per D11, when the adapter produced no commits, skip
+        # branch/PR/codex steps but still upsert the progress comment so
+        # the operator sees the plan / dry-run / failure surface.
+        commit_shas = list(adapter_result.commit_shas) if adapter_result is not None else []
+        if not commit_shas:
+            base_result["pull_request"] = {
+                "number": None,
+                "url": None,
+                "action": "skipped_no_changes",
+            }
+            await _upsert_progress_comments(client, contract, repository, base_result)
+            return base_result
+
+        # --------------------------------------------------------------
+        # branch -> PR -> codex-trigger -> progress-comment
+        # --------------------------------------------------------------
+        branch_ok = await _ensure_branch(client, repository, contract, commit_shas[-1], base_result)
+        pr_ok = False
+        if branch_ok:
+            pr_ok = await _ensure_pull_request(client, repository, contract, base_result)
+        if pr_ok:
+            await _post_codex_trigger(client, repository, contract, base_result)
+
         await _upsert_progress_comments(client, contract, repository, base_result)
         return base_result
-
-    # ------------------------------------------------------------------
-    # branch -> PR -> codex-trigger -> progress-comment
-    # ------------------------------------------------------------------
-    branch_ok = await _ensure_branch(client, repository, contract, commit_shas[-1], base_result)
-    pr_ok = False
-    if branch_ok:
-        pr_ok = await _ensure_pull_request(client, repository, contract, base_result)
-    if pr_ok:
-        await _post_codex_trigger(client, repository, contract, base_result)
-
-    await _upsert_progress_comments(client, contract, repository, base_result)
-    return base_result
 
 
 # ---------------------------------------------------------------------------
