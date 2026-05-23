@@ -33,7 +33,10 @@ class AssemblyJobContract:
     requested_at: str
     # D14 provenance — "section" when extracted from the marked-up section,
     # "title_fallback" when Blueprint allowed it through but the section was
-    # later removed.
+    # later removed (non-empty title), "empty_fallback" when both the section
+    # and the title are empty (CHG-1819 F4: acceptance_criteria-only; the
+    # task_summary path keeps the two-state section/title_fallback semantics
+    # because an empty summary string renders harmlessly).
     acceptance_criteria_source: str = "section"
     task_summary_source: str = "section"
     # Used by tests + the writeback dispatcher for serialisation; kept off
@@ -133,12 +136,25 @@ def _extract_task_summary(body: str, title: str) -> tuple[str, str]:
 
 
 def _extract_acceptance_criteria(body: str, title: str) -> tuple[list[str], str]:
-    """Return (criteria_list, source) per D14."""
+    """Return (criteria_list, source) per D14.
+
+    Three distinct sources per CHG-1819 F4 / D7-D8:
+      - ``"section"``: bullets were extracted from the ``## Acceptance Criteria``
+        section in the issue body.
+      - ``"title_fallback"``: section absent or empty, but the issue title is
+        non-empty — title is used as a single criterion.
+      - ``"empty_fallback"``: section absent AND title is empty — returns ``[]``
+        rather than ``[""]`` to avoid rendering a blank bullet in the
+        Assembly progress comment.
+    """
     section = _extract_section(body, _AC_HEADINGS)
     bullets = _extract_bullets(section)
     if bullets:
         return bullets, "section"
-    return [(title or "").strip()], "title_fallback"
+    title_clean = (title or "").strip()
+    if title_clean:
+        return [title_clean], "title_fallback"
+    return [], "empty_fallback"
 
 
 def build_job_contract(
