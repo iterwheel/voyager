@@ -403,29 +403,11 @@ async def _maybe_sync_stage_15(
     actions: list[Stage15Action] = []
     snap_by_id = {s.thread_id: s for s in snapshots}
 
-    # Issue #62: preflight head-repo accessibility for fork PRs.
-    fork_head_blocked = False
-    if is_fork_pr and head_repo and head_repo != repository:
-        if not dry_run:
-            # When live: let transient errors propagate so the outer handler
-            # in writeback.py records the real failure class instead of
-            # producing a misleading UnsupportedContext result.
-            accessible = await client.check_head_repo_accessible(CLEARANCE_AGENT_SLUG, head_repo)
-            if not accessible:
-                fork_head_blocked = True
-        else:
-            # Codex P2: in dry-run mode, still query head-repo accessibility
-            # so correctly-installed forks surface the real state instead of
-            # a misleading UnsupportedContext.  Fall back to conservative
-            # block only when the API is unreachable (expected in dry-run).
-            try:
-                accessible = await client.check_head_repo_accessible(
-                    CLEARANCE_AGENT_SLUG, head_repo
-                )
-            except Exception:
-                accessible = False
-            if not accessible:
-                fork_head_blocked = True
+    # Issue #62: fork-PR head-repo accessibility.  Lazy-evaluated on first
+    # thread that actually needs a mutation, so fork PRs with zero Stage 1.5
+    # candidates avoid an unnecessary network request (Codex P1, review
+    # 4341921018 round 5).
+    fork_head_blocked: bool | None = None  # None = unchecked yet
 
     for thread in threads:
         if thread.verdict != Verdict.RESOLVED:
@@ -437,6 +419,23 @@ async def _maybe_sync_stage_15(
             continue
 
         comment_body = build_close_reason_comment(thread, snap, head_sha=head_sha)
+
+        # Lazy head-repo accessibility check for fork PRs — runs only when
+        # we encounter the first thread that actually needs a mutation.
+        if fork_head_blocked is None and is_fork_pr and head_repo and head_repo != repository:
+            if not dry_run:
+                accessible = await client.check_head_repo_accessible(
+                    CLEARANCE_AGENT_SLUG, head_repo
+                )
+                fork_head_blocked = not accessible
+            else:
+                try:
+                    accessible = await client.check_head_repo_accessible(
+                        CLEARANCE_AGENT_SLUG, head_repo
+                    )
+                except Exception:
+                    accessible = False
+                fork_head_blocked = not accessible
 
         # Issue #62: skip resolveReviewThread on fork PRs where the head repo
         # is not accessible. This produces a specific unsupported-context action
