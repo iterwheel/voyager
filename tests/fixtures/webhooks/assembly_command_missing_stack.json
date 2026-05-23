@@ -1,0 +1,23 @@
+{
+  "action": "created",
+  "repository": {
+    "full_name": "iterwheel/voyager-sandbox"
+  },
+  "comment": {
+    "id": 9003,
+    "body": "/assembly --allow-missing-stack",
+    "user": {
+      "login": "ryosaeba1985"
+    }
+  },
+  "issue": {
+    "number": 71,
+    "title": "[Task]: Quick chore without stack label",
+    "html_url": "https://github.com/iterwheel/voyager-sandbox/issues/71",
+    "state": "open",
+    "labels": [
+      {"name": "blueprint-ready"}
+    ],
+    "body": "## Problem / Goal\n\nApply a small refactor.\n\n## Acceptance Criteria\n\n- [ ] Refactor lands without changing behavior\n"
+  }
+}

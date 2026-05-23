@@ -1,0 +1,25 @@
+{
+  "action": "created",
+  "repository": {
+    "full_name": "iterwheel/voyager-sandbox"
+  },
+  "comment": {
+    "id": 9101,
+    "body": "/implement",
+    "user": {
+      "login": "ryosaeba1985"
+    }
+  },
+  "issue": {
+    "number": 72,
+    "title": "[Feature]: Add dark mode support",
+    "html_url": "https://github.com/iterwheel/voyager-sandbox/issues/72",
+    "state": "open",
+    "labels": [
+      {"name": "blueprint-ready"},
+      {"name": "stack-type-feature"},
+      {"name": "stack-area-frontend"}
+    ],
+    "body": "## Problem / Goal\n\nAdd dark mode to the UI.\n\n## Acceptance Criteria\n\n- [ ] Toggle works\n- [ ] Persists across sessions\n"
+  }
+}

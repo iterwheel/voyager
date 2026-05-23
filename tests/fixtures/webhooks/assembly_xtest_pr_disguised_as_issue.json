@@ -1,0 +1,28 @@
+{
+  "action": "created",
+  "repository": {
+    "full_name": "iterwheel/voyager-sandbox"
+  },
+  "comment": {
+    "id": 9102,
+    "body": "/assembly",
+    "user": {
+      "login": "ryosaeba1985"
+    }
+  },
+  "issue": {
+    "number": 73,
+    "title": "Fix: handle null pointer in parser",
+    "html_url": "https://github.com/iterwheel/voyager-sandbox/issues/73",
+    "state": "open",
+    "labels": [
+      {"name": "blueprint-ready"},
+      {"name": "stack-type-bug"}
+    ],
+    "body": "## Problem / Goal\n\nFix NPE.\n\n## Acceptance Criteria\n\n- [ ] No crash\n",
+    "pull_request": {
+      "url": "https://api.github.com/repos/iterwheel/voyager-sandbox/pulls/73",
+      "html_url": "https://github.com/iterwheel/voyager-sandbox/pull/73"
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "action": "created",
+  "repository": {
+    "full_name": "iterwheel/voyager-sandbox"
+  },
+  "comment": {
+    "id": 9103,
+    "body": "Thanks for the review!\n/assembly",
+    "user": {
+      "login": "ryosaeba1985"
+    }
+  },
+  "issue": {
+    "number": 74,
+    "title": "[Task]: Update README with setup instructions",
+    "html_url": "https://github.com/iterwheel/voyager-sandbox/issues/74",
+    "state": "open",
+    "labels": [
+      {"name": "blueprint-ready"},
+      {"name": "stack-type-docs"},
+      {"name": "stack-area-docs"}
+    ],
+    "body": "## Problem / Goal\n\nREADME is outdated.\n\n## Acceptance Criteria\n\n- [ ] README shows current setup steps\n- [ ] Examples work\n"
+  }
+}

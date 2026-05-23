@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from voyager.bots.assembly import route_assembly_event
 from voyager.bots.blueprint import route_blueprint_event
 from voyager.bots.clearance import route_clearance_event
 from voyager.bots.stack import route_stack_event
@@ -438,6 +439,7 @@ async def github_webhook(
         *route_blueprint_event(x_github_event, payload),
         *route_stack_event(x_github_event, payload),
         *route_clearance_event(x_github_event, payload),
+        *route_assembly_event(x_github_event, payload),
     ]
     routes, denied_routes = _filter_routes_by_repository(candidate_routes, repository)
     if denied_routes:
