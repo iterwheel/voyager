@@ -6,14 +6,11 @@
   <key>Label</key>
   <string>com.iterwheel.voyager.bridge</string>
 
-  <key>WorkingDirectory</key>
-  <string>/Users/frank/Projects/voyager</string>
-
   <key>ProgramArguments</key>
   <array>
     <string>/bin/zsh</string>
     <string>-lc</string>
-    <string>set -a &amp;&amp; source /Users/frank/.voyager/bridge.env &amp;&amp; set +a &amp;&amp; exec /Users/frank/Projects/voyager/.venv/bin/python -m uvicorn voyager.server:app --host 127.0.0.1 --port 8787</string>
+    <string>set -a &amp;&amp; source /Users/frank/.voyager/bridge.env &amp;&amp; set +a &amp;&amp; exec /Users/frank/.voyager/.venv/bin/vyg bridge serve --host 127.0.0.1 --port 8787</string>
   </array>
 
   <key>RunAtLoad</key>

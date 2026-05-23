@@ -33,8 +33,20 @@ dev = [
     "pre-commit>=4.6",
 ]
 
+# ============================================================================
+# Build wheel via `bash scripts/build_wheel.sh`. The script writes
+# voyager/_build_info.py with the current git SHA before invoking `uv build`,
+# enforces the dirty-tree gate, and verifies the SHA file ships inside the
+# wheel. DO NOT run `uv build` directly — a bare `uv build` ships a wheel
+# with BUILD_COMMIT='dev' (the SHA file does not exist yet). The generated
+# file is gitignored; editable installs fall back to BUILD_COMMIT='dev'.
+# ============================================================================
+
 [project.scripts]
 vyg = "voyager.cli:main"
+
+[tool.hatch.build]
+artifacts = ["voyager/_build_info.py"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["voyager"]

@@ -15,7 +15,8 @@ def test_launchd_plist_defines_wukong_bridge_contract() -> None:
     plist = plistlib.loads(PLIST_PATH.read_bytes())
 
     assert plist["Label"] == "com.iterwheel.voyager.bridge"
-    assert plist["WorkingDirectory"] == WUKONG_PROJECT_DIR
+    # CHG-1820 D9: WorkingDirectory removed — installed CLI uses absolute paths only.
+    assert "WorkingDirectory" not in plist
     assert plist["RunAtLoad"] is True
     assert plist["KeepAlive"] is True
     assert plist["ThrottleInterval"] == 10
@@ -29,8 +30,10 @@ def test_launchd_plist_defines_wukong_bridge_contract() -> None:
     command = args[2]
     assert "set -a && source /Users/frank/.voyager/bridge.env && set +a && exec" in command
     assert "; exec" not in command
-    assert f"exec {WUKONG_PROJECT_DIR}/.venv/bin/python" in command
-    assert "-m uvicorn voyager.server:app --host 127.0.0.1 --port 8787" in command
+    # CHG-1820 Surface 6: exec the installed vyg CLI from ~/.voyager/.venv, not
+    # the source-checkout python+uvicorn pair.
+    assert "exec /Users/frank/.voyager/.venv/bin/vyg" in command
+    assert "bridge serve --host 127.0.0.1 --port 8787" in command
 
 
 def test_wukong_env_example_preserves_production_safety_contract() -> None:

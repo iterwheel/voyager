@@ -20,6 +20,7 @@ from voyager.bots.assembly import route_assembly_event
 from voyager.bots.blueprint import route_blueprint_event
 from voyager.bots.clearance import route_clearance_event
 from voyager.bots.stack import route_stack_event
+from voyager.build_info import BUILD_COMMIT, VERSION
 from voyager.core.security import match_signature
 from voyager.core.writeback import dry_run_enabled
 
@@ -344,6 +345,8 @@ async def healthz() -> dict[str, Any]:
         "service": "iterwheel-github-bridge",
         "time": _utc_now(),
         "dry_run": dry_run_enabled(),
+        "version": VERSION,
+        "build_commit": BUILD_COMMIT,
     }
 
 

@@ -106,7 +106,48 @@ keep it running until the env file and launchd plist are ready. Stop that old
 process immediately before `launchctl bootstrap`; launchd cannot bind the port
 while the old process owns it.
 
-### 5. Install the LaunchAgent
+### 5. Install the Production Wheel
+
+Build the wheel from a clean checkout, install it into a versioned production
+virtualenv, and atomically swap the active-venv symlink.
+
+```bash
+cd /Users/frank/Projects/voyager
+
+# 1. Build the wheel (writes voyager/_build_info.py with the current SHA,
+#    runs `uv build`, asserts the wheel contains _build_info.py, cleans up).
+bash scripts/build_wheel.sh
+
+# Suppose the build prints:  built: dist/iterwheel_voyager-0.4.0-py3-none-any.whl
+#                            commit: a1b2c3d…
+# Use that version in the venv name (replace X.Y.Z below).
+
+# 2. Create a versioned venv and install the wheel.
+uv venv /Users/frank/.voyager/.venv-vX.Y.Z
+/Users/frank/.voyager/.venv-vX.Y.Z/bin/pip install dist/iterwheel_voyager-X.Y.Z-py3-none-any.whl
+
+# 3. Atomically swap ~/.voyager/.venv → the new versioned venv.
+#    `mv -hf` uses rename(2) and is atomic on APFS/HFS+.
+#    Critical: `-h` (BSD/macOS) means "do not follow target symlinks".
+#    Without `-h`, when `.venv` already points to an existing venv directory,
+#    `mv -f` follows the symlink and moves `.venv.swap-$$` INTO that directory
+#    instead of replacing the `.venv` symlink — leaving the active venv
+#    silently unchanged. DO NOT use plain `mv -f`, and DO NOT use `ln -sfn`
+#    (unlink + symlink, exposes a μs window where the symlink is missing).
+ln -s /Users/frank/.voyager/.venv-vX.Y.Z /Users/frank/.voyager/.venv.swap-$$
+mv -hf /Users/frank/.voyager/.venv.swap-$$ /Users/frank/.voyager/.venv
+
+# 4. Verify the active venv reports the expected version + commit.
+/Users/frank/.voyager/.venv/bin/vyg version
+```
+
+The launchd plist (installed in Step 6) references `/Users/frank/.voyager/.venv/bin/vyg`,
+so the symlink must already point at a venv with the wheel installed before
+`launchctl bootstrap` runs.
+
+Keep prior venvs (`~/.voyager/.venv-v0.3.0`, etc.) on disk for rollback.
+
+### 6. Install the LaunchAgent
 
 ```bash
 cd /Users/frank/Projects/voyager
@@ -134,7 +175,7 @@ launchctl enable gui/$(id -u)/com.iterwheel.voyager.bridge
 launchctl kickstart -kp gui/$(id -u)/com.iterwheel.voyager.bridge
 ```
 
-### 6. Operate the Service
+### 7. Operate the Service
 
 Start after an explicit bootout:
 
@@ -183,11 +224,35 @@ curl -fsS https://gh.iterwheel.com/healthz
 The local `/healthz` response must include `"ok": true`, service
 `"iterwheel-github-bridge"`, and `"dry_run": false` for production writes.
 
-### 7. Roll Back to a Previous Tag
+### 8. Roll Back to a Previous Tag
 
-Rollback changes the code checkout to a known release tag, restarts launchd,
-and verifies the local and public health endpoints. It does not edit secrets or
-repository allow-lists.
+Rollback restores a known-good production state and verifies the local and
+public health endpoints. It does not edit secrets or repository allow-lists.
+
+**Preferred rollback: venv-swap (atomic, no git involvement).**
+
+If a prior production venv exists (`~/.voyager/.venv-v0.3.0`), atomically swap
+the active-venv symlink back to it:
+
+```bash
+ln -s /Users/frank/.voyager/.venv-v0.3.0 /Users/frank/.voyager/.venv.swap-$$
+mv -hf /Users/frank/.voyager/.venv.swap-$$ /Users/frank/.voyager/.venv
+launchctl kickstart -k gui/$(id -u)/com.iterwheel.voyager.bridge
+curl -fsS http://127.0.0.1:8787/healthz   # confirm build_commit is the prior version
+```
+
+The `-h` flag (BSD/macOS) tells `mv` not to follow target symlinks. Without
+it, the move silently lands `.venv.swap-$$` INSIDE the existing venv
+directory pointed at by `.venv` — and the active version never changes.
+After the swap, `readlink /Users/frank/.voyager/.venv` MUST point at
+the rolled-back venv directory; verify before treating the rollback as
+complete.
+
+This is the **preferred** path because it cannot accidentally pick up
+uncommitted dev-checkout changes — the production venv is fully isolated.
+
+**Alternative: git-tag rollback** (use only if no prior venv is available;
+requires rebuilding the wheel from the rollback tag).
 
 ```bash
 PREVIOUS_TAG=v0.3.0
@@ -250,3 +315,5 @@ handoff or PR:
 | Date | Change | By |
 |------|--------|----|
 | 2026-05-18 | Initial Wukong launchd and rollback SOP for issue #44. | Codex |
+| 2026-05-23 | VOY-1820 amendment — new Step 5 "Install the production wheel" + cascade renumber Steps 5→6 / 6→7 / 7→8; preferred venv-swap rollback path added to Step 8. | Claude (via VOY-1811 #75) |
+| 2026-05-23 | Post-PR ship-blocker fix — corrected venv-swap command from `mv -f` to `mv -hf` (BSD/macOS `-h` = "do not follow target symlinks"). On macOS, `mv -f` follows the existing `.venv` symlink and moves the intermediate INSIDE the old venv directory; the active venv never switches and rollback silently no-ops. Empirically reproduced on Wukong during PR #80 pre-merge operator review. Fix applied to Step 5 install + Step 8 rollback example. | Claude (via VOY-1811 #75) |
