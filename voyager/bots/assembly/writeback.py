@@ -41,7 +41,9 @@ _log = logging.getLogger(__name__)
 def _cached_issue_from_route(route: dict[str, Any]) -> dict[str, Any]:
     """Return the cached webhook snapshot of the issue from the route shape.
 
-    Used as the fallback when the live GitHub refetch fails.
+    Used as the fallback when the live GitHub refetch fails. The
+    ``_source: "cached"`` marker lets the dispatcher distinguish this from
+    a successful live refetch with an authoritative-but-empty label list.
     """
     writeback = route.get("writeback") or {}
     contract = writeback.get("contract") or {}
@@ -52,7 +54,19 @@ def _cached_issue_from_route(route: dict[str, Any]) -> dict[str, Any]:
         "html_url": contract.get("issue_url"),
         "labels": writeback.get("issue_labels") or [],
         "state": writeback.get("issue_state") or "open",
+        "_source": "cached",
     }
+
+
+def _is_dry_run(command_flags: dict[str, Any]) -> bool:
+    """Combined dry-run gate: env ``DRY_RUN`` OR per-command ``--dry-run``.
+
+    Codex round-2 P1 (PR #74): the parsed ``--dry-run`` flag must gate
+    GitHub mutations independently of the global env so that an operator
+    can request a safe dry run on a per-comment basis even when
+    ``DRY_RUN=false`` is in effect for production.
+    """
+    return dry_run_enabled() or bool(command_flags.get("dry_run"))
 
 
 async def _live_issue_from_route(
@@ -102,14 +116,19 @@ async def _live_issue_from_route(
         for item in (live.get("labels") or [])
         if isinstance(item, dict) and item.get("name")
     ]
+    # Codex round-2 P1: a successful live refetch is authoritative for
+    # labels even when the list is empty — the operator may have removed
+    # all gating labels between routing and dispatch. Only the cached
+    # fallback path (above) should defer to webhook-cached labels.
     return {
         "number": live.get("number") or issue_number,
         "title": live.get("title") or cached.get("title"),
         "body": live.get("body") or cached.get("body"),
         "html_url": live.get("html_url") or cached.get("html_url"),
-        "labels": live_labels or cached.get("labels") or [],
+        "labels": live_labels,
         "state": (live.get("state") or cached.get("state") or "open"),
         "pull_request": live.get("pull_request"),
+        "_source": "live",
     }
 
 
@@ -135,9 +154,11 @@ async def dispatch_assembly_writeback(
     adapter = select_execution_adapter(backend_env)
     backend_name = adapter.name
 
+    is_dry_run = _is_dry_run(command_flags)
+
     base_result: dict[str, Any] = {
         "applied": False,
-        "dry_run": dry_run_enabled(),
+        "dry_run": is_dry_run,
         "execution_backend": backend_name,
         "refusal": refusal_router,
         "contract": contract_dict,
@@ -170,10 +191,14 @@ async def dispatch_assembly_writeback(
     # and the failure is recorded in ``base_result["writeback_failures"]``.
     # ------------------------------------------------------------------
     issue_snapshot = await _live_issue_from_route(client, repository, route, base_result)
-    # When the live refetch succeeded, its label list is authoritative;
-    # fall back to webhook-cached labels only when the refetch returned
-    # no labels (typically because the fallback path triggered).
-    snapshot_labels = issue_snapshot.get("labels") or _labels_from_validation(validation)
+    # Codex round-2 P1: a successful live refetch's label list is
+    # authoritative even when empty. Only when the snapshot is the cached
+    # fallback (`_source == "cached"`) do we layer in webhook-derived
+    # labels as a defensive backstop.
+    if issue_snapshot.get("_source") == "live":
+        snapshot_labels = list(issue_snapshot.get("labels") or [])
+    else:
+        snapshot_labels = issue_snapshot.get("labels") or _labels_from_validation(validation)
     pre = validate_preconditions(
         {**issue_snapshot, "labels": snapshot_labels},
         allow_missing_stack=bool(command_flags.get("allow_missing_stack")),
@@ -256,14 +281,15 @@ async def dispatch_assembly_writeback(
         }
 
     # ------------------------------------------------------------------
-    # GitHub mutation gates.  Three independent dimensions:
-    #   - dry_run_enabled() short-circuits all mutations (always upsert
-    #     comment? no — the progress comment is itself a mutation).  When
-    #     DRY_RUN is true we *skip* network writes and return planned shape.
+    # GitHub mutation gates.  Four independent dimensions (Codex round-2
+    # P1 added per-command `--dry-run`):
+    #   - ``DRY_RUN`` env short-circuits all mutations globally.
+    #   - The parsed ``--dry-run`` command flag short-circuits mutations
+    #     for a single invocation (e.g. ``/assembly --dry-run``).
     #   - adapter_result must produce commits before branch/PR steps run.
     #   - codex-trigger only fires when the PR open / update succeeded.
     # ------------------------------------------------------------------
-    if dry_run_enabled():
+    if is_dry_run:
         base_result["pull_request"] = {
             "number": None,
             "url": None,
@@ -320,9 +346,10 @@ async def _post_refusal_comment(
 ) -> dict[str, Any]:
     """Upsert the refusal comment on the source issue.
 
-    Refusal comments are written even when DRY_RUN=true so the operator
-    can see why Assembly declined.  The router-side refusal goes here
-    untouched; the dispatcher-side refusal includes any updated
+    Skipped when the combined dry-run gate (``DRY_RUN`` env OR per-command
+    ``--dry-run`` flag) is on — the refusal comment is itself a GitHub
+    mutation, and dry-run must be inert. The router-side refusal goes
+    through untouched; the dispatcher-side refusal includes any updated
     ``missing_labels`` discovered by D4 re-validation.
     """
     contract = result.get("contract") or {}
@@ -339,7 +366,7 @@ async def _post_refusal_comment(
         dry_run=result.get("dry_run", True),
         surface="issue",
     )
-    if dry_run_enabled():
+    if result.get("dry_run"):
         return result
     try:
         comment = await client.upsert_issue_comment(
