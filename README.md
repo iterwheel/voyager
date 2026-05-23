@@ -52,21 +52,23 @@ Every code change at Iterwheel is treated as a launch mission. Each stage is
 owned by exactly one bot:
 
 ```
-Blueprint → Stack → Static Fire → Clearance → Countdown → Liftoff
-   📐         🛰️         🔥             ✅           ⏱️           🚀
- Design     Assembly  Ground test     Polling     T-minus      Launch
+Blueprint → Stack → Assembly → Static Fire → Clearance → Countdown → Liftoff
+   📐         🛰️        🔧          🔥             ✅           ⏱️           🚀
+ Design    Classify  Implement   Ground test     Polling     T-minus      Launch
 ```
 
 | # | Bot | Stage | GitHub Job |
 |---|-----|-------|------------|
 | 1 | **Blueprint** 📐 | Mission blueprint | Issue intake and title validation |
 | 2 | **Stack** 🛰️ | Vehicle stacking | Issue classification labels |
-| 3 | **Static Fire** 🔥 | Ground test | CI / test aggregation |
-| 4 | **Clearance** ✅ | Go / No-Go poll | Review status aggregation |
-| 5 | **Countdown** ⏱️ | T-minus | PR convention checks and final merge gate |
-| 6 | **Liftoff** 🚀 | Launch | Release / deploy |
+| 3 | **Assembly** 🔧 | Implementation | Branch, code, commit, PR — write work only |
+| 4 | **Static Fire** 🔥 | Ground test | CI / test aggregation |
+| 5 | **Clearance** ✅ | Go / No-Go poll | Review status aggregation |
+| 6 | **Countdown** ⏱️ | T-minus | PR convention checks and final merge gate |
+| 7 | **Liftoff** 🚀 | Launch | Release / deploy |
 
 Reserved future slots: **Manifest**, **Caliper**, **Tanking**, **Apogee**, **Telemetry**.
+Assembly graduated from reserved to active (see VOY-1802, issue #67).
 See [`rules/VOY-1802`](rules/VOY-1802-REF-Bot-Roster-Rocket-Factory.md) for the full spec.
 
 ---
@@ -128,6 +130,7 @@ Full guide: [`rules/VOY-1803`](rules/VOY-1803-REF-Visual-and-Voice-Identity.md).
 GitHub App operating rules. The public bot identities are
 `iterwheel-blueprint`, `iterwheel-stack`, `iterwheel-staticfire`,
 `iterwheel-clearance`, and `iterwheel-countdown`.
+`iterwheel-assembly` is the next bot to be created (see VOY-1807).
 
 ---
 

@@ -54,9 +54,10 @@ and VOY-1804.
    | GitHub handle | Display name | Primary responsibility |
    |---------------|--------------|------------------------|
    | `iterwheel-blueprint` | Blueprint | Issue intake: validate issue title format, issue templates, completeness, Blueprint labels, priority hints, missing context, and ready-state rocket reactions. |
-   | `iterwheel-stack` | Stack | Issue classification: infer and maintain type, area, size, risk, and routing labels from issue title and body. |
-   | `iterwheel-staticfire` | Static Fire | CI and test aggregation: read checks, lint, typecheck, test, and workflow results; summarize failures in human-readable form. |
-   | `iterwheel-clearance` | Clearance | Review readiness: aggregate approvals, requested changes, unresolved review threads, and bot verdicts. |
+   | `iterwheel-stack` | Stack | Issue classification: infer and maintain type, area, size, risk, and routing labels from issue title and body. Stack is classification-only; it does not write code. |
+   | `iterwheel-assembly` | Assembly | Code implementation: create branches, edit code, run tests, push commits, open/update pull requests, and request review. Assembly must not merge, approve its own work, resolve review threads as a reviewer, or substitute for Clearance or Countdown. |
+   | `iterwheel-staticfire` | Static Fire | CI and test aggregation: read checks, lint, typecheck, test, and workflow results; summarize failures in human-readable form. Static Fire observes test results; it does not modify code or approve changes. |
+   | `iterwheel-clearance` | Clearance | Review readiness: aggregate approvals, requested changes, unresolved review threads, and bot verdicts. Clearance polls; it does not write code or evaluate code correctness. |
    | `iterwheel-countdown` | Countdown | Final merge gate: publish a GO or HOLD verdict after checking PR title/body conventions, CI, review state, branch protection, conflicts, and release constraints. |
 
 2. **Use the Blueprint label standard**
@@ -111,6 +112,8 @@ and VOY-1804.
    review reasons and suggested labels, remove its own `rocket` reaction, and
    add an `eyes` reaction. This is still a request for human classification, not
    a pass/fail gate.
+    Stack must ignore Assembly-authored PRs and code changes: its responsibility
+    ends at classification.
 
 4. **Use the Clearance label standard**
 
@@ -140,8 +143,32 @@ and VOY-1804.
    `clearance-4-ready-for-merge`, and adds `eyes` otherwise. It does not prove
    that every requested semantic code change was truly fixed; AI-assisted
    semantic repair verification is a later Clearance v2 responsibility.
+    Clearance must not mark itself as a reviewer on Assembly-authored PRs;
+    it aggregates, it does not evaluate code correctness.
 
-5. **Keep handle rules stable**
+5. **Assembly boundaries**
+
+   `iterwheel-assembly` is the implementation bot. Its scope is:
+
+   | Allow | Deny |
+   |-------|------|
+   | Create feature branches from issue body | Merge pull requests |
+   | Write and edit code | Approve its own pull requests |
+   | Run tests and lint locally | Resolve review threads as a reviewer |
+   | Push commits to a fork or feature branch | Apply `clearance-4-ready-for-merge` or `countdown-go` labels |
+   | Open pull requests with closing keywords | Modify branch protection rules |
+   | Request review from humans or Clearance | Close issues directly without a linked PR |
+   | Comment on its own PR with implementation notes | Override Static Fire, Clearance, or Countdown verdicts |
+
+   Assembly writes code; it does not gate, approve, or merge. Its trigger model
+   starts with a manual slash command such as `/assembly` or `/implement` on a
+   `blueprint-ready` issue. Rollout is allow-list first: install Assembly only on
+   selected sandbox repositories before expanding.
+
+   Assembly operates after Stack classification and before Static Fire testing
+   in the rocket factory pipeline.
+
+6. **Keep handle rules stable**
 
    - Use `iterwheel-` as the GitHub account prefix.
    - Use lowercase ASCII handles.
@@ -149,13 +176,13 @@ and VOY-1804.
    - Do not add extra internal hyphens unless readability requires it.
    - Preserve canonical display names with normal spacing, such as `Static Fire`.
 
-6. **Treat `iterwheel-staticfire` as the handle exception**
+7. **Treat `iterwheel-staticfire` as the handle exception**
 
    The canonical display name remains `Static Fire`, but the GitHub handle is
    `iterwheel-staticfire` rather than `iterwheel-static-fire` to keep the public
    handle shorter and visually cleaner.
 
-7. **Limit initial authority**
+8. **Limit initial authority**
 
    The first-batch accounts may read repository state, post comments, publish
    check/status conclusions, and participate in review workflows. They must not
@@ -166,12 +193,17 @@ and VOY-1804.
    insufficient, but it must write only approved labels from a repo allow-list.
    It should not invent labels or turn classification into a pass/fail gate.
 
-8. **Treat Countdown as advisory until hardened**
+9. **Treat Countdown as advisory until hardened**
 
    `iterwheel-countdown` is the desired final merge gate, but its first
    operating mode is advisory: it may publish `GO` or `HOLD` conclusions, while
-   actual merge authority remains with humans, GitHub branch protection, or a
-   later approved automation design.
+    actual merge authority remains with humans, GitHub branch protection, or a
+    later approved automation design.
+    Countdown must not merge Assembly-authored PRs until it has satisfied its
+    own gate conditions and received a matching human approval. Assembly
+    implementation and Countdown gate authority remain separate stages; no bot
+    may hold both implementation and final gate keys simultaneously per VOY-1806
+    least-privilege matrix.
 
 
 ## Examples
@@ -206,6 +238,15 @@ only `stack-needs-review`. Stack should remove stale classification-axis labels,
 upsert a comment explaining why it needs review, and avoid adding a `rocket`
 reaction.
 
+### Assembly implementation PR
+
+On a `blueprint-ready` issue, `/assembly` or `/implement` triggers Assembly to
+create a branch, write code per the issue plan, run local tests, push commits
+to the fork, and open a pull request against `main`. Assembly adds
+`Closes #N` to the PR body. It does not approve, merge, close the issue
+directly, or apply Clearance labels. Clearance and Countdown remain the
+review/gate stages for the Assembly-authored PR.
+
 ---
 
 ## Change History
@@ -223,3 +264,4 @@ reaction.
 | 2026-05-09 | Added Stack v2 explicit `Work Type` / `Stack Area` parsing and weighted area scoring                                         | Frank Xu + Codex |
 | 2026-05-09 | Added Clearance v1 pull request review-readiness label standard                                                             | Frank Xu + Codex |
 | 2026-05-16 | Replace 3 unnumbered labels with 4 numbered labels + colors per issue #25; legacy names migrated by writeback               | Claude Code      |
+| 2026-05-23 | Added Assembly bot: responsibilities, boundaries, allow/deny table, trigger model, rollout model, pipeline position, and examples (issue #67) | DeepSeek (via VOY-1811) |

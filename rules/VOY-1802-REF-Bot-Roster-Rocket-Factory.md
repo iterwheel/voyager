@@ -23,8 +23,8 @@ liftoff.
 ## End-to-End Pipeline
 
 ```
-Blueprint → Stack → Static Fire → Clearance → Countdown → Liftoff
-  Design     Assembly  Ground test    Polling     T-minus     Launch
+Blueprint → Stack → Assembly → Static Fire → Clearance → Countdown → Liftoff
+  Design    Classify  Implement   Ground test    Polling     T-minus     Launch
 ```
 
 Each stage maps to a single bot — single responsibility, clean handoff.
@@ -36,11 +36,12 @@ Each stage maps to a single bot — single responsibility, clean handoff.
 | # | Bot | GitHub Responsibility | Rocket-Stage Metaphor |
 |---|-----|-----------------------|----------------------|
 | 1 | **Blueprint** 📐 | Issue intake and title validation | Mission blueprint: every launch starts from a design |
-| 2 | **Stack** 🛰️ | Issue classification labels | Vehicle stacking: align and assemble each stage |
-| 3 | **Static Fire** 🔥 | CI / test aggregation | Static fire test: prove engines run on the ground |
-| 4 | **Clearance** ✅ | Review status aggregation | Go/No-Go poll: each station confirms readiness |
-| 5 | **Countdown** ⏱️ | PR convention checks and merge gate | T-minus countdown: the final merge gatekeeper |
-| 6 | **Liftoff** 🚀 | Release / Deploy | Launch: the moment we leave the ground |
+| 2 | **Stack** 🛰️ | Issue classification labels | Vehicle stacking: classify and align each component |
+| 3 | **Assembly** 🔧 | Code implementation | Vehicle assembly: build and integrate the work |
+| 4 | **Static Fire** 🔥 | CI / test aggregation | Static fire test: prove engines run on the ground |
+| 5 | **Clearance** ✅ | Review status aggregation | Go/No-Go poll: each station confirms readiness |
+| 6 | **Countdown** ⏱️ | PR convention checks and merge gate | T-minus countdown: the final merge gatekeeper |
+| 7 | **Liftoff** 🚀 | Release / Deploy | Launch: the moment we leave the ground |
 
 ---
 
@@ -54,6 +55,7 @@ Reserved expansion slots:
 | **Manifest** | Auto-label / classification | Payload manifest |
 | **Caliper** | PR size / complexity | Precision measurement |
 | **Tanking** | Pre-merge check / conflict detection | Fuel loading |
+| **Cargo** | Dependency / package management | Payload cargo |
 | **Apogee** | Production monitoring | Apex of flight |
 | **Telemetry** | Metrics / observability | Telemetry stream |
 
@@ -80,3 +82,4 @@ Reserved expansion slots:
 | 2026-05-09 | Initial version — extracted from `Iterwheel-Founding-Document.md` v1.1 (Bot Roster / End-to-End Pipeline / Future Bots sections) | Claude Code      |
 | 2026-05-09 | Translated to English (project standard: English-only docs)                                                                      | Claude Code      |
 | 2026-05-09 | Updated Blueprint, Stack, and Countdown responsibility boundaries to match the live GitHub App roster                            | Frank Xu + Codex |
+| 2026-05-23 | Added Assembly bot between Stack and Static Fire; updated pipeline, roster, and Stack metaphor (issue #67) | DeepSeek (via VOY-1811) |

@@ -24,6 +24,7 @@ organization for the Voyager bot roster.
 | `iterwheel-staticfire` | `3646537` | `https://github.com/apps/iterwheel-staticfire` | No | Stored on Wukong: `~/github-openclaw-agent/secrets/iterwheel-staticfire.private-key.pem` | `iterwheel/voyager-sandbox` (`130630275`) |
 | `iterwheel-clearance` | `3646538` | `https://github.com/apps/iterwheel-clearance` | No | Stored on Wukong: `~/github-openclaw-agent/secrets/iterwheel-clearance.private-key.pem` | `iterwheel/voyager`, `iterwheel/voyager-sandbox` (`130630338`) |
 | `iterwheel-countdown` | `3646540` | `https://github.com/apps/iterwheel-countdown` | No | Stored on Wukong: `~/github-openclaw-agent/secrets/iterwheel-countdown.private-key.pem` | `iterwheel/voyager-sandbox` (`130630407`) |
+| `iterwheel-assembly` | _(pending)_ | _(pending)_ | No | _(pending)_ | _(pending)_ |
 
 Current repository event source:
 
@@ -124,3 +125,5 @@ Operational notes:
 | 2026-05-17 | Updated Clearance label set to four numbered labels; added legacy-migration note (issue #25)                      | Claude Code      |
 | 2026-05-17 | Replaced legacy label names in main registry table write-back row with four numbered clearance labels (issue #25) | Claude Code      |
 | 2026-05-17 | Recorded Clearance activation on `iterwheel/voyager` after PR #36 showed live Clearance readiness panels on the main repository. | Codex |
+| 2026-05-23 | Added Assembly placeholder registry row (App not yet created; governed by VOY-1805 boundaries and VOY-1806 permission matrix) | DeepSeek (via VOY-1811) |
+| 2026-05-23 | Added `iterwheel-assembly` placeholder row to main app table | DeepSeek (via VOY-1811) |
