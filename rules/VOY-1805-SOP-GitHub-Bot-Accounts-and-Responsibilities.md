@@ -60,7 +60,48 @@ and VOY-1804.
    | `iterwheel-clearance` | Clearance | Review readiness: aggregate approvals, requested changes, unresolved review threads, and bot verdicts. Clearance polls; it does not write code or evaluate code correctness. |
    | `iterwheel-countdown` | Countdown | Final merge gate: publish a GO or HOLD verdict after checking PR title/body conventions, CI, review state, branch protection, conflicts, and release constraints. |
 
-2. **Use the Blueprint label standard**
+2. **Actor authorization for Assembly**
+
+   Assembly only acts on `/assembly` / `/implement` comments from authorized
+   actors. Authorization is checked at routing time inside the bridge, before
+   any precondition or backend dispatch, and is independent of the bridge
+   repository allow-list and the dry-run gate.
+
+   Two env vars configure the policy:
+
+   | Env var | Meaning | Unset default |
+   |---------|---------|---------------|
+   | `BRIDGE_ASSEMBLY_AUTHORIZED_ACTORS` | Whitespace/comma-separated GitHub logins (case-insensitive) | Empty — no allow-list match |
+   | `BRIDGE_ASSEMBLY_AUTHORIZED_ASSOCIATIONS` | Whitespace/comma-separated `author_association` values (case-insensitive) | Empty — associations are not consulted |
+
+   When `BRIDGE_ASSEMBLY_AUTHORIZED_ASSOCIATIONS` is **set but empty**, the
+   default trusted set `OWNER, MEMBER, COLLABORATOR` is used. When **unset**,
+   no association is trusted and only the explicit login allow-list grants
+   access — this is the default-deny posture documented in VOY-1818.
+
+   A comment is authorized when **either** signal matches: the canonical
+   lower-case `comment.user.login` is in the allow-list, OR the upper-case
+   `comment.author_association` is in the trusted set.
+
+   Bots are **always refused**, regardless of the allow-list or association.
+   The gate denies any `comment.user.type == "Bot"` and any login whose
+   lower-case form ends with `[bot]`. A bot login on
+   `BRIDGE_ASSEMBLY_AUTHORIZED_ACTORS` is still denied — bot precedence is
+   upstream of the allow-list check.
+
+   Unknown actor metadata (missing `comment.user`, empty login, malformed
+   payload shape) is treated as refusal, not error.
+
+   When the gate refuses, Assembly upserts an issue comment with reason
+   `unauthorized_actor`. The refusal comment names only the refused actor's
+   own login and association — it never echoes the allow-list or trusted
+   association set, so triggering refusals on a public repo cannot enumerate
+   the org's trusted-actor surface.
+
+   See VOY-1818 for the gate's full evaluation order, the
+   `ActorAuthorization` schema, and the Gate Corner Table.
+
+3. **Use the Blueprint label standard**
 
    Blueprint owns exactly three issue-state labels. Keep these names stable
    across every repository where `iterwheel-blueprint` is installed:
@@ -81,7 +122,7 @@ and VOY-1804.
 
    Do not revive the older `needs-blueprint` label name.
 
-3. **Use the Stack label standard**
+4. **Use the Stack label standard**
 
    Stack owns classification labels only. It must not use its labels as
    pass/fail gates, and it must not create labels outside this allow-list.
@@ -115,7 +156,7 @@ and VOY-1804.
     Stack must ignore Assembly-authored PRs and code changes: its responsibility
     ends at classification.
 
-4. **Use the Clearance label standard**
+5. **Use the Clearance label standard**
 
    Clearance owns pull request review-readiness labels only. Its labels are
    mutually exclusive and should be applied only to pull requests:
@@ -146,7 +187,7 @@ and VOY-1804.
     Clearance must not mark itself as a reviewer on Assembly-authored PRs;
     it aggregates, it does not evaluate code correctness.
 
-5. **Assembly boundaries**
+6. **Assembly boundaries**
 
    `iterwheel-assembly` is the implementation bot. Its scope is:
 
@@ -168,7 +209,7 @@ and VOY-1804.
    Assembly operates after Stack classification and before Static Fire testing
    in the rocket factory pipeline.
 
-6. **Keep handle rules stable**
+7. **Keep handle rules stable**
 
    - Use `iterwheel-` as the GitHub account prefix.
    - Use lowercase ASCII handles.
@@ -176,13 +217,13 @@ and VOY-1804.
    - Do not add extra internal hyphens unless readability requires it.
    - Preserve canonical display names with normal spacing, such as `Static Fire`.
 
-7. **Treat `iterwheel-staticfire` as the handle exception**
+8. **Treat `iterwheel-staticfire` as the handle exception**
 
    The canonical display name remains `Static Fire`, but the GitHub handle is
    `iterwheel-staticfire` rather than `iterwheel-static-fire` to keep the public
    handle shorter and visually cleaner.
 
-8. **Limit initial authority**
+9. **Limit initial authority**
 
    The first-batch accounts may read repository state, post comments, publish
    check/status conclusions, and participate in review workflows. They must not
@@ -193,7 +234,7 @@ and VOY-1804.
    insufficient, but it must write only approved labels from a repo allow-list.
    It should not invent labels or turn classification into a pass/fail gate.
 
-9. **Treat Countdown as advisory until hardened**
+10. **Treat Countdown as advisory until hardened**
 
    `iterwheel-countdown` is the desired final merge gate, but its first
    operating mode is advisory: it may publish `GO` or `HOLD` conclusions, while
@@ -265,3 +306,4 @@ review/gate stages for the Assembly-authored PR.
 | 2026-05-09 | Added Clearance v1 pull request review-readiness label standard                                                             | Frank Xu + Codex |
 | 2026-05-16 | Replace 3 unnumbered labels with 4 numbered labels + colors per issue #25; legacy names migrated by writeback               | Claude Code      |
 | 2026-05-23 | Added Assembly bot: responsibilities, boundaries, allow/deny table, trigger model, rollout model, pipeline position, and examples (issue #67) | DeepSeek (via VOY-1811) |
+| 2026-05-23 | Added Actor Authorization for Assembly step (per VOY-1818): env-var policy, default-deny posture, bot precedence rule, unknown-metadata deny, refusal-disclosure non-goal | Claude (via VOY-1811 #76) |

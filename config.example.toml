@@ -63,6 +63,13 @@ default_profile = "flash_no_thinking"
 # spawning any subprocess; pi-oh-my-pi-deepseek is reserved for the follow-up
 # adapter PR and currently raises NotImplementedError):
 #   ASSEMBLY_EXECUTION_BACKEND=dry-run
+#
+# Activate actor authorization (default: empty / deny). Either env var alone is
+# sufficient — a comment is authorized when its login is on the allow-list OR
+# its author_association is in the trusted set. Bot actors are always refused
+# regardless of the lists. See VOY-1818 for the gate policy.
+#   BRIDGE_ASSEMBLY_AUTHORIZED_ACTORS="frankyxhl ryosaeba1985"
+#   BRIDGE_ASSEMBLY_AUTHORIZED_ASSOCIATIONS="OWNER MEMBER COLLABORATOR"
 [[apps]]
 slug = "iterwheel-assembly"
 app_id = "3821103"
