@@ -222,6 +222,40 @@ process SOP.
 
 ---
 
+## Autonomous Operation
+
+`follow VOY-1811` is loop mode by contract. Once the consent gate (Phase 1)
+clears, the agent operates Phases 2-11 autonomously through to retrospective
+(or Phase 12 restart for the looping variant). The agent MUST NOT pause to
+ask the operator for permission between phases, between polling cycles in
+Phase 8, or between adjacent loop iterations. Polling for CI / Codex /
+Clearance verdicts during Phase 8 is an unconditional part of the loop —
+not a step that requires operator confirmation each time.
+
+Valid operator-pause points are exactly:
+
+- Consent gate failure (Phase 1: no rocket from a trusted reactor, no
+  `blueprint-ready` label).
+- Spec ↔ implementation divergence discovered in Phase 6 verification
+  where the resolution is not obvious (amend doc vs amend code).
+- A finding the agent cannot remediate without operator policy input
+  (new permission grant, new App installation, branch-protection change).
+- An operator-only credential or authorization (e.g. `gcloud auth login`,
+  manual approval of an Actions workflow).
+- R-count hard stop at R13 per the soft cap (10 + 3 extension).
+
+All other "should I keep going?" prompts violate the loop contract.
+Asking before polling for Codex review, asking before re-triggering
+`@codex review` after a push, asking before scheduling a wakeup to wait
+for CI — these are not pause points. The agent uses `ScheduleWakeup`
+(or the runtime's equivalent) and continues.
+
+This rule applies for every `follow VOY-1811` invocation regardless of
+the agent's prior session memory. A new session reading this file inherits
+the autonomous-operation default immediately.
+
+---
+
 ## Adoption Status by Phase
 
 All phases are aspirational for Voyager as of 2026-05-17. Individual practices
@@ -444,6 +478,7 @@ completion-gate blocker rather than proceeding.
 
 | Date | Change | By |
 |------|--------|----|
+| 2026-05-23 | Added §Autonomous Operation: makes the loop-mode contract explicit, enumerates valid operator-pause points, and forbids "should I keep going?" prompts during Phase 8 polling. Session-independent guarantee so new sessions inherit the default. Surfaced by operator feedback during the #69 Phase 8 run. | Claude (via VOY-1811 #69) |
 | 2026-05-19 | Replaced launchd external-scheduler pattern with `task_create` self-bootstrapping chain. Removed `deploy/launchd/com.iterwheel.voyager.loop.plist` and `scripts/loop_continue.sh`. Rewrote §Durable Wakeup: DeepSeek TUI and updated Runtime Profile row. | DeepSeek (via VOY-1811 #59) |
 | 2026-05-18 | Added §Durable Wakeup: DeepSeek TUI (launchd timer pattern, superseded). | DeepSeek (via VOY-1811 #59) |
 | 2026-05-18 | Added DeepSeek TUI row to Runtime Profile (verified via issue #56 loop). Wakeup uses `task_shell_start` with shell poll loop in bounded-poll mode. | DeepSeek (via VOY-1811) |
