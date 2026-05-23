@@ -155,8 +155,10 @@ async def dispatch_assembly_writeback(
     command_flags: dict[str, Any] = writeback.get("command_flags") or {}
     delivery_id = str(route.get("delivery_id") or "")
 
-    backend_env = command_flags.get("backend") or None
-    adapter = select_execution_adapter(backend_env)
+    # Backend selection is env-only (`ASSEMBLY_EXECUTION_BACKEND`) per VOY-1817 D3.
+    # `command_flags` carries `dry_run` / `allow_missing_stack` only; there is
+    # no `--backend` command flag (closed by CHG-1819 F2; see VOY-1819).
+    adapter = select_execution_adapter()
     backend_name = adapter.name
 
     is_dry_run = _is_dry_run(command_flags)
