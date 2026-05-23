@@ -55,7 +55,7 @@ repositories, manage secrets, deploy production, or merge code directly.
    | `iterwheel-blueprint` | Blueprint | Issue intake, issue title validation, triage comments, labels, and ready-state rocket reactions. |
    | `iterwheel-stack` | Stack | Issue type, area, size, risk, and routing label classification. |
    | `iterwheel-assembly` | Assembly | Branch creation, code writing, local test execution, commit pushing, pull request opening and updating, and review requesting. |
-| `iterwheel-staticfire` | Static Fire | CI, test, workflow, and check aggregation. |
+   | `iterwheel-staticfire` | Static Fire | CI, test, workflow, and check aggregation. |
    | `iterwheel-clearance` | Clearance | Review readiness aggregation. |
    | `iterwheel-countdown` | Countdown | Final GO/HOLD merge gate with PR title/body convention checks, emoji reactions, review-thread resolution, and PR approval authority, but no merge authority. |
 
@@ -85,7 +85,7 @@ repositories, manage secrets, deploy production, or merge code directly.
    | `iterwheel-blueprint` | Read | No access | Read & write | No access | Read & write | No access | No access |
    | `iterwheel-stack` | Read | No access | Read & write | No access | No access | No access | No access |
    | `iterwheel-assembly` | Read | Read & write | Read-only | Read & write | Read-only | Read-only | Read-only |
-| `iterwheel-staticfire` | Read | Read-only | No access | Read-only | Read & write | Read-only | Read-only |
+   | `iterwheel-staticfire` | Read | Read-only | No access | Read-only | Read & write | Read-only | Read-only |
    | `iterwheel-clearance` | Read | Read-only | Read & write | Read & write | Read & write | No access | Read-only |
    | `iterwheel-countdown` | Read | Read-only | Read & write | Read & write | Read & write | Read-only | Read-only |
 
@@ -96,7 +96,7 @@ repositories, manage secrets, deploy production, or merge code directly.
      granting code write access.
    - `Issues: read & write` allows issue comments, labels, issue reactions, and
      PR comments that flow through issue APIs. This is required for
-`iterwheel-blueprint` ready-state rocket reactions, plus Stack label
+     `iterwheel-blueprint` ready-state rocket reactions, plus Stack label
       management and issue timeline emoji reactions. Assembly needs `read-only`
       issue access to read issue bodies for implementation context.
       For Blueprint, label
@@ -114,7 +114,7 @@ repositories, manage secrets, deploy production, or merge code directly.
    - `Checks: read & write` allows each bot that publishes a verdict to create
      check runs.
    - `Actions: read-only` and `Commit statuses: read-only` are reserved for bots
-that summarize CI, gate readiness, or implementation feedback.
+     that summarize CI, gate readiness, or implementation feedback.
     - `Contents: read & write` is granted to `iterwheel-assembly` as the sole
       exception. Assembly needs write access to create branches and push
       implementation commits. Merge authority is denied by branch protection
@@ -134,10 +134,10 @@ that summarize CI, gate readiness, or implementation feedback.
 
    | App | Events |
    |-----|--------|
-      | `iterwheel-blueprint` | Issues, Issue comment |
+   | `iterwheel-blueprint` | Issues, Issue comment |
    | `iterwheel-stack` | Issues, Issue comment |
    | `iterwheel-assembly` | Push, Pull request, Issue comment, Check run, Check suite, Status, Workflow run |
-| `iterwheel-staticfire` | Check run, Check suite, Status, Workflow run, Pull request |
+   | `iterwheel-staticfire` | Check run, Check suite, Status, Workflow run, Pull request |
    | `iterwheel-clearance` | Pull request, Pull request review, Pull request review comment, Issue comment |
    | `iterwheel-countdown` | Pull request, Pull request review, Pull request review comment, Check run, Check suite, Status, Workflow run, Issue comment |
 
