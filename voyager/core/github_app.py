@@ -696,3 +696,135 @@ class GitHubAppClient:
             json_body={"body": body},
         )
         return dict(result or {})
+
+    # ------------------------------------------------------------------
+    # Branch + Pull Request helpers (added for Assembly per VOY-1817
+    # Surface 10).  All five methods are additive — no existing call
+    # site changes.  They use the shared ``request()`` helper so auth,
+    # retry, and TLS-pool behaviour stay identical to the rest of this
+    # client.
+    # ------------------------------------------------------------------
+
+    async def branch_ref_exists(self, app_slug: str, repo: str, branch: str) -> bool:
+        """Return True if ``refs/heads/<branch>`` already exists on the repo.
+
+        404 is treated as "does not exist" and is *not* an error — this is
+        the standard idempotency check before ``create_branch_ref``.
+        """
+        owner, name = repo.split("/", 1)
+        token = await self.installation_token(app_slug, repository=repo)
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": GITHUB_API_VERSION,
+        }
+        ref_path = quote(f"heads/{branch}", safe="/")
+        url = f"{GITHUB_API}/repos/{owner}/{name}/git/ref/{ref_path}"
+        client = self._async_client()
+        response = await client.get(url, headers=headers)
+        if response.status_code == 404:
+            return False
+        response.raise_for_status()
+        return True
+
+    async def create_branch_ref(
+        self,
+        app_slug: str,
+        repo: str,
+        branch: str,
+        sha: str,
+    ) -> dict[str, Any]:
+        """Create ``refs/heads/<branch>`` pointing at ``sha``.
+
+        Raises ``httpx.HTTPStatusError`` if the ref already exists (422); the
+        Assembly writeback path calls ``branch_ref_exists`` first per
+        VOY-1817 D11 idempotency.
+        """
+        owner, name = repo.split("/", 1)
+        payload = await self.request(
+            app_slug,
+            "POST",
+            f"/repos/{owner}/{name}/git/refs",
+            repository=repo,
+            json_body={"ref": f"refs/heads/{branch}", "sha": sha},
+        )
+        return dict(payload or {})
+
+    async def find_pull_request_by_head(
+        self,
+        app_slug: str,
+        repo: str,
+        head_branch: str,
+        *,
+        owner: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Return the open PR opened from ``head_branch`` on this repo, or None.
+
+        ``owner`` overrides the head owner — useful if the PR was opened
+        from a fork.  When None, defaults to the repository owner.
+        """
+        repo_owner, name = repo.split("/", 1)
+        head_owner = owner or repo_owner
+        path = (
+            f"/repos/{repo_owner}/{name}/pulls"
+            f"?state=open&head={quote(head_owner, safe='')}:{quote(head_branch, safe='')}"
+            "&per_page=10"
+        )
+        payload = await self.request(app_slug, "GET", path, repository=repo)
+        items = list(payload or [])
+        return dict(items[0]) if items else None
+
+    async def create_pull_request(
+        self,
+        app_slug: str,
+        repo: str,
+        *,
+        title: str,
+        head: str,
+        base: str,
+        body: str = "",
+        draft: bool = False,
+    ) -> dict[str, Any]:
+        """Open a pull request against ``base`` from ``head``."""
+        owner, name = repo.split("/", 1)
+        payload = await self.request(
+            app_slug,
+            "POST",
+            f"/repos/{owner}/{name}/pulls",
+            repository=repo,
+            json_body={
+                "title": title,
+                "head": head,
+                "base": base,
+                "body": body,
+                "draft": draft,
+            },
+        )
+        return dict(payload or {})
+
+    async def update_pull_request(
+        self,
+        app_slug: str,
+        repo: str,
+        pull_number: int,
+        *,
+        title: str | None = None,
+        body: str | None = None,
+    ) -> dict[str, Any]:
+        """Patch a pull request's title and/or body."""
+        owner, name = repo.split("/", 1)
+        update: dict[str, Any] = {}
+        if title is not None:
+            update["title"] = title
+        if body is not None:
+            update["body"] = body
+        if not update:
+            return {}
+        payload = await self.request(
+            app_slug,
+            "PATCH",
+            f"/repos/{owner}/{name}/pulls/{pull_number}",
+            repository=repo,
+            json_body=update,
+        )
+        return dict(payload or {})

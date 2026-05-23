@@ -357,6 +357,18 @@ async def dispatch_route_writeback(
     writeback = route.get("writeback") or {}
     dynamic = writeback.get("dynamic")
 
+    if dynamic == "assembly_implementation":
+        # Lazy import — see clearance lazy import below.  Keeps the Assembly
+        # package free of writeback-internal coupling and lets tests mock
+        # ``dispatch_assembly_writeback`` cleanly.
+        from voyager.bots.assembly.writeback import dispatch_assembly_writeback
+
+        return await dispatch_assembly_writeback(
+            client,
+            route,
+            repository=repository,
+        )
+
     if dynamic == "clearance_readiness":
         if not repository:
             return {
