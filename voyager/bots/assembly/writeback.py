@@ -14,14 +14,16 @@ No automatic cleanup on failure (retry is the recovery path).
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 
 from voyager.core.writeback import build_writeback_failure, dry_run_enabled
 
-from .adapters import AdapterResult, select_execution_adapter
+from .adapters import AdapterExecutionContext, AdapterResult, select_execution_adapter
 from .branch import make_branch_name
 from .comment import build_assembly_comment
 from .constants import (
@@ -87,6 +89,86 @@ def _is_dry_run(command_flags: dict[str, Any]) -> bool:
     ``DRY_RUN=false`` is in effect for production.
     """
     return dry_run_enabled() or bool(command_flags.get("dry_run"))
+
+
+async def _build_adapter_context(
+    client: GitHubAppClient,
+    adapter: Any,
+    repository: str,
+    *,
+    is_dry_run: bool,
+) -> AdapterExecutionContext:
+    installation_token: str | None = None
+    if getattr(adapter, "requires_installation_token", False) is True and not is_dry_run:
+        installation_token = await client.installation_token(
+            ASSEMBLY_AGENT_SLUG,
+            repository=repository,
+        )
+    return AdapterExecutionContext(
+        repository=repository,
+        workdir=Path.cwd(),
+        timeout_seconds=900,
+        command_path="pi",
+        installation_token=installation_token,
+    )
+
+
+def _adapter_context_mode(execute: Any) -> str:
+    """Return how to pass context while preserving older one-arg test doubles."""
+    try:
+        signature = inspect.signature(execute)
+    except (TypeError, ValueError):
+        return "positional"
+
+    parameters = list(signature.parameters.values())
+    if any(param.kind == inspect.Parameter.VAR_POSITIONAL for param in parameters):
+        return "positional"
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters):
+        return "keyword"
+    for param in parameters:
+        if param.name == "context" and param.kind == inspect.Parameter.KEYWORD_ONLY:
+            return "keyword"
+
+    positional = [
+        param
+        for param in parameters
+        if param.kind
+        in {
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        }
+    ]
+    return "positional" if len(positional) >= 2 else "none"
+
+
+async def _execute_adapter(
+    adapter: Any,
+    contract: AssemblyJobContract,
+    context: AdapterExecutionContext,
+) -> AdapterResult:
+    execute = adapter.execute
+    mode = _adapter_context_mode(execute)
+    if mode == "positional":
+        return cast(AdapterResult, await execute(contract, context))
+    if mode == "keyword":
+        return cast(AdapterResult, await execute(contract, context=context))
+    return cast(AdapterResult, await execute(contract))
+
+
+def _redact_secret(value: Any, secret: str | None) -> Any:
+    if not isinstance(secret, str) or not secret:
+        return value
+    if isinstance(value, str):
+        return value.replace(secret, "[redacted]")
+    if isinstance(value, list):
+        return [_redact_secret(item, secret) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_secret(item, secret) for item in value)
+    if isinstance(value, dict):
+        return {
+            _redact_secret(key, secret): _redact_secret(item, secret) for key, item in value.items()
+        }
+    return value
 
 
 async def _live_issue_from_route(
@@ -268,8 +350,15 @@ async def dispatch_assembly_writeback(
         # --------------------------------------------------------------
         adapter_result: AdapterResult | None = None
         adapter_failure: dict[str, Any] | None = None
+        adapter_context: AdapterExecutionContext | None = None
         try:
-            adapter_result = await adapter.execute(contract)
+            adapter_context = await _build_adapter_context(
+                client,
+                adapter,
+                repository,
+                is_dry_run=is_dry_run,
+            )
+            adapter_result = await _execute_adapter(adapter, contract, adapter_context)
         except NotImplementedError as exc:
             adapter_failure = {
                 "operation": "adapter.execute",
@@ -302,10 +391,11 @@ async def dispatch_assembly_writeback(
             base_result["writeback_failures"].append(adapter_failure)
 
         if adapter_result is not None:
+            secret = adapter_context.installation_token if adapter_context else None
             base_result["adapter_result"] = {
                 "status": adapter_result.status,
-                "commit_shas": list(adapter_result.commit_shas),
-                "summary": adapter_result.summary,
+                "commit_shas": _redact_secret(list(adapter_result.commit_shas), secret),
+                "summary": _redact_secret(adapter_result.summary, secret),
             }
         else:
             base_result["adapter_result"] = {
@@ -340,7 +430,11 @@ async def dispatch_assembly_writeback(
         # Per D11, when the adapter produced no commits, skip
         # branch/PR/codex steps but still upsert the progress comment so
         # the operator sees the plan / dry-run / failure surface.
-        commit_shas = list(adapter_result.commit_shas) if adapter_result is not None else []
+        commit_shas = (
+            list(adapter_result.commit_shas)
+            if adapter_result is not None and adapter_result.status == "executed"
+            else []
+        )
         if not commit_shas:
             base_result["pull_request"] = {
                 "number": None,
@@ -602,13 +696,14 @@ async def _upsert_progress_comments(
     adapter_result = result.get("adapter_result") or {}
     failures = list(result.get("writeback_failures") or [])
 
+    adapter_status = adapter_result.get("status")
     status = "applied"
-    if failures and not pull_request.get("number"):
+    if adapter_status == "failed" or (failures and not pull_request.get("number")):
         status = "failed"
     elif failures:
         status = "partial"
-    elif adapter_result.get("status") in {"dry_run", "no_changes"}:
-        status = "dry_run" if adapter_result.get("status") == "dry_run" else "no_changes"
+    elif adapter_status in {"dry_run", "no_changes"}:
+        status = "dry_run" if adapter_status == "dry_run" else "no_changes"
 
     issue_body = build_assembly_comment(
         status=status,

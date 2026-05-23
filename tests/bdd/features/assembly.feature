@@ -85,6 +85,24 @@ Feature: Assembly bot — code implementation routing and writeback
     And the dispatcher result writeback_failures includes "adapter.execute"
 
   # ---------------------------------------------------------------------------
+  # Scenario 5b (VOY-1821 RED) — BE=fake-subprocess exercises the real
+  # dispatcher branch -> PR -> Codex -> progress-comment flow.
+  # ---------------------------------------------------------------------------
+
+  Scenario: BE=fake-subprocess opens a PR and records Assembly progress
+    Given a webhook payload "assembly_command_ready"
+    And DRY_RUN is "false"
+    And ASSEMBLY_EXECUTION_BACKEND is "fake-subprocess"
+    And the fake subprocess backend is allowed
+    And the fake subprocess backend will return executed with commit SHA "0123456789abcdef0123456789abcdef01234567"
+    When Assembly receives the "issue_comment" event
+    And Assembly dispatches the route with a mock GitHub client
+    Then the dispatcher result adapter_result status is "executed"
+    And the dispatcher created a branch and opened a pull request
+    And the dispatcher posted a Codex review trigger
+    And the dispatcher upserted progress comments on the issue and pull request
+
+  # ---------------------------------------------------------------------------
   # Scenario 6 (VOY-1818) — /assembly from an authorized maintainer (OWNER)
   # on a ready, allow-listed issue runs the dry-run plan.
   # ---------------------------------------------------------------------------

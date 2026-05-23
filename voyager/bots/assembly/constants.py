@@ -22,7 +22,10 @@ ASSEMBLY_COMMANDS: tuple[str, ...] = ("/assembly", "/implement")
 # so the production allow-list and DRY_RUN env are two independent gates.
 ASSEMBLY_EXECUTION_BACKEND_ENV = "ASSEMBLY_EXECUTION_BACKEND"
 ASSEMBLY_BACKEND_DRY_RUN = "dry-run"
+ASSEMBLY_BACKEND_FAKE_SUBPROCESS = "fake-subprocess"
 ASSEMBLY_BACKEND_PI_OH_MY_PI_DEEPSEEK = "pi-oh-my-pi-deepseek"
+ASSEMBLY_FAKE_SUBPROCESS_ALLOW_ENV = "ASSEMBLY_FAKE_SUBPROCESS_ALLOW"
+ASSEMBLY_FAKE_SUBPROCESS_OUTPUT_ENV = "ASSEMBLY_FAKE_SUBPROCESS_OUTPUT"
 
 # VOY-1811 §Codex Review Trigger Phase 8 — pin per D12.
 CODEX_REVIEW_BOT_LOGIN = "chatgpt-codex-connector[bot]"

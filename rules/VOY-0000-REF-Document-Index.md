@@ -29,6 +29,9 @@
 | 1816 | SOP | Managed Repository Canary Expansion |
 | 1817 | CHG | Assembly Bot MVP Implementation |
 | 1818 | CHG | Assembly Actor Authorization Gate |
+| 1819 | CHG | Assembly Bot Hardening F1 F6 |
+| 1820 | CHG | Bridge Deployable Wheel Artifact |
+| 1821 | CHG | Assembly Execution Backend Fake Subprocess and Pi Canary |
 
 ---
 
