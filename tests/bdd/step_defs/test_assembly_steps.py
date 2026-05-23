@@ -1,16 +1,28 @@
-"""Step definitions for Assembly BDD scenarios (VOY-1817 Surface 22)."""
+"""Step definitions for Assembly BDD scenarios (VOY-1817 Surface 22, VOY-1818 Surface 11)."""
 
 from __future__ import annotations
 
 import asyncio
 from unittest.mock import AsyncMock
 
+import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 # Lazy imports inside steps so a bad voyager.bots.assembly state surfaces
 # at the failing step rather than at module import.
 
 scenarios("../features/assembly.feature")
+
+
+@pytest.fixture(autouse=True)
+def _default_assembly_authorize_env(monkeypatch):
+    """VOY-1818: every BDD scenario starts with the actor gate set to
+    set-but-empty (defaults) so the pre-existing five scenarios' fixtures
+    (now all carrying author_association="OWNER") authorize. Scenarios
+    that need a different gate state override with their own Given step.
+    """
+    monkeypatch.delenv("BRIDGE_ASSEMBLY_AUTHORIZED_ACTORS", raising=False)
+    monkeypatch.setenv("BRIDGE_ASSEMBLY_AUTHORIZED_ASSOCIATIONS", "")
 
 
 # ---------------------------------------------------------------------------
@@ -44,6 +56,38 @@ def empty_allow_list(monkeypatch) -> None:
     monkeypatch.delenv("BRIDGE_ALLOWED_REPOSITORIES", raising=False)
     # Force the deny path: allow-list empty + dry-run false = denied.
     monkeypatch.setenv("DRY_RUN", "false")
+
+
+# ---------------------------------------------------------------------------
+# VOY-1818 Surface 11 — actor-gate env-var Given steps
+# ---------------------------------------------------------------------------
+
+
+@given("the BRIDGE_ASSEMBLY_AUTHORIZED_ASSOCIATIONS env is set-but-empty")
+def assoc_env_set_but_empty(monkeypatch) -> None:
+    """D6: set-but-empty -> default trusted associations activate."""
+    monkeypatch.setenv("BRIDGE_ASSEMBLY_AUTHORIZED_ASSOCIATIONS", "")
+
+
+@given(parsers.parse('the BRIDGE_ASSEMBLY_AUTHORIZED_ACTORS env contains "{logins}"'))
+def actor_env_contains(monkeypatch, logins: str) -> None:
+    monkeypatch.setenv("BRIDGE_ASSEMBLY_AUTHORIZED_ACTORS", logins)
+
+
+@given(parsers.parse('the BRIDGE_ASSEMBLY_AUTHORIZED_ASSOCIATIONS env contains "{associations}"'))
+def assoc_env_contains(monkeypatch, associations: str) -> None:
+    monkeypatch.setenv("BRIDGE_ASSEMBLY_AUTHORIZED_ASSOCIATIONS", associations)
+
+
+@given(parsers.parse('the webhook comes from "{login}" with association "{assoc}"'))
+def webhook_actor_override(payload: dict, login: str, assoc: str) -> None:
+    """Mutate the loaded webhook fixture to set comment.user.login + assoc."""
+    comment = payload.setdefault("comment", {})
+    user = comment.setdefault("user", {})
+    user["login"] = login
+    user.setdefault("type", "User")
+    comment["author_association"] = assoc
+    payload.setdefault("sender", {})["login"] = login
 
 
 # ---------------------------------------------------------------------------

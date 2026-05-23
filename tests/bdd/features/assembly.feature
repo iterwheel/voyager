@@ -83,3 +83,50 @@ Feature: Assembly bot — code implementation routing and writeback
     And the dispatcher upserted at least one progress comment
     And the dispatcher made no branch or pull-request writes
     And the dispatcher result writeback_failures includes "adapter.execute"
+
+  # ---------------------------------------------------------------------------
+  # Scenario 6 (VOY-1818) — /assembly from an authorized maintainer (OWNER)
+  # on a ready, allow-listed issue runs the dry-run plan.
+  # ---------------------------------------------------------------------------
+
+  Scenario: /assembly from authorized maintainer runs dry-run plan
+    Given a webhook payload "assembly_command_authorized_member"
+    And the BRIDGE_ASSEMBLY_AUTHORIZED_ASSOCIATIONS env is set-but-empty
+    And DRY_RUN is "true"
+    And ASSEMBLY_EXECUTION_BACKEND is "dry-run"
+    When Assembly receives the "issue_comment" event
+    Then exactly one route is produced
+    And the route validation status is "assembly_ready"
+    And the route writeback contract is present
+    When Assembly dispatches the route with a mock GitHub client
+    Then the dispatcher result has dry_run "true"
+    And the dispatcher made no GitHub mutations
+
+  # ---------------------------------------------------------------------------
+  # Scenario 7 (VOY-1818) — /assembly from an unauthorized CONTRIBUTOR is
+  # refused at the actor gate; refusal comment carries unauthorized_actor.
+  # ---------------------------------------------------------------------------
+
+  Scenario: /assembly from unauthorized CONTRIBUTOR is refused
+    Given a webhook payload "assembly_command_unauthorized_contributor"
+    And the BRIDGE_ASSEMBLY_AUTHORIZED_ASSOCIATIONS env is set-but-empty
+    And DRY_RUN is "false"
+    When Assembly receives the "issue_comment" event
+    Then exactly one route is produced
+    And the route writeback refusal reason is "unauthorized_actor"
+    When Assembly dispatches the route with a mock GitHub client
+    Then the dispatcher upserted exactly one refusal comment
+    And the dispatcher made no branch or pull-request writes
+
+  # ---------------------------------------------------------------------------
+  # Scenario 8 (VOY-1818) — /assembly from an allow-list login with
+  # author_association: NONE → route runs (allow-list overrides association).
+  # ---------------------------------------------------------------------------
+
+  Scenario: /assembly from allow-list login with NONE association runs
+    Given a webhook payload "assembly_command_allowlist_only"
+    And the BRIDGE_ASSEMBLY_AUTHORIZED_ACTORS env contains "external-collab"
+    When Assembly receives the "issue_comment" event
+    Then exactly one route is produced
+    And the route validation status is "assembly_ready"
+    And the route writeback contract is present
