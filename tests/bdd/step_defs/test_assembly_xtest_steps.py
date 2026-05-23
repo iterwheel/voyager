@@ -2,12 +2,24 @@
 
 from __future__ import annotations
 
+import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 # CRITICAL: do NOT import from voyager.* at module top level — import lazily
 # inside step functions.
 
 scenarios("../features/assembly_xtest.feature")
+
+
+@pytest.fixture(autouse=True)
+def _xtest_default_authorize_env(monkeypatch):
+    """VOY-1818: xtest BDD scenarios use the same fixtures as the primary
+    BDD suite, which now carry author_association="OWNER". Set the actor
+    gate to set-but-empty (defaults) so the OWNER payload authorizes
+    under the routing-time actor gate.
+    """
+    monkeypatch.delenv("BRIDGE_ASSEMBLY_AUTHORIZED_ACTORS", raising=False)
+    monkeypatch.setenv("BRIDGE_ASSEMBLY_AUTHORIZED_ASSOCIATIONS", "")
 
 
 # ---------------------------------------------------------------------------

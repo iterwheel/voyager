@@ -1,13 +1,18 @@
 {
   "action": "created",
+  "sender": {
+    "login": "ryosaeba1985"
+  },
   "repository": {
     "full_name": "iterwheel/voyager-sandbox"
   },
   "comment": {
     "id": 9101,
     "body": "/implement",
+    "author_association": "OWNER",
     "user": {
-      "login": "ryosaeba1985"
+      "login": "ryosaeba1985",
+      "type": "User"
     }
   },
   "issue": {
