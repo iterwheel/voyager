@@ -52,8 +52,17 @@ default_profile = "flash_no_thinking"
 # by '_'. Values use the same matching rules as the global allow-list:
 #   BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_CLEARANCE="iterwheel/voyager-sandbox"
 
-# Assembly — code implementation bot. The App is registered, but no bridge
-# implementation route consumes it until issue #69 lands.
+# Assembly — code implementation bot. CHG-1817 (issue #69) wires the bridge
+# route. Both knobs below are commented out by default so the bot stays
+# default-deny (no GitHub mutations) until an operator opts in explicitly.
+#
+# Activate Assembly write-back on selected repositories (default: empty / deny):
+#   BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_ASSEMBLY="iterwheel/voyager-sandbox"
+#
+# Select the execution backend (default: dry-run records the contract without
+# spawning any subprocess; pi-oh-my-pi-deepseek is reserved for the follow-up
+# adapter PR and currently raises NotImplementedError):
+#   ASSEMBLY_EXECUTION_BACKEND=dry-run
 [[apps]]
 slug = "iterwheel-assembly"
 app_id = "3821103"
