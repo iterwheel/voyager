@@ -1,0 +1,23 @@
+{
+  "action": "created",
+  "repository": {
+    "full_name": "iterwheel/voyager-sandbox"
+  },
+  "comment": {
+    "id": 9002,
+    "body": "/assembly",
+    "user": {
+      "login": "ryosaeba1985"
+    }
+  },
+  "issue": {
+    "number": 70,
+    "title": "[Bug]: Not ready yet",
+    "html_url": "https://github.com/iterwheel/voyager-sandbox/issues/70",
+    "state": "open",
+    "labels": [
+      {"name": "stack-type-bug"}
+    ],
+    "body": "Just chatting, no blueprint-ready label yet."
+  }
+}

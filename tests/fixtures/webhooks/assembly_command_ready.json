@@ -1,0 +1,25 @@
+{
+  "action": "created",
+  "repository": {
+    "full_name": "iterwheel/voyager-sandbox"
+  },
+  "comment": {
+    "id": 9001,
+    "body": "/assembly",
+    "user": {
+      "login": "ryosaeba1985"
+    }
+  },
+  "issue": {
+    "number": 69,
+    "title": "[Feature]: Implement Assembly bot MVP",
+    "html_url": "https://github.com/iterwheel/voyager-sandbox/issues/69",
+    "state": "open",
+    "labels": [
+      {"name": "blueprint-ready"},
+      {"name": "stack-type-feature"},
+      {"name": "stack-area-automation"}
+    ],
+    "body": "## Problem / Goal\n\nImplement the first safe version of the Assembly bot per VOY-1817.\n\n## Acceptance Criteria\n\n- [ ] Assembly responds to /assembly on blueprint-ready issues\n- [ ] Refuses on non-allow-listed repositories\n- [ ] Posts @codex review after each push\n"
+  }
+}
