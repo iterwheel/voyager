@@ -52,6 +52,18 @@ default_profile = "flash_no_thinking"
 # by '_'. Values use the same matching rules as the global allow-list:
 #   BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_CLEARANCE="iterwheel/voyager-sandbox"
 
+# Assembly — code implementation bot. App not yet created (see #68).
+# Enable after the App exists and the PEM is on Wukong.
+# [[apps]]
+# slug = "iterwheel-assembly"
+# app_id = "REPLACE_ME_APP_ID"
+# private_key_path = "~/.voyager/secrets/iterwheel-assembly.pem"
+# installation_id = "REPLACE_ME_INSTALLATION_ID"
+#
+# [apps.installations]
+#   "iterwheel/voyager-sandbox" = "REPLACE_ME_SANDBOX_INSTALLATION_ID"
+#   "iterwheel/voyager" = "REPLACE_ME_VOYAGER_INSTALLATION_ID"
+
 [[apps]]
 slug = "iterwheel-clearance"
 app_id = "REPLACE_ME_APP_ID"

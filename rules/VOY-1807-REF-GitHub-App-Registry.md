@@ -24,7 +24,7 @@ organization for the Voyager bot roster.
 | `iterwheel-staticfire` | `3646537` | `https://github.com/apps/iterwheel-staticfire` | No | Stored on Wukong: `~/github-openclaw-agent/secrets/iterwheel-staticfire.private-key.pem` | `iterwheel/voyager-sandbox` (`130630275`) |
 | `iterwheel-clearance` | `3646538` | `https://github.com/apps/iterwheel-clearance` | No | Stored on Wukong: `~/github-openclaw-agent/secrets/iterwheel-clearance.private-key.pem` | `iterwheel/voyager`, `iterwheel/voyager-sandbox` (`130630338`) |
 | `iterwheel-countdown` | `3646540` | `https://github.com/apps/iterwheel-countdown` | No | Stored on Wukong: `~/github-openclaw-agent/secrets/iterwheel-countdown.private-key.pem` | `iterwheel/voyager-sandbox` (`130630407`) |
-| `iterwheel-assembly` | _(pending)_ | _(pending)_ | No | _(pending)_ | _(pending)_ |
+| `iterwheel-assembly` | **App not yet created.** Operator: create the App (see #68), then replace this row with: \| `iterwheel-assembly` \| `<APP_ID>` \| `https://github.com/apps/iterwheel-assembly` \| No \| Stored on Wukong: `~/github-openclaw-agent/secrets/iterwheel-assembly.private-key.pem` \| `<REPOS>` |
 
 Current repository event source:
 
@@ -45,6 +45,7 @@ Current bridge write-back:
 | `iterwheel-blueprint` | `iterwheel/voyager`, `iterwheel/voyager-sandbox`, `frankyxhl/alfred`, `frankyxhl/babs`, `frankyxhl/fx_bin`, `frankyxhl/sweeping-monk`, `frankyxhl/trinity` | `issues.opened`, `issues.edited`, `issues.reopened`, or `/blueprint` issue comment | Validates issue title format and intake fields, maintains exactly one Blueprint state label from `blueprint-needed`, `blueprint-ready`, and `blueprint-requests-revision`, upserts one Blueprint intake comment, and adds a `rocket` issue reaction when the issue is Blueprint-ready |
 | `iterwheel-stack` | `iterwheel/voyager`, `iterwheel/voyager-sandbox`, `frankyxhl/alfred`, `frankyxhl/babs`, `frankyxhl/fx_bin`, `frankyxhl/sweeping-monk`, `frankyxhl/trinity` | `issues.opened`, `issues.edited`, `issues.reopened`, or `/stack` issue comment on a non-PR issue | Maintains one issue label from each Stack axis (`stack-type-*`, `stack-area-*`, `stack-size-*`, and `stack-risk-*`) when confident; otherwise applies `stack-needs-review`; upserts one Stack classification comment; adds `rocket` on successful issue classification and `eyes` when human review is needed |
 | `iterwheel-clearance` | `iterwheel/voyager`, `iterwheel/voyager-sandbox` | `pull_request.opened`, `pull_request.edited`, `pull_request.reopened`, `pull_request.ready_for_review`, `pull_request.converted_to_draft`, `pull_request.synchronize`, `pull_request_review.submitted`, `pull_request_review.dismissed`, `pull_request_review_comment.*`, or `/clearance` PR comment | Maintains one PR review-readiness label from `clearance-1-pending`, `clearance-2-blocked`, `clearance-3-ready-for-approval`, and `clearance-4-ready-for-merge`; upserts one Clearance comment; adds `rocket` when ready and `eyes` otherwise |
+| `iterwheel-assembly` | _(pending, sandbox first)_ | _(pending: `/assembly` or `/implement` issue comment per VOY-1805)_ | _App not yet created._ Implementation: create branch from issue body, write code, run tests, push commits to fork, open/update pull request with `Closes #N`, request review. Must not merge, approve, resolve review threads as reviewer, or apply Clearance/Countdown labels. |
 
 Cross-account installation:
 
@@ -88,6 +89,10 @@ Operational notes:
   as `Work Type`, `Stack Type`, and `Stack Area`, then uses weighted area
   signals so long issues do not fall into `stack-needs-review` only because they
   mention many generic terms.
+- Assembly App creation is tracked in issue #68. Once created, the placeholder
+  row in the main registry table must be replaced with actual App/installation
+  IDs. The App must follow the VOY-1806 least-privilege matrix: Contents write
+  granted as the sole exception, merge prohibited by branch protection.
 - Clearance v1 is active for `iterwheel/voyager` and
   `iterwheel/voyager-sandbox`. It verifies current GitHub review state and
   review-thread resolution, but does not claim AI-level semantic repair
@@ -127,3 +132,4 @@ Operational notes:
 | 2026-05-17 | Recorded Clearance activation on `iterwheel/voyager` after PR #36 showed live Clearance readiness panels on the main repository. | Codex |
 | 2026-05-23 | Added Assembly placeholder registry row (App not yet created; governed by VOY-1805 boundaries and VOY-1806 permission matrix) | DeepSeek (via VOY-1811) |
 | 2026-05-23 | Added `iterwheel-assembly` placeholder row to main app table | DeepSeek (via VOY-1811) |
+| 2026-05-23 | Updated Assembly placeholder with operator creation instructions; added bridge write-back row, operational note, and config template (issue #68) | DeepSeek (via VOY-1811) |
