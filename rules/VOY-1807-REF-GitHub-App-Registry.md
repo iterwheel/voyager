@@ -1,8 +1,8 @@
 # REF-1807: GitHub App Registry
 
 **Applies to:** VOY project
-**Last updated:** 2026-05-17
-**Last reviewed:** 2026-05-17
+**Last updated:** 2026-05-23
+**Last reviewed:** 2026-05-23
 **Status:** Active
 **Related:** VOY-1805, VOY-1806, VOY-1808
 
@@ -24,7 +24,7 @@ organization for the Voyager bot roster.
 | `iterwheel-staticfire` | `3646537` | `https://github.com/apps/iterwheel-staticfire` | No | Stored on Wukong: `~/github-openclaw-agent/secrets/iterwheel-staticfire.private-key.pem` | `iterwheel/voyager-sandbox` (`130630275`) |
 | `iterwheel-clearance` | `3646538` | `https://github.com/apps/iterwheel-clearance` | No | Stored on Wukong: `~/github-openclaw-agent/secrets/iterwheel-clearance.private-key.pem` | `iterwheel/voyager`, `iterwheel/voyager-sandbox` (`130630338`) |
 | `iterwheel-countdown` | `3646540` | `https://github.com/apps/iterwheel-countdown` | No | Stored on Wukong: `~/github-openclaw-agent/secrets/iterwheel-countdown.private-key.pem` | `iterwheel/voyager-sandbox` (`130630407`) |
-| `iterwheel-assembly` | **App not yet created.** Operator: create the App (see #68), then replace this row with: \| `iterwheel-assembly` \| `<APP_ID>` \| `https://github.com/apps/iterwheel-assembly` \| No \| Stored on Wukong: `~/github-openclaw-agent/secrets/iterwheel-assembly.private-key.pem` \| `<REPOS>` |
+| `iterwheel-assembly` | `3821103` | `https://github.com/apps/iterwheel-assembly` | No | Stored on Wukong: `~/.voyager/secrets/iterwheel-assembly.pem`; mirrored at `~/github-openclaw-agent/secrets/iterwheel-assembly.private-key.pem` | `iterwheel/voyager`, `iterwheel/voyager-sandbox` (`134829044`); `frankyxhl/alfred`, `frankyxhl/trinity` (`134830000`) |
 
 Current repository event source:
 
@@ -45,13 +45,13 @@ Current bridge write-back:
 | `iterwheel-blueprint` | `iterwheel/voyager`, `iterwheel/voyager-sandbox`, `frankyxhl/alfred`, `frankyxhl/babs`, `frankyxhl/fx_bin`, `frankyxhl/sweeping-monk`, `frankyxhl/trinity` | `issues.opened`, `issues.edited`, `issues.reopened`, or `/blueprint` issue comment | Validates issue title format and intake fields, maintains exactly one Blueprint state label from `blueprint-needed`, `blueprint-ready`, and `blueprint-requests-revision`, upserts one Blueprint intake comment, and adds a `rocket` issue reaction when the issue is Blueprint-ready |
 | `iterwheel-stack` | `iterwheel/voyager`, `iterwheel/voyager-sandbox`, `frankyxhl/alfred`, `frankyxhl/babs`, `frankyxhl/fx_bin`, `frankyxhl/sweeping-monk`, `frankyxhl/trinity` | `issues.opened`, `issues.edited`, `issues.reopened`, or `/stack` issue comment on a non-PR issue | Maintains one issue label from each Stack axis (`stack-type-*`, `stack-area-*`, `stack-size-*`, and `stack-risk-*`) when confident; otherwise applies `stack-needs-review`; upserts one Stack classification comment; adds `rocket` on successful issue classification and `eyes` when human review is needed |
 | `iterwheel-clearance` | `iterwheel/voyager`, `iterwheel/voyager-sandbox` | `pull_request.opened`, `pull_request.edited`, `pull_request.reopened`, `pull_request.ready_for_review`, `pull_request.converted_to_draft`, `pull_request.synchronize`, `pull_request_review.submitted`, `pull_request_review.dismissed`, `pull_request_review_comment.*`, or `/clearance` PR comment | Maintains one PR review-readiness label from `clearance-1-pending`, `clearance-2-blocked`, `clearance-3-ready-for-approval`, and `clearance-4-ready-for-merge`; upserts one Clearance comment; adds `rocket` when ready and `eyes` otherwise |
-| `iterwheel-assembly` | _(pending, sandbox first)_ | _(pending: `/assembly` or `/implement` issue comment per VOY-1805)_ | _App not yet created._ Implementation: create branch from issue body, write code, run tests, push commits to fork, open/update pull request with `Closes #N`, request review. Must not merge, approve, resolve review threads as reviewer, or apply Clearance/Countdown labels. |
+| `iterwheel-assembly` | `iterwheel/voyager`, `iterwheel/voyager-sandbox`, `frankyxhl/alfred`, `frankyxhl/trinity` | _(pending implementation: `/assembly` or `/implement` issue comment per VOY-1805)_ | No bridge write-back route is active yet. Planned implementation: create branch from issue body, write code, run tests, push commits to fork, open/update pull request with `Closes #N`, and request review. Must not merge, approve, resolve review threads as reviewer, or apply Clearance/Countdown labels. |
 
 Cross-account installation:
 
 | Account | Repository | Strategy | Status |
 |---------|------------|----------|--------|
-| `frankyxhl` | `frankyxhl/alfred`, `frankyxhl/babs`, `frankyxhl/fx_bin`, `frankyxhl/sweeping-monk`, `frankyxhl/trinity` | Reuse existing `iterwheel-*` Apps by making them installable on selected repositories outside the owning organization. | `iterwheel-blueprint` installed as selected-repository installation `130696149`; `iterwheel-stack` installed as selected-repository installation `130716196`; Static Fire, Clearance, and Countdown remain sandbox-only |
+| `frankyxhl` | `frankyxhl/alfred`, `frankyxhl/babs`, `frankyxhl/fx_bin`, `frankyxhl/sweeping-monk`, `frankyxhl/trinity` | Reuse existing `iterwheel-*` Apps by making them installable on selected repositories outside the owning organization. | `iterwheel-blueprint` installed as selected-repository installation `130696149`; `iterwheel-stack` installed as selected-repository installation `130716196`; `iterwheel-assembly` installed on `frankyxhl/alfred` and `frankyxhl/trinity` as selected-repository installation `134830000`; Static Fire, Clearance, and Countdown remain sandbox-only |
 
 Operational notes:
 
@@ -89,10 +89,12 @@ Operational notes:
   as `Work Type`, `Stack Type`, and `Stack Area`, then uses weighted area
   signals so long issues do not fall into `stack-needs-review` only because they
   mention many generic terms.
-- Assembly App creation is tracked in issue #68. Once created, the placeholder
-  row in the main registry table must be replaced with actual App/installation
-  IDs. The App must follow the VOY-1806 least-privilege matrix: Contents write
-  granted as the sole exception, merge prohibited by branch protection.
+- Assembly App creation is tracked in issue #68. `iterwheel-assembly` is public
+  and installed only on selected repositories: `iterwheel/voyager`,
+  `iterwheel/voyager-sandbox`, `frankyxhl/alfred`, and `frankyxhl/trinity`.
+  The App follows the VOY-1806 least-privilege matrix: Contents write granted
+  as the sole exception, merge prohibited by branch protection, and no
+  implementation route active until issue #69 lands.
 - Clearance v1 is active for `iterwheel/voyager` and
   `iterwheel/voyager-sandbox`. It verifies current GitHub review state and
   review-thread resolution, but does not claim AI-level semantic repair
@@ -133,3 +135,4 @@ Operational notes:
 | 2026-05-23 | Added Assembly placeholder registry row (App not yet created; governed by VOY-1805 boundaries and VOY-1806 permission matrix) | DeepSeek (via VOY-1811) |
 | 2026-05-23 | Added `iterwheel-assembly` placeholder row to main app table | DeepSeek (via VOY-1811) |
 | 2026-05-23 | Updated Assembly placeholder with operator creation instructions; added bridge write-back row, operational note, and config template (issue #68) | DeepSeek (via VOY-1811) |
+| 2026-05-23 | Recorded created `iterwheel-assembly` App `3821103`, Wukong PEM paths, and selected-repository installations `134829044` and `134830000` for issue #68 | Codex |
