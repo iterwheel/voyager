@@ -70,8 +70,10 @@ class _FakeApp:
     slug = "iterwheel-clearance"
 
 
-async def test_check_head_repo_accessible_caches_negative():
-    """After False, subsequent calls for the same head repo return False immediately."""
+async def test_check_head_repo_accessible_does_not_cache_negative():
+    """Negative results are NOT cached — each call re-discovers so an operator
+    installing the app on the fork after a previous check takes effect without
+    a process restart."""
     from voyager.core.github_app import GitHubAppClient
 
     client = GitHubAppClient({"iterwheel-clearance": _FakeApp()})
@@ -85,10 +87,10 @@ async def test_check_head_repo_accessible_caches_negative():
         assert result1 is False
         assert mock_discover.call_count == 1
 
-        # Second call — cache hit, should NOT call _discover_installation_id again
+        # Second call — negative results are not cached, calls again
         result2 = await client.check_head_repo_accessible("iterwheel-clearance", head_repo)
         assert result2 is False
-        assert mock_discover.call_count == 1  # still 1, not called again
+        assert mock_discover.call_count == 2
 
 
 async def test_check_head_repo_accessible_positive_returns_true():
@@ -131,8 +133,8 @@ async def test_check_head_repo_accessible_positive_not_cached_negative():
         assert mock_discover.call_count == 2  # called again for different repo
 
 
-async def test_check_head_repo_accessible_different_apps_independent_caches():
-    """Caches are per app_slug — clearance cache doesn't affect blueprint."""
+async def test_check_head_repo_accessible_different_apps_independent():
+    """Each app slug re-discovers independently — no shared negative cache."""
     from voyager.core.github_app import GitHubAppClient
 
     client = GitHubAppClient(

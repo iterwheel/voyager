@@ -404,22 +404,28 @@ async def _maybe_sync_stage_15(
     snap_by_id = {s.thread_id: s for s in snapshots}
 
     # Issue #62: preflight head-repo accessibility for fork PRs.
-    # Cache-negative inside GitHubAppClient so the check runs at most once per
-    # (app_slug, head_repo) pair per process lifetime.
     fork_head_blocked = False
     if is_fork_pr and head_repo and head_repo != repository:
         if not dry_run:
-            # Issue #62 / Codex P1: only treat explicit 404 (no installation)
-            # as UnsupportedContext.  Let transient errors (timeout, 5xx)
-            # propagate so the outer error handler can record the real
-            # failure class instead of suppressing it as "install the app".
+            # When live: let transient errors propagate so the outer handler
+            # in writeback.py records the real failure class instead of
+            # producing a misleading UnsupportedContext result.
             accessible = await client.check_head_repo_accessible(CLEARANCE_AGENT_SLUG, head_repo)
             if not accessible:
                 fork_head_blocked = True
         else:
-            # In dry-run mode we cannot call the GitHub API, so treat fork PRs
-            # conservatively: record a planned skip.
-            fork_head_blocked = True
+            # Codex P2: in dry-run mode, still query head-repo accessibility
+            # so correctly-installed forks surface the real state instead of
+            # a misleading UnsupportedContext.  Fall back to conservative
+            # block only when the API is unreachable (expected in dry-run).
+            try:
+                accessible = await client.check_head_repo_accessible(
+                    CLEARANCE_AGENT_SLUG, head_repo
+                )
+            except Exception:
+                accessible = False
+            if not accessible:
+                fork_head_blocked = True
 
     for thread in threads:
         if thread.verdict != Verdict.RESOLVED:
