@@ -8,6 +8,8 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-05-25
+
 ### Added — Assembly resumable backend sessions ([#105](https://github.com/iterwheel/voyager/issues/105))
 
 - Assembly now accepts `/assembly --resume`, validates compatible private
@@ -392,7 +394,9 @@ auth, FastAPI webhook bridge, DeepSeek LLM adapter, rocket-factory
 pipeline state machine, SWM-1101 per-thread verdict pipeline. See
 `b2e4ca1` and prior history.
 
-[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/iterwheel/voyager/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/iterwheel/voyager/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/iterwheel/voyager/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/iterwheel/voyager/releases/tag/v0.3.0
 [0.2.0]: https://github.com/iterwheel/voyager/releases/tag/v0.2.0
