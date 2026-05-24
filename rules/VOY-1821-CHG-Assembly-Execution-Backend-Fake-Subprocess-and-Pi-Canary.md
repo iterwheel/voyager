@@ -1,15 +1,15 @@
 # CHG-1821: Assembly Execution Backend Fake Subprocess and Pi Canary
 
 **Applies to:** Voyager Assembly bot
-**Last updated:** 2026-05-23
-**Last reviewed:** 2026-05-23
-**Status:** Proposed
+**Last updated:** 2026-05-24
+**Last reviewed:** 2026-05-24
+**Status:** Completed
 **Date:** 2026-05-23
 **Requested by:** Frank Xu
 **Priority:** Medium
 **Change Type:** Normal
 **Scheduled:** After plan-review approval in the active VOY-1811 loop for #82.
-**Related:** #82, VOY-1805, VOY-1806, VOY-1807, VOY-1814, VOY-1816, VOY-1817, VOY-1818, VOY-1819, VOY-1820
+**Related:** #82, #85, #86, VOY-1805, VOY-1806, VOY-1807, VOY-1814, VOY-1816, VOY-1817, VOY-1818, VOY-1819, VOY-1820
 
 ---
 
@@ -131,9 +131,9 @@ Sandbox canary verification after deploy:
 ## Approval
 
 - [ ] Plan reviewed by: glm, deepseek, minimax
-- [ ] Approved on: YYYY-MM-DD
-- [ ] Implementation reviewed before PR
-- [ ] Sandbox canary approved by: Frank Xu before real OMP env is enabled
+- [x] Approved on: 2026-05-23
+- [x] Implementation reviewed before PR
+- [x] Sandbox canary approved by: Frank Xu before real OMP env is enabled
 
 Approval notes:
 
@@ -144,7 +144,7 @@ Approval notes:
 - GLM reviewed the implementation changes and passed them: `.trinity/reviews/20260523-221024-voyager-bots-assembly`.
 - Stage 2 RED tests for the real OMP backend were written by an independent test worker. Implementation was then written by a separate implementation worker and adjusted by the orchestrator during acceptance.
 - GLM reviewed the Stage 2 real OMP backend and passed it: `.trinity/reviews/20260523-231007-VOY-1821-Stage-2-real-OMP-backend-final-dirty-working-tree-diff`.
-- Real OMP canary approval is still pending. The real canary has not run and remains limited to `iterwheel/voyager-sandbox` after merge and deploy.
+- Real OMP canary was approved by Frank Xu for `iterwheel/voyager-sandbox` only, then run on Wukong after PR #84 deployed.
 
 ---
 
@@ -164,6 +164,16 @@ Approval notes:
 | 2026-05-23 | Implementation authored by a separate Stage 2 implementation worker and accepted by the orchestrator. | Added the real `pi-oh-my-pi-deepseek` adapter using `omp -p`, temp checkout isolation, GitHub App token via temporary `GIT_ASKPASS` only for clone/push, default workdir `~/.voyager/state/assembly`, env overrides, safe failed `AdapterResult` behavior, and docs/config updates. |
 | 2026-05-23 | Completed Stage 2 local verification. | Passed `uv run pytest tests/` (`1182 passed`), `uv run ruff check .`, `uv run mypy voyager`, `git diff --check`, and `af validate --root /Users/frank/Projects/voyager`. |
 | 2026-05-23 | Ran Stage 2 GLM implementation review. | GLM PASS 9.2/10 at `.trinity/reviews/20260523-231007-VOY-1821-Stage-2-real-OMP-backend-final-dirty-working-tree-diff`; advisory context-guard and BDD-subprocess items were addressed after review. |
+| 2026-05-24 | Merged and deployed Stage 2 real OMP backend. | PR #84 merged as `21acc4097b0eab1c922bd70b21dd3b6ba31d754b`; Wukong `/healthz` reported `build_commit=21acc4097b0eab1c922bd70b21dd3b6ba31d754b` and `dry_run=false` after wheel/launchd deployment. |
+| 2026-05-24 | Verified OMP runtime and DeepSeek model availability. | `/Users/frank/.local/bin/omp --version` reported `omp/15.2.4`; mapping the existing private `[voyager].deepseek_api_key` to `DEEPSEEK_API_KEY` made `omp --list-models deepseek` list `deepseek-v4-flash` and `deepseek-v4-pro` without printing the key. |
+| 2026-05-24 | Opened the sandbox-only real OMP canary window. | Temporarily set `BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_ASSEMBLY=iterwheel/voyager-sandbox`, `ASSEMBLY_EXECUTION_BACKEND=pi-oh-my-pi-deepseek`, `ASSEMBLY_PI_COMMAND_PATH=/Users/frank/.local/bin/omp`, `ASSEMBLY_PI_WORKDIR=/Users/frank/.voyager/state/assembly`, and `ASSEMBLY_PI_TIMEOUT_SECONDS=900`; restarted launchd and verified `/healthz`. |
+| 2026-05-24 | Ran first sandbox canary attempts and found verifier-shape constraints. | Issue #57 proved OMP invocation but failed because the sandbox repo had no `tests/` for `pytest tests/`; the first #58 attempt passed further but failed on `mypy voyager`; these failures stayed within `iterwheel/voyager-sandbox` and produced failure progress comments only. |
+| 2026-05-24 | Completed the real OMP sandbox canary. | Issue #58 rerun opened/updated PR #59 from branch `58-assembly-omp-sandbox-canary-with-pytest-smoke`; final head `d531a014c454da12ed84344699653b263c3e149e` contains only `.gitignore`, `assembly-omp-canary-2026-05-24.md`, `tests/test_assembly_omp_canary.py`, and `voyager/__init__.py`. Local clone verification passed `pytest tests/` (`4 passed`), `ruff check .`, and `mypy voyager`. |
+| 2026-05-24 | Verified writeback and token boundaries for the canary. | Assembly progress comments on issue #58 and PR #59 reported `status: applied`, branch/PR linkage, adapter `executed`, and posted `@codex review`; comment/body scan found no token/API-key/credential leakage. Codex in `iterwheel/voyager-sandbox` responded that the connector is not connected there, so semantic Codex review did not run in the sandbox repo. |
+| 2026-05-24 | Closed the real OMP canary window and verified rollback. | Restored `/Users/frank/.voyager/bridge.env` from pre-canary backup, removing the real backend env and returning Assembly allow-list to its prior non-sandbox value; restarted launchd and verified local/public `/healthz`. A follow-up `/assembly --dry-run` on issue #58 left PR #59 head unchanged at `d531a014c454da12ed84344699653b263c3e149e`, proving no further sandbox branch/PR mutation after rollback. |
+| 2026-05-24 | Reopened the sandbox-only real OMP window for a duplicate-trigger canary. | Current bridge env is `DRY_RUN=false`, `BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_ASSEMBLY=iterwheel/voyager-sandbox`, and `ASSEMBLY_EXECUTION_BACKEND=pi-oh-my-pi-deepseek`; production repositories remain outside the Assembly allow-list. |
+| 2026-05-24 | Ran the second real OMP sandbox canary and detected a writeback monotonicity bug. | Duplicate `/assembly --allow-missing-stack` triggers on `iterwheel/voyager-sandbox` issue #60 produced PR #61 at head `28e0be08d89568844e02192fad500ffda8660edf`, but the source issue progress comment was later downgraded to `status: no_changes` while the PR-side comment stayed `status: applied`. Filed #85 before broader rollout. |
+| 2026-05-24 | Fixed the canary-discovered progress downgrade before broader rollout. | PR #86 merged as `5ec4da34c62fa6440c74dc3b2134d1d29b9022f7`; it preserves existing PR/branch context on duplicate `no_changes` dispatches and keeps true first-run `no_changes` visible when no PR exists. CI was green, Codex found no major issues, and review threads were 0. |
 
 ---
 
@@ -181,3 +191,4 @@ Approval notes:
 | Date | Change | By |
 |------|--------|----|
 | 2026-05-23 | Initial CHG draft for #82. | Codex |
+| 2026-05-24 | Marked CHG completed and recorded Stage 2 deployment, sandbox canaries, rollback, #85 detection, and #86 follow-up fix. | Codex |
