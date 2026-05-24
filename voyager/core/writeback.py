@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 from typing import TYPE_CHECKING, Any
 
 import httpx
+
+from .redaction import sanitize_public_text as _sanitize_public_text
 
 _log = logging.getLogger(__name__)
 
@@ -16,18 +17,6 @@ if TYPE_CHECKING:
     from .github_app import GitHubAppClient
 
 CLEARANCE_AGENT_SLUG = "iterwheel-clearance"  # voyager clearance bot App
-_GITHUB_TOKEN_RE = re.compile(r"\b(?:gh[opsru]_|github_pat_)[A-Za-z0-9_]+\b")
-_TOKEN_QUERY_RE = re.compile(r"(?i)(token=)[^\s&]+")
-
-
-def _sanitize_public_text(value: Any, *, limit: int = 180) -> str:
-    text = " ".join(str(value or "").split())
-    text = _GITHUB_TOKEN_RE.sub("[redacted]", text)
-    text = _TOKEN_QUERY_RE.sub(r"\1[redacted]", text)
-    text = text.replace("Bearer ", "Bearer [redacted] ")
-    if len(text) <= limit:
-        return text
-    return text[: limit - 3].rstrip() + "..."
 
 
 def _graphql_error_public_fields(errors: list[dict[str, Any]]) -> dict[str, Any]:

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-import httpx
+import logging
 
-from voyager.core.github_app import GitHubGraphQLError
+import httpx
+import pytest
+
+from voyager.core.github_app import GitHubAppClient, GitHubGraphQLError
 from voyager.core.writeback import (
     _safe_exception_fields,
     build_writeback_failure,
@@ -31,6 +34,46 @@ def test_graphql_errors_raise_typed_exception():
 def test_graphql_error_is_not_runtime_error():
     """GitHubGraphQLError must NOT be a RuntimeError subclass."""
     assert not issubclass(GitHubGraphQLError, RuntimeError)
+
+
+@pytest.mark.asyncio
+async def test_graphql_error_log_sanitizes_token_messages(monkeypatch, caplog):
+    """GitHubAppClient.graphql() must not write raw GraphQL error tokens to logs."""
+    errors = [
+        {
+            "type": "FORBIDDEN",
+            "message": ("Denied token=github_pat_SECRET123 Bearer ghp_SECRET456 ghs_SECRET789"),
+        }
+    ]
+    transport = httpx.MockTransport(lambda _request: httpx.Response(200, json={"errors": errors}))
+    async_client = httpx.AsyncClient(transport=transport)
+    client = GitHubAppClient({})
+
+    async def fake_installation_token(_app_slug: str, *, repository: str | None = None) -> str:
+        return "ghs_INSTALLATION_TOKEN"
+
+    monkeypatch.setattr(client, "installation_token", fake_installation_token)
+    monkeypatch.setattr(client, "_async_client", lambda: async_client)
+    caplog.set_level(logging.WARNING, logger="voyager.core.github_app")
+
+    with pytest.raises(GitHubGraphQLError):
+        await client.graphql(
+            "iterwheel-clearance",
+            "iterwheel/voyager",
+            query="query { viewer { login } }",
+            variables={},
+        )
+    await async_client.aclose()
+
+    log_text = caplog.text
+    assert "github.graphql.errors" in log_text
+    assert "FORBIDDEN" in log_text
+    assert "token=[redacted]" in log_text
+    assert "Bearer [redacted]" in log_text
+    assert "github_pat_" not in log_text
+    assert "ghp_" not in log_text
+    assert "ghs_" not in log_text
+    assert "SECRET" not in log_text
 
 
 # ---------------------------------------------------------------------------
