@@ -316,6 +316,117 @@ def test_existing_pr_is_updated_not_recreated(monkeypatch) -> None:
     assert client.update_pull_request.await_count == 1
 
 
+def test_duplicate_no_changes_preserves_existing_pr_progress_context(monkeypatch) -> None:
+    """Regression for #85: duplicate no_changes must not downgrade progress.
+
+    The first dispatch creates a PR. The second dispatch targets the same
+    branch and returns no_changes, so the issue/PR comments should preserve
+    the existing PR context and keep the cumulative progress status applied.
+    """
+    from voyager.bots.assembly import adapters
+    from voyager.bots.assembly import writeback as wb_module
+
+    monkeypatch.setenv("DRY_RUN", "false")
+
+    class _SequentialAdapter:
+        name = "fake"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def execute(self, contract):
+            self.calls += 1
+            if self.calls == 1:
+                return adapters.AdapterResult(
+                    status="executed",
+                    commit_shas=["a" * 40],
+                    summary="created branch changes",
+                )
+            return adapters.AdapterResult(
+                status="no_changes",
+                commit_shas=[],
+                summary="duplicate run found no repository changes",
+            )
+
+    adapter = _SequentialAdapter()
+    monkeypatch.setattr(wb_module, "select_execution_adapter", lambda backend=None: adapter)
+
+    client = _mock_client_for_writes()
+    client.find_pull_request_by_head = AsyncMock(
+        side_effect=[
+            None,
+            {"number": 1234, "html_url": "https://example/pr/1234"},
+        ]
+    )
+
+    first = asyncio.run(
+        dispatch_assembly_writeback(client, _route(), repository="iterwheel/voyager-sandbox")
+    )
+    second = asyncio.run(
+        dispatch_assembly_writeback(client, _route(), repository="iterwheel/voyager-sandbox")
+    )
+
+    assert first["pull_request"]["action"] == "opened"
+    assert second["adapter_result"]["status"] == "no_changes"
+    assert second["branch"]["name"] == "69-implement-assembly-bot-mvp"
+    assert second["pull_request"] == {
+        "number": 1234,
+        "url": "https://example/pr/1234",
+        "action": "updated",
+    }
+    assert client.create_pull_request.await_count == 1
+    assert client.create_issue_comment.await_count == 1  # no duplicate Codex trigger
+    assert client.upsert_issue_comment.await_count == 4  # issue + PR for both runs
+
+    issue_body = client.upsert_issue_comment.call_args_list[-2].kwargs["body"]
+    pr_body = client.upsert_issue_comment.call_args_list[-1].kwargs["body"]
+    assert "Assembly acknowledgement — status: `applied`" in issue_body
+    assert "Assembly progress — status: `applied`" in pr_body
+    assert "- Branch: `69-implement-assembly-bot-mvp`" in issue_body
+    assert "- Pull request: #1234 (updated)" in issue_body
+    assert "- Adapter: `no_changes`" in issue_body
+    assert "status: `no_changes`" not in issue_body
+
+
+def test_first_run_no_changes_stays_visible_without_existing_pr(monkeypatch) -> None:
+    from voyager.bots.assembly import adapters
+    from voyager.bots.assembly import writeback as wb_module
+
+    monkeypatch.setenv("DRY_RUN", "false")
+
+    class _NoChangesAdapter:
+        name = "fake"
+
+        async def execute(self, contract):
+            return adapters.AdapterResult(
+                status="no_changes",
+                commit_shas=[],
+                summary="no files changed",
+            )
+
+    monkeypatch.setattr(
+        wb_module, "select_execution_adapter", lambda backend=None: _NoChangesAdapter()
+    )
+    client = _mock_client_for_writes()
+
+    result = asyncio.run(
+        dispatch_assembly_writeback(client, _route(), repository="iterwheel/voyager-sandbox")
+    )
+
+    assert result["branch"] is None
+    assert result["pull_request"] == {
+        "number": None,
+        "url": None,
+        "action": "skipped_no_changes",
+    }
+    assert client.create_pull_request.await_count == 0
+    assert client.upsert_issue_comment.await_count == 1
+    body = client.upsert_issue_comment.await_args.kwargs["body"]
+    assert "Assembly acknowledgement — status: `no_changes`" in body
+    assert "- Branch: `pending`" in body
+    assert "- Pull request: skipped_no_changes" in body
+
+
 # ---------------------------------------------------------------------------
 # VOY-1818 Surface 9 — actor-gate refusal handling
 # ---------------------------------------------------------------------------

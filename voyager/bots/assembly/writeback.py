@@ -470,6 +470,9 @@ async def dispatch_assembly_writeback(
                 "url": None,
                 "action": "skipped_no_changes",
             }
+            await _preserve_existing_pr_context_for_no_changes(
+                client, repository, contract, base_result
+            )
             await _upsert_progress_comments(client, contract, repository, base_result)
             return base_result
 
@@ -678,6 +681,52 @@ async def _ensure_pull_request(
         return False
 
 
+async def _preserve_existing_pr_context_for_no_changes(
+    client: GitHubAppClient,
+    repository: str,
+    contract: AssemblyJobContract,
+    result: dict[str, Any],
+) -> None:
+    """Keep duplicate no_changes runs from erasing an already-open PR context."""
+    adapter_result = result.get("adapter_result") or {}
+    if adapter_result.get("status") != "no_changes":
+        return
+
+    try:
+        existing = await client.find_pull_request_by_head(
+            ASSEMBLY_AGENT_SLUG, repository, contract.branch_name
+        )
+    except (httpx.HTTPError, TimeoutError):
+        # This lookup is only for monotonic progress rendering. If it is
+        # unavailable, keep the original first-run no_changes surface.
+        _log.warning(
+            "Assembly no_changes PR-context lookup failed",
+            extra={"repository": repository, "issue": contract.issue_number},
+            exc_info=True,
+        )
+        return
+    if not existing:
+        return
+
+    try:
+        pr_number = int(existing.get("number") or 0)
+    except (TypeError, ValueError):
+        return
+    if pr_number <= 0:
+        return
+
+    result["branch"] = {
+        "name": contract.branch_name,
+        "created": False,
+        "sha": (existing.get("head") or {}).get("sha"),
+    }
+    result["pull_request"] = {
+        "number": pr_number,
+        "url": existing.get("html_url"),
+        "action": "updated",
+    }
+
+
 async def _post_codex_trigger(
     client: GitHubAppClient,
     repository: str,
@@ -731,8 +780,10 @@ async def _upsert_progress_comments(
         status = "failed"
     elif failures:
         status = "partial"
-    elif adapter_status in {"dry_run", "no_changes"}:
-        status = "dry_run" if adapter_status == "dry_run" else "no_changes"
+    elif adapter_status == "dry_run":
+        status = "dry_run"
+    elif adapter_status == "no_changes" and not pull_request.get("number"):
+        status = "no_changes"
 
     issue_body = build_assembly_comment(
         status=status,
