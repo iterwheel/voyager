@@ -145,16 +145,21 @@ operator accepts the weaker gate.
 
 ### 4. Monitor The Issue Progress Comment
 
-Assembly upserts one issue progress comment. The first pass should show one of
-these states:
+For normal non-dry-run runs, Assembly upserts one issue progress comment. The
+first pass should show one of these states:
 
 | State | Meaning | Next action |
 |-------|---------|-------------|
 | `refused` | Preconditions failed | Fix the issue/labels/allow-list/actor state, then retry |
-| `dry_run` | Contract recorded, no GitHub mutation | Inspect contract; switch runtime if ready |
 | `no_changes` | Backend completed without repo changes | Decide whether the issue is already satisfied or needs clearer AC |
 | `failed` | Backend or writeback failed | Follow the failure path below |
 | `applied` | Branch and PR work succeeded | Move to PR verification |
+
+Dry-run contract inspection is a no-write observability path. When bridge
+`DRY_RUN` is enabled or the trigger uses `/assembly --dry-run`, do not wait for
+a new issue or PR progress comment. Confirm that the trigger was accepted,
+inspect bridge logs or the dry-run contract output available to the operator,
+and switch to a non-dry-run runtime only after the contract is correct.
 
 Do not trigger duplicate `/assembly` comments while a real backend process is
 running. If a duplicate run is needed, wait until the prior progress comment is
