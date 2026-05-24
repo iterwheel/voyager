@@ -176,6 +176,16 @@ class _CommandRecorder:
         return _FakeProcess(argv, returncode=0, stdout="", stderr="")
 
 
+def _recorder_remote_name(recorder: _CommandRecorder) -> str:
+    for call in recorder.calls:
+        argv = call["argv"]
+        if len(argv) > 4 and argv[0] == "git" and argv[1] == "remote" and argv[2] == "add":
+            remote_name = str(argv[3])
+            assert remote_name.startswith("assembly-publish-")
+            return remote_name
+    raise AssertionError("No git remote add call recorded")
+
+
 class TestPublishBranch:
     """Tests for the public ``publish_branch`` function."""
 
@@ -225,6 +235,7 @@ class TestPublishBranch:
         ]
         assert remote_add_calls, "No git remote add call recorded"
         remote_add_argv = " ".join(remote_add_calls[0]["argv"])
+        remote_name = _recorder_remote_name(recorder)
         assert TEST_REMOTE_URL in remote_add_argv, (
             f"remote add argv must contain the HTTPS URL, got: {remote_add_argv}"
         )
@@ -238,7 +249,7 @@ class TestPublishBranch:
         )
         assert "--no-tags" in fetch_argv
         assert f"refs/heads/{TEST_BRANCH}" in fetch_argv
-        assert f"refs/remotes/assembly-publish/{TEST_BRANCH}" in fetch_argv
+        assert f"refs/remotes/{remote_name}/{TEST_BRANCH}" in fetch_argv
         # The fetch must appear before the push
         fetch_idx = next(i for i, c in enumerate(recorder.calls) if "fetch" in " ".join(c["argv"]))
         push_idx = next(i for i, c in enumerate(recorder.calls) if "push" in " ".join(c["argv"]))
@@ -271,6 +282,124 @@ class TestPublishBranch:
         push_argv = " ".join(push_calls[0]["argv"])
         assert "--force-with-lease" in push_argv
         assert "--no-verify" in push_argv
+
+    @pytest.mark.asyncio
+    async def test_remote_add_failure_does_not_remove_existing_remote(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        class _FailedRemoteAddRecorder(_CommandRecorder):
+            def _handle_subprocess(
+                self, argv: tuple[str, ...], *, kwargs: dict[str, Any]
+            ) -> _FakeProcess:
+                self.calls.append({"argv": argv, "kwargs": kwargs})
+                if len(argv) >= 3 and argv[0] == "git" and argv[1:3] == ("remote", "add"):
+                    return _FakeProcess(
+                        argv,
+                        returncode=3,
+                        stdout="",
+                        stderr="remote already exists",
+                    )
+                return _FakeProcess(argv, returncode=0, stdout="", stderr="")
+
+        recorder = _FailedRemoteAddRecorder()
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", recorder.create_subprocess_exec)
+        monkeypatch.setattr(
+            "voyager.bots.assembly.publish.shutil.rmtree",
+            lambda _dir, **kw: None,
+        )
+
+        result = await publish_branch(
+            repository=TEST_REPOSITORY,
+            branch_name=TEST_BRANCH,
+            installation_token=TEST_TOKEN,
+            checkout_dir=tmp_path,
+            timeout_seconds=30,
+        )
+
+        assert not result.success
+        assert "failed to add temporary remote" in result.message.lower()
+        remove_calls = [
+            call
+            for call in recorder.calls
+            if len(call["argv"]) >= 3 and call["argv"][1:3] == ("remote", "remove")
+        ]
+        assert not remove_calls
+
+    @pytest.mark.asyncio
+    async def test_missing_remote_ref_fetch_allows_first_push(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        class _MissingRemoteRefRecorder(_CommandRecorder):
+            def _handle_subprocess(
+                self, argv: tuple[str, ...], *, kwargs: dict[str, Any]
+            ) -> _FakeProcess:
+                self.calls.append({"argv": argv, "kwargs": kwargs})
+                if len(argv) >= 2 and argv[0] == "git" and argv[1] == "fetch":
+                    return _FakeProcess(
+                        argv,
+                        returncode=128,
+                        stdout="",
+                        stderr="fatal: could not find remote ref 42-fix-thing",
+                    )
+                return _FakeProcess(argv, returncode=0, stdout="", stderr="")
+
+        recorder = _MissingRemoteRefRecorder()
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", recorder.create_subprocess_exec)
+        monkeypatch.setattr(
+            "voyager.bots.assembly.publish.shutil.rmtree",
+            lambda _dir, **kw: None,
+        )
+
+        result = await publish_branch(
+            repository=TEST_REPOSITORY,
+            branch_name=TEST_BRANCH,
+            installation_token=TEST_TOKEN,
+            checkout_dir=tmp_path,
+            timeout_seconds=30,
+        )
+
+        assert result.success
+        push_calls = [call for call in recorder.calls if "push" in " ".join(call["argv"])]
+        assert push_calls, "No git push call recorded"
+
+    @pytest.mark.asyncio
+    async def test_unexpected_fetch_failure_stops_before_push(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        class _FailedFetchRecorder(_CommandRecorder):
+            def _handle_subprocess(
+                self, argv: tuple[str, ...], *, kwargs: dict[str, Any]
+            ) -> _FakeProcess:
+                self.calls.append({"argv": argv, "kwargs": kwargs})
+                if len(argv) >= 2 and argv[0] == "git" and argv[1] == "fetch":
+                    return _FakeProcess(
+                        argv,
+                        returncode=128,
+                        stdout="",
+                        stderr="fatal: repository not found",
+                    )
+                return _FakeProcess(argv, returncode=0, stdout="", stderr="")
+
+        recorder = _FailedFetchRecorder()
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", recorder.create_subprocess_exec)
+        monkeypatch.setattr(
+            "voyager.bots.assembly.publish.shutil.rmtree",
+            lambda _dir, **kw: None,
+        )
+
+        result = await publish_branch(
+            repository=TEST_REPOSITORY,
+            branch_name=TEST_BRANCH,
+            installation_token=TEST_TOKEN,
+            checkout_dir=tmp_path,
+            timeout_seconds=30,
+        )
+
+        assert not result.success
+        assert "failed to fetch" in result.message.lower()
+        assert "repository not found" in result.message.lower()
+        push_calls = [call for call in recorder.calls if "push" in " ".join(call["argv"])]
+        assert not push_calls
 
     # ------------------------------------------------------------------
     # Token safety

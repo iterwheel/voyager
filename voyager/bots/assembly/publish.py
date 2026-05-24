@@ -12,7 +12,7 @@ App-token auth.
 Use ``publish_branch()`` when the local git checkout's ``origin`` is an
 SSH or fork URL and the operator's ``gh`` / SSH identity lacks write
 access to the target repository.  The function configures a temporary
-dedicated remote (``assembly-publish``) pointing to
+dedicated remote (``assembly-publish-*``) pointing to
 ``https://github.com/<owner>/<repo>.git``, pushes over HTTPS with the
 App installation token, and always cleans up after itself (removes the
 temporary remote, askpass script, and temp directory).
@@ -182,7 +182,7 @@ async def publish_branch(
     named remote like ``origin``, so fork remotes or SSH remotes cannot
     bypass App-token auth.
 
-    Uses a temporary named remote (``assembly-publish``) instead of
+    Uses a temporary named remote (``assembly-publish-*``) instead of
     pushing directly to the URL so that ``--force-with-lease`` has a
     remote-tracking ref to check — pushing to a bare URL makes the lease
     check a no-op.
@@ -202,12 +202,14 @@ async def publish_branch(
     timeout).
     """
     remote_url = _github_safe_remote(repository)
-    remote_name = "assembly-publish"
+    remote_name: str | None = None
+    remote_created = False
     askpass: Path | None = None
     temp_dir: Path | None = None
 
     try:
         temp_dir = Path(tempfile.mkdtemp(prefix="assembly-publish-"))
+        remote_name = temp_dir.name
         askpass = _write_git_askpass(temp_dir)
         env = _git_push_env(token=installation_token, askpass=askpass)
 
@@ -223,6 +225,7 @@ async def publish_branch(
                 success=False,
                 message=(f"Failed to add temporary remote {remote_name}: {stderr_add.strip()}"),
             )
+        remote_created = True
 
         # ---- Step 2: fetch target branch for lease baseline ----
         # Fetch the branch into the named remote's tracking ref so that
@@ -244,7 +247,10 @@ async def publish_branch(
             # A 128 exit with "could not find remote ref" is expected on first
             # push; the branch does not exist yet.  Any other failure is real.
             fetch_err = stderr_fetch.strip().lower()
-            if "couldn't find remote ref" not in fetch_err:
+            missing_remote_ref = (
+                "couldn't find remote ref" in fetch_err or "could not find remote ref" in fetch_err
+            )
+            if not missing_remote_ref:
                 return PublishResult(
                     success=False,
                     message=(
@@ -256,6 +262,7 @@ async def publish_branch(
         # --force-with-lease now has a remote-tracking ref to check because
         # the fetch above (when the branch already exists on the remote)
         # populated refs/remotes/<remote_name>/<branch_name>.
+        target_ref = f"HEAD:refs/heads/{branch_name}"
         returncode, _stdout, stderr = await _run_git_push(
             [
                 "git",
@@ -263,7 +270,7 @@ async def publish_branch(
                 "--force-with-lease",
                 "--no-verify",
                 remote_name,
-                f"HEAD:refs/heads/{branch_name}",
+                target_ref,
             ],
             cwd=checkout_dir,
             timeout_seconds=timeout_seconds,
@@ -291,7 +298,7 @@ async def publish_branch(
         # Best-effort remove temporary remote so the checkout is not
         # polluted. Uses a lightweight subprocess (not _run_git_push) to
         # avoid requiring the auth env during cleanup.
-        if checkout_dir.exists():
+        if remote_created and remote_name is not None and checkout_dir.exists():
             with contextlib.suppress(Exception):
                 proc = await asyncio.create_subprocess_exec(
                     "git",

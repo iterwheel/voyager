@@ -49,6 +49,15 @@ def _mock_client(**attrs: object) -> MagicMock:
     return client
 
 
+def _temporary_remote_name(mock_exec: MagicMock) -> str:
+    for call_args, _ in mock_exec.call_args_list:
+        if len(call_args) > 4 and call_args[1] == "remote" and call_args[2] == "add":
+            remote_name = str(call_args[3])
+            assert remote_name.startswith("assembly-publish-")
+            return remote_name
+    raise AssertionError("No git remote add call found")
+
+
 # ---------------------------------------------------------------------------
 # token / askpass helpers
 # ---------------------------------------------------------------------------
@@ -136,6 +145,8 @@ class TestPublishPushNewBranch:
         assert "--force-with-lease" in push_call_args
         assert "--no-verify" in push_call_args
         assert push_call_args[-1] == "HEAD:refs/heads/102-my-feature"
+        remote_name = _temporary_remote_name(mock_exec)
+        assert remote_name in push_call_args
 
         # Verify the git fetch call is present before push
         fetch_call_args = None
@@ -145,9 +156,20 @@ class TestPublishPushNewBranch:
                 break
         assert fetch_call_args is not None, "No git fetch call found"
         assert "--no-tags" in fetch_call_args
-        assert "assembly-publish" in fetch_call_args
+        assert remote_name in fetch_call_args
         assert "refs/heads/102-my-feature" in " ".join(fetch_call_args)
-        assert "refs/remotes/assembly-publish/102-my-feature" in " ".join(fetch_call_args)
+        assert f"refs/remotes/{remote_name}/102-my-feature" in " ".join(fetch_call_args)
+        fetch_idx = next(
+            i
+            for i, (call_args, _) in enumerate(mock_exec.call_args_list)
+            if len(call_args) > 1 and call_args[1] == "fetch"
+        )
+        push_idx = next(
+            i
+            for i, (call_args, _) in enumerate(mock_exec.call_args_list)
+            if len(call_args) > 1 and call_args[1] == "push"
+        )
+        assert fetch_idx < push_idx
 
         # Verify PR was created with correct data
         client.create_pull_request.assert_awaited_once()
@@ -273,6 +295,35 @@ class TestPublishTokenFailure:
 
 class TestPublishPushFailure:
     @patch("voyager.core.publish.asyncio.create_subprocess_exec")
+    async def test_remote_add_failure_does_not_remove_existing_remote(
+        self, mock_exec: MagicMock
+    ) -> None:
+        def _side_effect(*args: object, **kwargs: object) -> MagicMock:
+            if len(args) > 3 and args[1] == "remote" and args[2] == "add":
+                return _mock_subprocess(returncode=3, stderr="remote already exists")
+            return _mock_subprocess(returncode=0)
+
+        mock_exec.side_effect = _side_effect
+        client = _mock_client()
+
+        result = await assembly_app_publish(
+            repository="iterwheel/voyager",
+            branch="102-x",
+            base="main",
+            pr_title="x",
+            client=client,
+            cwd="/tmp",
+        )
+
+        assert result.pushed is False
+        assert result.error is not None
+        assert "Failed to add temporary remote" in result.error
+        assert not any(
+            len(call_args) > 3 and call_args[1] == "remote" and call_args[2] == "remove"
+            for call_args, _ in mock_exec.call_args_list
+        )
+
+    @patch("voyager.core.publish.asyncio.create_subprocess_exec")
     async def test_push_failure_returns_error(self, mock_exec: MagicMock) -> None:
         # git remote add must succeed; git push must fail with 128
         def _side_effect(*args: object, **kwargs: object) -> MagicMock:
@@ -330,9 +381,8 @@ class TestPublishPushRemoteURL:
                 break
         assert first_push_call is not None, "No push call found"
         push_args = first_push_call
-        assert "assembly-publish" in push_args, (
-            f"push argv must use the named remote, got: {push_args}"
-        )
+        remote_name = _temporary_remote_name(mock_exec)
+        assert remote_name in push_args, f"push argv must use the named remote, got: {push_args}"
         assert "https://github.com/iterwheel/voyager.git" not in push_args
         # Verify no literal "origin" appears as a push remote
         assert "origin" not in push_args
@@ -341,6 +391,7 @@ class TestPublishPushRemoteURL:
         for call_args, _ in mock_exec.call_args_list:
             if len(call_args) > 3 and call_args[1] == "remote" and call_args[2] == "add":
                 remote_add_found = True
+                assert call_args[3] == remote_name
                 assert "https://github.com/iterwheel/voyager.git" in call_args
                 break
         assert remote_add_found, "No git remote add call found"
@@ -351,10 +402,9 @@ class TestPublishPushRemoteURL:
             if len(call_args) > 1 and call_args[1] == "fetch":
                 fetch_found = True
                 assert "--no-tags" in call_args
-                assert "assembly-publish" in call_args
-                assert (
-                    "refs/heads/102-my-feature:refs/remotes/assembly-publish/102-my-feature"
-                    in call_args
+                assert remote_name in call_args
+                assert f"refs/heads/102-my-feature:refs/remotes/{remote_name}/102-my-feature" in (
+                    call_args
                 )
                 break
         assert fetch_found, "No git fetch call found"
@@ -383,7 +433,8 @@ class TestPublishPushRemoteURL:
                 break
         assert first_push_call is not None, "No push call found"
         push_args = first_push_call
-        assert "assembly-publish" in push_args
+        remote_name = _temporary_remote_name(mock_exec)
+        assert remote_name in push_args
         # The URL should be in the git remote add call, not the push
         url_found = False
         for call_args, _ in mock_exec.call_args_list:
@@ -399,10 +450,115 @@ class TestPublishPushRemoteURL:
             if len(call_args) > 1 and call_args[1] == "fetch":
                 fetch_found = True
                 assert "--no-tags" in call_args
-                assert "assembly-publish" in call_args
-                assert "refs/heads/fix:refs/remotes/assembly-publish/fix" in call_args
+                assert remote_name in call_args
+                assert f"refs/heads/fix:refs/remotes/{remote_name}/fix" in call_args
                 break
         assert fetch_found, "No git fetch call found"
+
+
+class TestPublishFetchPreparation:
+    @patch("voyager.core.publish.asyncio.create_subprocess_exec")
+    async def test_missing_remote_ref_is_tolerated_for_new_branch(
+        self, mock_exec: MagicMock
+    ) -> None:
+        def _side_effect(*args: object, **kwargs: object) -> MagicMock:
+            if len(args) > 1 and str(args[1]) == "fetch":
+                return _mock_subprocess(
+                    returncode=128,
+                    stderr="fatal: could not find remote ref 102-new-branch",
+                )
+            return _mock_subprocess(returncode=0)
+
+        mock_exec.side_effect = _side_effect
+        client = _mock_client()
+
+        result = await assembly_app_publish(
+            repository="iterwheel/voyager",
+            branch="102-new-branch",
+            base="main",
+            pr_title="x",
+            client=client,
+            cwd="/tmp",
+        )
+
+        assert result.pushed is True
+        assert result.error is None
+        assert any(
+            len(call_args) > 1 and call_args[1] == "push"
+            for call_args, _ in mock_exec.call_args_list
+        )
+        client.create_pull_request.assert_awaited_once()
+        client.create_issue_comment.assert_awaited_once()
+
+    @patch("voyager.core.publish.asyncio.create_subprocess_exec")
+    async def test_unexpected_fetch_failure_stops_before_push(self, mock_exec: MagicMock) -> None:
+        def _side_effect(*args: object, **kwargs: object) -> MagicMock:
+            if len(args) > 1 and str(args[1]) == "fetch":
+                return _mock_subprocess(
+                    returncode=128,
+                    stderr="fatal: repository not found",
+                )
+            return _mock_subprocess(returncode=0)
+
+        mock_exec.side_effect = _side_effect
+        client = _mock_client()
+
+        result = await assembly_app_publish(
+            repository="iterwheel/voyager",
+            branch="102-x",
+            base="main",
+            pr_title="x",
+            client=client,
+            cwd="/tmp",
+        )
+
+        assert result.pushed is False
+        assert result.error is not None
+        assert "git fetch failed" in result.error
+        assert "repository not found" in result.error
+        assert not any(
+            len(call_args) > 1 and call_args[1] == "push"
+            for call_args, _ in mock_exec.call_args_list
+        )
+        client.create_pull_request.assert_not_awaited()
+        client.update_pull_request.assert_not_awaited()
+        client.create_issue_comment.assert_not_awaited()
+
+    @patch("voyager.core.publish.asyncio.create_subprocess_exec")
+    async def test_fetch_timeout_stops_before_push(self, mock_exec: MagicMock) -> None:
+        timeout_proc = MagicMock()
+        timeout_proc.communicate = AsyncMock(side_effect=TimeoutError())
+        timeout_proc.kill = MagicMock()
+
+        def _side_effect(*args: object, **kwargs: object) -> MagicMock:
+            if len(args) > 1 and str(args[1]) == "fetch":
+                return timeout_proc
+            return _mock_subprocess(returncode=0)
+
+        mock_exec.side_effect = _side_effect
+        client = _mock_client()
+
+        result = await assembly_app_publish(
+            repository="iterwheel/voyager",
+            branch="102-x",
+            base="main",
+            pr_title="x",
+            client=client,
+            cwd="/tmp",
+            timeout_seconds=1,
+        )
+
+        assert result.pushed is False
+        assert result.error is not None
+        assert "git fetch timed out" in result.error
+        timeout_proc.kill.assert_called_once()
+        assert not any(
+            len(call_args) > 1 and call_args[1] == "push"
+            for call_args, _ in mock_exec.call_args_list
+        )
+        client.create_pull_request.assert_not_awaited()
+        client.update_pull_request.assert_not_awaited()
+        client.create_issue_comment.assert_not_awaited()
 
 
 class TestPublishTimeout:

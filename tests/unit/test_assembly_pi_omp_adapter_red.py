@@ -303,6 +303,22 @@ async def test_pi_adapter_executes_omp_in_clone_pushes_branch_and_returns_sha(
     assert " origin " not in f" {push_argv} ", (
         f"push argv must not contain literal 'origin', got: {push_argv}"
     )
+    branch = _contract().branch_name
+    lease_fetch_calls = [
+        call
+        for call in recorder.git_calls("fetch")
+        if any(arg.startswith("assembly-publish-") for arg in call["argv"])
+        and "--no-tags" in call["argv"]
+        and any(
+            arg.startswith(f"refs/heads/{branch}:refs/remotes/assembly-publish-")
+            and arg.endswith(f"/{branch}")
+            for arg in call["argv"]
+        )
+    ]
+    assert lease_fetch_calls, "No Assembly publish lease fetch call recorded"
+    fetch_idx = recorder.calls.index(lease_fetch_calls[0])
+    push_idx = recorder.calls.index(push_calls[0])
+    assert fetch_idx < push_idx
     # Verify the git remote add was issued with the HTTPS URL
     remote_add_calls = [
         call

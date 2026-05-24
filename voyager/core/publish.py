@@ -15,7 +15,7 @@ configured with an SSH URL or a personal fork URL and the operator's
 ``gh`` / SSH identity lacks write access to the target repository.
 The path pushes over HTTPS to the explicit target-repository URL
 (``https://github.com/<owner>/<repo>.git``) using a temporary named
-remote (``assembly-publish``), bypassing whatever ``origin`` points to.
+remote (``assembly-publish-*``), bypassing whatever ``origin`` points to.
 This avoids fork PRs and personal-credential fallbacks.
 
 Do **not** use this path in cases where the local identity already has
@@ -134,8 +134,14 @@ def _git_auth_env(token: str, askpass: Path) -> dict[str, str]:
     return env
 
 
-async def _run_exec(argv: list[str], *, cwd: str, timeout_seconds: int, env: dict[str, str]) -> int:
-    """Run *argv* and return the exit code.  Output is captured and redacted."""
+async def _run_exec(
+    argv: list[str], *, cwd: str, timeout_seconds: int, env: dict[str, str]
+) -> tuple[int, str]:
+    """Run *argv* and return ``(exit_code, stderr_text)``.
+
+    A timeout returns ``(-1, "")`` so callers can normalize subprocess
+    failures into ``PublishResult`` without catching ``TimeoutError``.
+    """
     process = await asyncio.create_subprocess_exec(
         *argv,
         cwd=cwd,
@@ -143,8 +149,9 @@ async def _run_exec(argv: list[str], *, cwd: str, timeout_seconds: int, env: dic
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
+    stderr_raw = b""
     try:
-        _stdout_raw, _stderr_raw = await asyncio.wait_for(
+        _stdout_raw, stderr_raw = await asyncio.wait_for(
             process.communicate(), timeout=timeout_seconds
         )
         rc = process.returncode or 0
@@ -159,7 +166,7 @@ async def _run_exec(argv: list[str], *, cwd: str, timeout_seconds: int, env: dic
         rc,
         " ".join(argv),
     )
-    return rc
+    return rc, stderr_raw.decode(errors="replace")
 
 
 async def assembly_app_publish(
@@ -233,16 +240,18 @@ async def assembly_app_publish(
     # ---- Step 2: create temp dir and askpass helper ----
     tmp_dir: Path | None = None
     askpass: Path | None = None
-    remote_name = "assembly-publish"
+    remote_name: str | None = None
+    remote_created = False
     try:
         tmp_dir_obj = Path(tempfile.mkdtemp(prefix="assembly-publish-"))
         tmp_dir = tmp_dir_obj
+        remote_name = tmp_dir_obj.name
         askpass = _write_git_askpass(tmp_dir_obj)
         auth_env = _git_auth_env(token, askpass)
 
         # ---- Step 3: add temporary named remote ----
         remote_url = f"https://github.com/{repository}.git"
-        rc = await _run_exec(
+        rc, _stderr = await _run_exec(
             ["git", "remote", "add", remote_name, remote_url],
             cwd=work_dir,
             timeout_seconds=timeout_seconds,
@@ -257,9 +266,10 @@ async def assembly_app_publish(
                 codex_comment_id=None,
                 error=f"Failed to add temporary remote {remote_name}",
             )
+        remote_created = True
 
         # ---- Step 3b: fetch target branch for lease baseline ----
-        rc_fetch = await _run_exec(
+        rc_fetch, stderr_fetch = await _run_exec(
             [
                 "git",
                 "fetch",
@@ -272,11 +282,30 @@ async def assembly_app_publish(
             env=auth_env,
         )
         if rc_fetch != 0:
-            # rc_fetch from _run_exec is -1 on timeout or the actual exit code
-            # on non-timeout; the stderr is logged at debug level below.
-            # A non-zero exit with "could not find remote ref" is expected on
-            # first push — the branch does not exist yet, so continue.
-            pass
+            if rc_fetch < 0:
+                return PublishResult(
+                    pushed=False,
+                    pr_number=None,
+                    pr_url=None,
+                    pr_action=None,
+                    codex_comment_id=None,
+                    error=f"git fetch timed out ({timeout_seconds}s)",
+                )
+
+            fetch_stderr_lower = stderr_fetch.strip().lower()
+            missing_remote_ref = (
+                "couldn't find remote ref" in fetch_stderr_lower
+                or "could not find remote ref" in fetch_stderr_lower
+            )
+            if not missing_remote_ref:
+                return PublishResult(
+                    pushed=False,
+                    pr_number=None,
+                    pr_url=None,
+                    pr_action=None,
+                    codex_comment_id=None,
+                    error=f"git fetch failed: {stderr_fetch.strip()}",
+                )
 
         # ---- Step 4: push via named remote ----
         # --force-with-lease now has a remote-tracking ref to check because
@@ -290,7 +319,9 @@ async def assembly_app_publish(
             remote_name,
             f"HEAD:refs/heads/{branch}",
         ]
-        rc = await _run_exec(argv, cwd=work_dir, timeout_seconds=timeout_seconds, env=auth_env)
+        rc, _stderr = await _run_exec(
+            argv, cwd=work_dir, timeout_seconds=timeout_seconds, env=auth_env
+        )
 
         if rc != 0:
             if rc < 0:
@@ -416,16 +447,17 @@ async def assembly_app_publish(
         # Best-effort; uses a lightweight direct subprocess to avoid
         # requiring the auth env during cleanup.
         with contextlib.suppress(Exception):
-            proc = await asyncio.create_subprocess_exec(
-                "git",
-                "remote",
-                "remove",
-                remote_name,
-                cwd=work_dir,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await asyncio.wait_for(proc.wait(), timeout=10)
+            if remote_created and remote_name is not None:
+                proc = await asyncio.create_subprocess_exec(
+                    "git",
+                    "remote",
+                    "remove",
+                    remote_name,
+                    cwd=work_dir,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await asyncio.wait_for(proc.wait(), timeout=10)
         # ---- Cleanup: remove askpass ----
         if askpass is not None and askpass.exists():
             with contextlib.suppress(OSError):
