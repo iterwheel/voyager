@@ -7,7 +7,7 @@
 **Date:** 2026-05-24
 **Requested by:** Frank Xu (via issue #94)
 **Priority:** P2
-**Related:** VOY-1811, VOY-1817, VOY-1818, VOY-1821, #92, #93, #98, #99
+**Related:** VOY-1811, VOY-1817, VOY-1818, VOY-1821, VOY-1823, #92, #93, #98, #99, #109
 
 ---
 
@@ -166,6 +166,37 @@ Do not trigger duplicate `/assembly` comments while a real backend process is
 running. If a duplicate run is needed, wait until the prior progress comment is
 terminal.
 
+### 4.1. Live No-Diff Observation Window
+
+Start the observation clock when the progress comment, bridge log, or audit
+manifest shows that a real backend process has started. A "no-diff" interval
+means all of the following are true:
+
+- no PR was opened or updated;
+- no new commit appeared on the Assembly branch;
+- the progress comment did not move to a terminal state;
+- the private checkout has no modified files or staged changes visible to
+  `git status --short`.
+
+The maximum no-diff wait without operator inspection is 10 minutes. At
+T+10 minutes, inspect private evidence before waiting longer:
+
+```bash
+python -m json.tool ~/.voyager/state/assembly/audit/<owner>/<repo>/<issue>/<audit-id>.json
+git -C <checkout_dir> status --short
+git -C <checkout_dir> diff --stat
+```
+
+If the manifest has an `omp_session_jsonl_path`, inspect only the local file.
+Do not paste transcript contents, local paths, environment dumps, or token-like
+values into GitHub comments.
+
+At T+20 minutes, a run that still has no PR, no commit, and no checkout diff is
+stale for operator purposes unless it is visibly running verification against
+already-created changes. Stop waiting, record the stale-run evidence privately,
+and retry only after narrowing the issue or retry contract. Do not post a
+duplicate `/assembly` comment merely to "wake up" the backend.
+
 ### 5. Verify The PR
 
 When Assembly opens or updates a PR:
@@ -189,6 +220,7 @@ When Assembly opens or updates a PR:
 Assembly's own validation is evidence, not a substitute for operator
 acceptance. The operator is still responsible for checking semantic fit before
 approval.
+
 ### 5.1. Fork PR Caveats
 
 Fork PRs are forbidden for managed Assembly/Codex implementation loops unless
@@ -241,7 +273,43 @@ the request was seen; it does not mean the review is complete. Treat
 `clearance-3-ready-for-approval` as provisional until the Codex review settle
 gate below has passed for the current PR head SHA.
 
-### 6.1. Codex Review Settle Gate
+### 6.1. Retry Discipline
+
+Each retry must target exactly one concrete blocker or one tightly related
+blocker cluster. Examples of valid retry scopes:
+
+- one failing verification command;
+- one Codex review finding, or multiple findings in the same file/behavior;
+- one publish/writeback failure;
+- one `no_changes` result caused by missing or stale acceptance criteria;
+- one docs-only correction with explicit target sections.
+
+Do not use broad instructions such as "try again" or "fix the reviews" without
+mapping them to file-level acceptance criteria when that information is
+available.
+
+Before rerunning Assembly, write a retry contract that the backend can see. If
+the current Assembly contract does not include later issue comments, promote
+the relevant retry instructions into the issue body or another contract source
+that is known to be included. Plain issue comments are operator notes unless a
+future implementation explicitly includes them in the Assembly contract.
+
+Use this minimal retry contract shape:
+
+```text
+Retry scope:
+- Blocker:
+- Evidence:
+- Target files/sections:
+- Acceptance criteria:
+- Verification:
+- Stop condition:
+```
+
+After every retry push, trigger a fresh `@codex review` and restart the Codex
+review settle gate for the new head SHA.
+
+### 6.2. Codex Review Settle Gate
 
 Run this gate after every `@codex review` trigger and after every push that
 changes the PR head SHA.
@@ -348,7 +416,7 @@ If Codex posts actionable feedback, fix it, push, post a fresh `@codex review`,
 and restart this settle gate for the new head SHA. Do not report the PR as ready
 for human approval while a requested Codex review is still settling.
 
-### 6.2. Ready-For-Approval Declaration Checklist
+### 6.3. Ready-For-Approval Declaration Checklist
 
 Before telling the requester that a PR is ready for approval, verify all of the
 following for the current head SHA:
@@ -365,6 +433,31 @@ following for the current head SHA:
 - [ ] The final status message names the PR number, head SHA, CI result, Codex
       terminal signal, and Clearance label.
 - [ ] PR source confirmed — headRepository matches baseRepository (no fork PR).
+
+Pushed code, a green branch, and green CI are not approval-ready by themselves.
+Approval-ready means the current head SHA has passed verification, Codex has
+settled, thread-aware review inspection has no unresolved actionable blockers,
+and Clearance has reached Stage 3 after those facts are true.
+
+### 6.4. Follow-Up Issue Boundary
+
+Create a follow-up issue instead of broadening the current implementation PR
+when the new work is not required to satisfy the current issue's acceptance
+criteria. Common boundaries:
+
+- new Assembly product capability, such as including bounded issue comments in
+  the backend contract;
+- GitHub App permission, installation, token, or branch-protection changes;
+- bridge deployment, runtime configuration, or release-process work;
+- audit retention, observability, or transcript-export improvements beyond the
+  current failure evidence;
+- review feedback that identifies a valid but unrelated defect;
+- changes that would require a second PR description, a different owner, or a
+  different verification plan.
+
+The current PR may document the follow-up and link the issue, but it should not
+silently absorb a second problem just because it was discovered during the
+Assembly loop.
 
 ### 7. Clearance And Human Approval
 
@@ -614,6 +707,19 @@ Before triggering:
 - [ ] Verification commands are correct for the target repo.
 - [ ] Bridge health shows expected build commit and `dry_run` state.
 
+When inspecting private audit or temp checkout state:
+
+- [ ] Use the VOY-1823 manifest lookup path or audit ID; do not guess from
+      unrelated local directories.
+- [ ] Inspect the manifest locally with `python -m json.tool`.
+- [ ] Inspect the checkout locally with `git -C <checkout_dir> status --short`
+      and `git -C <checkout_dir> diff --stat`.
+- [ ] Inspect OMP transcripts only on the operator machine.
+- [ ] Public summaries include only non-secret status, issue/PR IDs, branch
+      names, audit IDs, and verification command names.
+- [ ] Public summaries exclude local paths, transcript excerpts, raw env dumps,
+      credentials, and token-like values.
+
 After PR opens:
 
 - [ ] PR body links/closes the issue.
@@ -635,6 +741,28 @@ After merge:
 - [ ] Related PR/review-thread completion gate is clean.
 - [ ] Any follow-up observability, audit, or rollout issue is filed.
 
+### High-Token Loop Retrospective Template
+
+Use this template in the issue or operator notes when an Assembly-managed loop
+spends repeated cycles on waits, no-op retries, review-settle ambiguity, or
+manual takeover:
+
+```text
+Retrospective:
+- Issue / PR:
+- Loop type: stale-contract | no-diff-wait | review-settle-delay | publish-bootstrap | clearance-state-mismatch | ambiguous-acceptance | other
+- Concrete cause:
+- Wasted cycle:
+- Evidence checked:
+- Prevention rule:
+- Follow-up issue:
+```
+
+Keep the retrospective public only when it contains no secrets, local private
+paths, transcript excerpts, or credential-bearing environment values. Put
+private evidence in the VOY-1823 audit record or local operator notes and link
+only the public issue/PR IDs.
+
 ---
 
 ## Integration Points
@@ -643,6 +771,7 @@ After merge:
 - **VOY-1817:** Assembly MVP routing, contract, writeback, and boundaries.
 - **VOY-1818:** actor authorization gate.
 - **VOY-1821:** fake subprocess backend and real OMP canary history.
+- **VOY-1823:** private Assembly OMP audit lookup procedure.
 - **#92:** future private audit manifests and public trace IDs.
 - **#93:** future failure diagnostics, debug retention, and failure-inspection
   SOP.
@@ -659,3 +788,4 @@ this SOP by name: `VOY-1822 Assembly-Driven Implementation Loop`.
 | 2026-05-24 | Initial SOP for issue #94, derived from VOY-1811 and specialized for Assembly's issue-to-PR implementation loop. | Codex |
 | 2026-05-24 | Added Codex review settle gate and final ready-for-approval checklist for issue #98. | Codex |
 | 2026-05-24 | Added PR source precondition, fork PR caveats, and code-level `headRepository == baseRepository` gate for issue #99. | Codex |
+| 2026-05-24 | Added Assembly retry discipline, no-diff observation windows, VOY-1823 audit checklist, follow-up boundary, and retrospective template for issue #109. | Codex |
