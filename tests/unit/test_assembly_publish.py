@@ -129,6 +129,7 @@ class TestRunGitPush:
             env=dict(os.environ),
         )
         assert result[0] != 0
+        assert result[3] is False
 
     @pytest.mark.asyncio
     async def test_timeout_returns_one_and_timout_message(self, tmp_path: Path) -> None:
@@ -141,6 +142,7 @@ class TestRunGitPush:
         )
         assert result[0] == 1
         assert "timed out" in result[2]
+        assert result[3] is True
 
 
 # ---------------------------------------------------------------------------
@@ -481,6 +483,44 @@ class TestPublishBranch:
 
         assert not result.success
         assert "timed out" in result.message.lower()
+        assert result.timed_out is True
+
+    @pytest.mark.asyncio
+    async def test_stderr_timeout_phrase_does_not_mark_process_timeout(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        class _TimedOutPhraseRecorder(_CommandRecorder):
+            def _handle_subprocess(
+                self, argv: tuple[str, ...], *, kwargs: dict[str, Any]
+            ) -> _FakeProcess:
+                self.calls.append({"argv": argv, "kwargs": kwargs})
+                if len(argv) >= 1 and argv[0] == "git" and "push" in argv:
+                    return _FakeProcess(
+                        argv,
+                        returncode=128,
+                        stdout="",
+                        stderr="proxy connection timed out but process exited",
+                    )
+                return _FakeProcess(argv, returncode=0, stdout="", stderr="")
+
+        recorder = _TimedOutPhraseRecorder()
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", recorder.create_subprocess_exec)
+        monkeypatch.setattr(
+            "voyager.bots.assembly.publish.shutil.rmtree",
+            lambda _dir, **kw: None,
+        )
+
+        result = await publish_branch(
+            repository=TEST_REPOSITORY,
+            branch_name=TEST_BRANCH,
+            installation_token=TEST_TOKEN,
+            checkout_dir=tmp_path,
+            timeout_seconds=30,
+        )
+
+        assert not result.success
+        assert "timed out" in result.stderr
+        assert result.timed_out is False
 
     # ------------------------------------------------------------------
     # Ref specification

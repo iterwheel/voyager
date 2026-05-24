@@ -139,7 +139,7 @@ async def _run_git_push(
     cwd: Path,
     timeout_seconds: int,
     env: dict[str, str],
-) -> tuple[int, str, str]:
+) -> tuple[int, str, str, bool]:
     """Run a git subprocess and capture its output.
 
     Caught ``TimeoutError`` is surfaced as a non-zero return with a
@@ -147,7 +147,7 @@ async def _run_git_push(
     handle the result structurally.
 
     Returns:
-        ``(returncode, stdout, stderr)``
+        ``(returncode, stdout, stderr, timed_out)``
     """
     process = await asyncio.create_subprocess_exec(
         *argv,
@@ -165,12 +165,13 @@ async def _run_git_push(
         kill = getattr(process, "kill", None)
         if callable(kill):
             kill()
-        return (1, "", f"git push timed out after {timeout_seconds}s")
+        return (1, "", f"git push timed out after {timeout_seconds}s", True)
 
     return (
         int(process.returncode or 0),
         stdout_raw.decode(errors="replace"),
         stderr_raw.decode(errors="replace"),
+        False,
     )
 
 
@@ -222,7 +223,7 @@ async def publish_branch(
         env = _git_push_env(token=installation_token, askpass=askpass)
 
         # ---- Step 1: add temporary named remote ----
-        rc_add, _stdout_add, stderr_add = await _run_git_push(
+        rc_add, _stdout_add, stderr_add, add_timed_out = await _run_git_push(
             ["git", "remote", "add", remote_name, remote_url],
             cwd=checkout_dir,
             timeout_seconds=timeout_seconds,
@@ -235,7 +236,7 @@ async def publish_branch(
                 returncode=rc_add,
                 stdout=_stdout_add,
                 stderr=stderr_add,
-                timed_out="timed out" in stderr_add.lower(),
+                timed_out=add_timed_out,
             )
         remote_created = True
 
@@ -243,7 +244,7 @@ async def publish_branch(
         # Fetch the branch into the named remote's tracking ref so that
         # --force-with-lease has a baseline to check.  On first push the
         # branch will not exist yet — tolerate that expected case.
-        rc_fetch, _stdout_fetch, stderr_fetch = await _run_git_push(
+        rc_fetch, _stdout_fetch, stderr_fetch, fetch_timed_out = await _run_git_push(
             [
                 "git",
                 "fetch",
@@ -271,7 +272,7 @@ async def publish_branch(
                     returncode=rc_fetch,
                     stdout=_stdout_fetch,
                     stderr=stderr_fetch,
-                    timed_out="timed out" in stderr_fetch.lower(),
+                    timed_out=fetch_timed_out,
                 )
 
         # ---- Step 3: push via named remote ----
@@ -279,7 +280,7 @@ async def publish_branch(
         # the fetch above (when the branch already exists on the remote)
         # populated refs/remotes/<remote_name>/<branch_name>.
         target_ref = f"HEAD:refs/heads/{branch_name}"
-        returncode, _stdout, stderr = await _run_git_push(
+        returncode, _stdout, stderr, push_timed_out = await _run_git_push(
             [
                 "git",
                 "push",
@@ -306,7 +307,7 @@ async def publish_branch(
                 returncode=returncode,
                 stdout=_stdout,
                 stderr=stderr,
-                timed_out="timed out" in stderr.lower(),
+                timed_out=push_timed_out,
             )
 
         return PublishResult(

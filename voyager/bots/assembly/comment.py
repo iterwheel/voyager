@@ -7,6 +7,7 @@ same issue / PR replace rather than duplicate.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from voyager.core.redaction import sanitize_public_text
@@ -29,6 +30,16 @@ def _format_failures(failures: list[dict[str, Any]] | None) -> list[str]:
     return lines
 
 
+def _code_span(value: str) -> str:
+    """Return a Markdown code span that cannot be broken by embedded backticks."""
+    text = str(value)
+    if "`" not in text:
+        return f"`{text}`"
+    longest_run = max((len(match.group(0)) for match in re.finditer(r"`+", text)), default=0)
+    delimiter = "`" * (longest_run + 1)
+    return f"{delimiter} {text} {delimiter}"
+
+
 def _format_backend_failure(adapter_result: dict[str, Any]) -> list[str]:
     details = adapter_result.get("details")
     if not isinstance(details, dict):
@@ -46,17 +57,17 @@ def _format_backend_failure(adapter_result: dict[str, Any]) -> list[str]:
     lines = [
         "",
         "**Backend failure diagnostics:**",
-        f"- Phase: `{phase}`",
-        f"- Command: `{category}`",
+        f"- Phase: {_code_span(phase)}",
+        f"- Command: {_code_span(category)}",
     ]
     if exit_code is not None:
-        lines.append(f"- Exit code: `{exit_code}`")
+        lines.append(f"- Exit code: {_code_span(str(exit_code))}")
     if timed_out:
-        lines.append("- Timeout: `true`")
+        lines.append(f"- Timeout: {_code_span('true')}")
     if stderr_tail:
-        lines.append(f"- Stderr tail: `{stderr_tail}`")
+        lines.append(f"- Stderr tail: {_code_span(stderr_tail)}")
     elif stdout_tail:
-        lines.append(f"- Stdout tail: `{stdout_tail}`")
+        lines.append(f"- Stdout tail: {_code_span(stdout_tail)}")
     if details.get("failure_debug_bundle_path"):
         lines.append("- Debug bundle: recorded in the private audit manifest.")
     return lines

@@ -196,6 +196,36 @@ def test_comment_renders_public_backend_failure_diagnostics_safely() -> None:
     assert "ASSEMBLY_GITHUB_TOKEN=" not in body
 
 
+def test_comment_wraps_failure_tail_with_backtick_safe_code_span() -> None:
+    body = build_assembly_comment(
+        status="failed",
+        contract={
+            "repository": "iterwheel/voyager",
+            "issue_number": 93,
+            "acceptance_criteria": [],
+        },
+        adapter_result={
+            "status": "failed",
+            "summary": "Verification failed.",
+            "details": {
+                "failure_diagnostic": {
+                    "phase": "verification",
+                    "command_category": "verification",
+                    "exit_code": 2,
+                    "timed_out": False,
+                    "stderr_tail": "parser saw `bad` token @iterwheel",
+                },
+            },
+        },
+        branch={"name": "93-failure-diagnostics"},
+        pull_request={"action": "skipped_no_changes"},
+        audit_id="asmb-0123456789abcdef",
+    )
+
+    assert "- Stderr tail: `` parser saw `bad` token @iterwheel ``" in body
+    assert "- Stderr tail: `parser saw `bad` token @iterwheel`" not in body
+
+
 def test_lookup_hint_names_path_and_sop() -> None:
     audit_id = "asmb-0123456789abcdef"
 
