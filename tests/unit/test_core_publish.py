@@ -137,6 +137,18 @@ class TestPublishPushNewBranch:
         assert "--no-verify" in push_call_args
         assert push_call_args[-1] == "HEAD:refs/heads/102-my-feature"
 
+        # Verify the git fetch call is present before push
+        fetch_call_args = None
+        for call_args, _ in mock_exec.call_args_list:
+            if len(call_args) > 1 and call_args[1] == "fetch":
+                fetch_call_args = call_args
+                break
+        assert fetch_call_args is not None, "No git fetch call found"
+        assert "--no-tags" in fetch_call_args
+        assert "assembly-publish" in fetch_call_args
+        assert "refs/heads/102-my-feature" in " ".join(fetch_call_args)
+        assert "refs/remotes/assembly-publish/102-my-feature" in " ".join(fetch_call_args)
+
         # Verify PR was created with correct data
         client.create_pull_request.assert_awaited_once()
         _, kwargs = client.create_pull_request.await_args
@@ -333,6 +345,20 @@ class TestPublishPushRemoteURL:
                 break
         assert remote_add_found, "No git remote add call found"
 
+        # Verify the git fetch call is present before push
+        fetch_found = False
+        for call_args, _ in mock_exec.call_args_list:
+            if len(call_args) > 1 and call_args[1] == "fetch":
+                fetch_found = True
+                assert "--no-tags" in call_args
+                assert "assembly-publish" in call_args
+                assert (
+                    "refs/heads/102-my-feature:refs/remotes/assembly-publish/102-my-feature"
+                    in call_args
+                )
+                break
+        assert fetch_found, "No git fetch call found"
+
     @patch("voyager.core.publish.asyncio.create_subprocess_exec")
     async def test_push_uses_different_repo_remote(self, mock_exec: MagicMock) -> None:
         """The remote URL is derived from the *repository* parameter."""
@@ -366,6 +392,17 @@ class TestPublishPushRemoteURL:
                 break
         assert url_found, "The HTTPS remote URL must appear in one of the git command args"
         assert "iterwheel" not in push_args
+
+        # Verify the git fetch call is present for the different repo
+        fetch_found = False
+        for call_args, _ in mock_exec.call_args_list:
+            if len(call_args) > 1 and call_args[1] == "fetch":
+                fetch_found = True
+                assert "--no-tags" in call_args
+                assert "assembly-publish" in call_args
+                assert "refs/heads/fix:refs/remotes/assembly-publish/fix" in call_args
+                break
+        assert fetch_found, "No git fetch call found"
 
 
 class TestPublishTimeout:

@@ -240,10 +240,7 @@ async def assembly_app_publish(
         askpass = _write_git_askpass(tmp_dir_obj)
         auth_env = _git_auth_env(token, askpass)
 
-        # ---- Step 3: add temporary named remote and push ----
-        # A named remote is required so that --force-with-lease has a
-        # remote-tracking ref to check. Pushing directly to a URL makes
-        # the lease check a no-op.
+        # ---- Step 3: add temporary named remote ----
         remote_url = f"https://github.com/{repository}.git"
         rc = await _run_exec(
             ["git", "remote", "add", remote_name, remote_url],
@@ -261,6 +258,30 @@ async def assembly_app_publish(
                 error=f"Failed to add temporary remote {remote_name}",
             )
 
+        # ---- Step 3b: fetch target branch for lease baseline ----
+        rc_fetch = await _run_exec(
+            [
+                "git",
+                "fetch",
+                "--no-tags",
+                remote_name,
+                f"refs/heads/{branch}:refs/remotes/{remote_name}/{branch}",
+            ],
+            cwd=work_dir,
+            timeout_seconds=timeout_seconds,
+            env=auth_env,
+        )
+        if rc_fetch != 0:
+            # rc_fetch from _run_exec is -1 on timeout or the actual exit code
+            # on non-timeout; the stderr is logged at debug level below.
+            # A non-zero exit with "could not find remote ref" is expected on
+            # first push — the branch does not exist yet, so continue.
+            pass
+
+        # ---- Step 4: push via named remote ----
+        # --force-with-lease now has a remote-tracking ref to check because
+        # the fetch above (when the branch already exists on the remote)
+        # populated refs/remotes/<remote_name>/<branch>.
         argv = [
             "git",
             "push",

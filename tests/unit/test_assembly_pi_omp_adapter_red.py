@@ -162,11 +162,16 @@ class _CommandRecorder:
         if len(argv) > 1 and argv[1] == "clone":
             Path(argv[-1]).mkdir(parents=True, exist_ok=True)
         if len(argv) > 1 and argv[1] == "fetch":
+            if self.remote_branch_exists:
+                return _FakeProcess(argv, returncode=0, stdout="", stderr="")
+            # Simulate git fetch failure for a non-existent remote ref
+            # with the standard git error message.
+            fetch_ref = argv[-1] if len(argv) > 2 else "unknown"
             return _FakeProcess(
                 argv,
-                returncode=0 if self.remote_branch_exists else 128,
+                returncode=128,
                 stdout="",
-                stderr="",
+                stderr=f"fatal: couldn't find remote ref {fetch_ref}\n",
             )
         if "rev-parse" in argv and "--verify" in argv:
             return _FakeProcess(

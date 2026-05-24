@@ -229,6 +229,23 @@ class TestPublishBranch:
             f"remote add argv must contain the HTTPS URL, got: {remote_add_argv}"
         )
 
+        # Verify git fetch is called before push with the named remote
+        fetch_calls = [call for call in recorder.calls if "fetch" in " ".join(call["argv"])]
+        assert fetch_calls, "No git fetch call recorded"
+        fetch_argv = " ".join(fetch_calls[0]["argv"])
+        assert "assembly-publish" in fetch_argv, (
+            f"fetch argv must use the named remote, got: {fetch_argv}"
+        )
+        assert "--no-tags" in fetch_argv
+        assert f"refs/heads/{TEST_BRANCH}" in fetch_argv
+        assert f"refs/remotes/assembly-publish/{TEST_BRANCH}" in fetch_argv
+        # The fetch must appear before the push
+        fetch_idx = next(i for i, c in enumerate(recorder.calls) if "fetch" in " ".join(c["argv"]))
+        push_idx = next(i for i, c in enumerate(recorder.calls) if "push" in " ".join(c["argv"]))
+        assert fetch_idx < push_idx, (
+            f"fetch (index {fetch_idx}) must precede push (index {push_idx})"
+        )
+
     @pytest.mark.asyncio
     async def test_push_uses_force_with_lease_and_no_verify(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path

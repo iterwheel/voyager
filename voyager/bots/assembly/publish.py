@@ -224,10 +224,38 @@ async def publish_branch(
                 message=(f"Failed to add temporary remote {remote_name}: {stderr_add.strip()}"),
             )
 
-        # ---- Step 2: push via named remote ----
-        # --force-with-lease is safe here because the named remote
-        # establishes remote-tracking refs that the lease check can
-        # verify against.
+        # ---- Step 2: fetch target branch for lease baseline ----
+        # Fetch the branch into the named remote's tracking ref so that
+        # --force-with-lease has a baseline to check.  On first push the
+        # branch will not exist yet — tolerate that expected case.
+        rc_fetch, _stdout_fetch, stderr_fetch = await _run_git_push(
+            [
+                "git",
+                "fetch",
+                "--no-tags",
+                remote_name,
+                f"refs/heads/{branch_name}:refs/remotes/{remote_name}/{branch_name}",
+            ],
+            cwd=checkout_dir,
+            timeout_seconds=timeout_seconds,
+            env=env,
+        )
+        if rc_fetch != 0:
+            # A 128 exit with "could not find remote ref" is expected on first
+            # push; the branch does not exist yet.  Any other failure is real.
+            fetch_err = stderr_fetch.strip().lower()
+            if "couldn't find remote ref" not in fetch_err:
+                return PublishResult(
+                    success=False,
+                    message=(
+                        f"Failed to fetch {branch_name} from {remote_name}: {stderr_fetch.strip()}"
+                    ),
+                )
+
+        # ---- Step 3: push via named remote ----
+        # --force-with-lease now has a remote-tracking ref to check because
+        # the fetch above (when the branch already exists on the remote)
+        # populated refs/remotes/<remote_name>/<branch_name>.
         returncode, _stdout, stderr = await _run_git_push(
             [
                 "git",
