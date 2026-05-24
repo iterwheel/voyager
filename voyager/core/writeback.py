@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from .redaction import sanitize_public_text as _sanitize_public_text
+from .redaction import sanitize_public_text
 
 _log = logging.getLogger(__name__)
 
@@ -17,6 +17,11 @@ if TYPE_CHECKING:
     from .github_app import GitHubAppClient
 
 CLEARANCE_AGENT_SLUG = "iterwheel-clearance"  # voyager clearance bot App
+
+
+def _sanitize_public_text(value: Any, *, limit: int = 180) -> str:
+    """Redact public diagnostics, including github_pat_ and dotted ghs_ token shapes."""
+    return sanitize_public_text(value, limit=limit)
 
 
 def _graphql_error_public_fields(errors: list[dict[str, Any]]) -> dict[str, Any]:
