@@ -1831,7 +1831,5 @@ def then_stage15_skipped_action(ctx) -> None:
     auto = ctx["automation"]
     assert auto is not None, f"raised={ctx.get('raised')}"
     actions = auto.get("sync_actions") or []
-    skipped = [
-        a for a in actions if (a.get("result") or {}).get("skipped") is True
-    ]
+    skipped = [a for a in actions if (a.get("result") or {}).get("skipped") is True]
     assert skipped, f"no skipped actions found in sync_actions: {actions!r}"
