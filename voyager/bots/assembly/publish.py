@@ -64,6 +64,8 @@ class PublishResult:
         stdout: Captured stdout for the failed phase, if any.
         stderr: Captured stderr for the failed phase, if any.
         timed_out: True when the failed phase hit the configured timeout.
+        phase: Adapter failure diagnostic phase for the failed publish step.
+        command: Safe command label for the failed publish step.
     """
 
     success: bool
@@ -72,6 +74,8 @@ class PublishResult:
     stdout: str = ""
     stderr: str = ""
     timed_out: bool = False
+    phase: str = ""
+    command: str = ""
 
 
 def _github_safe_remote(repository: str) -> str:
@@ -237,6 +241,8 @@ async def publish_branch(
                 stdout=_stdout_add,
                 stderr=stderr_add,
                 timed_out=add_timed_out,
+                phase="git_publish_remote_add",
+                command="git remote add",
             )
         remote_created = True
 
@@ -273,6 +279,8 @@ async def publish_branch(
                     stdout=_stdout_fetch,
                     stderr=stderr_fetch,
                     timed_out=fetch_timed_out,
+                    phase="git_publish_fetch",
+                    command="git fetch",
                 )
 
         # ---- Step 3: push via named remote ----
@@ -308,6 +316,8 @@ async def publish_branch(
                 stdout=_stdout,
                 stderr=stderr,
                 timed_out=push_timed_out,
+                phase="git_push",
+                command="git push",
             )
 
         return PublishResult(

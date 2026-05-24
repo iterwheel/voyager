@@ -863,9 +863,9 @@ def _diagnostic_from_process(
 
 def _diagnostic_from_publish_result(result: Any, *, secret: str) -> dict[str, Any]:
     return _simple_diagnostic(
-        phase="git_push",
+        phase=str(getattr(result, "phase", None) or "git_push"),
         command_category="git",
-        command="git push",
+        command=str(getattr(result, "command", None) or "git push"),
         exit_code=result.returncode,
         timed_out=bool(result.timed_out),
         stdout_tail=str(result.stdout or ""),

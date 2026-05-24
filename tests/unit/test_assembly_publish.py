@@ -320,6 +320,8 @@ class TestPublishBranch:
 
         assert not result.success
         assert "failed to add temporary remote" in result.message.lower()
+        assert result.phase == "git_publish_remote_add"
+        assert result.command == "git remote add"
         remove_calls = [
             call
             for call in recorder.calls
@@ -400,6 +402,8 @@ class TestPublishBranch:
         assert not result.success
         assert "failed to fetch" in result.message.lower()
         assert "repository not found" in result.message.lower()
+        assert result.phase == "git_publish_fetch"
+        assert result.command == "git fetch"
         push_calls = [call for call in recorder.calls if "push" in " ".join(call["argv"])]
         assert not push_calls
 
@@ -607,3 +611,5 @@ class TestPublishBranch:
 
         assert not result.success
         assert "permission denied" in result.message.lower()
+        assert result.phase == "git_push"
+        assert result.command == "git push"

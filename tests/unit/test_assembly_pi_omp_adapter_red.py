@@ -492,6 +492,37 @@ async def test_pi_adapter_git_push_failure_records_diagnostic_and_retains_bundle
 
 
 @pytest.mark.asyncio
+async def test_pi_adapter_publish_failure_preserves_publish_phase(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    recorder = _CommandRecorder(status_porcelain="M voyager/example.py\n")
+    _install_command_fakes(monkeypatch, recorder)
+
+    async def fake_publish_branch(**kwargs: Any) -> PublishResult:
+        _ = kwargs
+        return PublishResult(
+            success=False,
+            message="git fetch failed",
+            returncode=128,
+            stderr="fatal: repository not found",
+            phase="git_publish_fetch",
+            command="git fetch",
+        )
+
+    monkeypatch.setattr(adapters_module, "publish_branch", fake_publish_branch)
+    adapter = PiOhMyPiDeepSeekAdapter()
+
+    result = await adapter.execute(_contract(), _context(tmp_path))
+
+    assert result.status == "failed"
+    failure = result.details["failure_diagnostic"]
+    assert failure["phase"] == "git_publish_fetch"
+    assert failure["command"] == "git fetch"
+    assert failure["command_category"] == "git"
+
+
+@pytest.mark.asyncio
 async def test_pi_adapter_verification_failure_records_sanitized_diagnostic(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
