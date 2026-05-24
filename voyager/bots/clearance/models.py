@@ -152,6 +152,7 @@ class Evidence(BaseModel):
 class GitHubThreadState(BaseModel):
     isResolved: bool  # noqa: N815 — mirrors GitHub GraphQL field name
     isOutdated: bool = False  # noqa: N815 — mirrors GitHub GraphQL field name
+    viewerCanResolve: bool = True  # noqa: N815 — mirrors GitHub GraphQL field name
     resolvedBy: str | None = None  # noqa: N815 — mirrors GitHub GraphQL field name
     synced_via: str | None = None
     synced_at: datetime | None = None

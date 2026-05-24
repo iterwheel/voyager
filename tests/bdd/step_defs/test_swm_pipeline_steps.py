@@ -208,6 +208,7 @@ def _codex_thread(
     thread_id: str = THREAD_ID,
     is_resolved: bool = False,
     is_outdated: bool = False,
+    viewer_can_resolve: bool = True,
     author_reply_body: str | None = None,
 ) -> dict[str, Any]:
     """Build a Codex review-thread dict shaped like the GraphQL response."""
@@ -234,6 +235,7 @@ def _codex_thread(
         "id": thread_id,
         "isResolved": is_resolved,
         "isOutdated": is_outdated,
+        "viewerCanResolve": viewer_can_resolve,
         "path": "app.py",
         "line": 10,
         "startLine": None,
@@ -1792,6 +1794,14 @@ def given_fork_head_not_accessible(ctx) -> None:
     ctx["client"]._head_repo_accessible = False
 
 
+@given("the thread viewerCanResolve is false")
+def given_thread_viewer_cannot_resolve(ctx) -> None:
+    """Modify the first thread to set viewerCanResolve=False."""
+    threads = ctx["client"].threads
+    assert threads, "no threads configured"
+    threads[0]["viewerCanResolve"] = False
+
+
 @then("exactly 0 resolveReviewThread mutations were invoked")
 def then_zero_resolve_mutations(ctx) -> None:
     count = len(ctx["client"].resolve_calls)
@@ -1813,3 +1823,15 @@ def then_stage15_suggested_fork(ctx) -> None:
     assert "install" in suggested.lower(), (
         f"expected 'install' in suggested_action, got {suggested!r}"
     )
+
+
+@then("the Stage 1.5 action has a skipped action")
+def then_stage15_skipped_action(ctx) -> None:
+    """Assert that a Stage 1.5 sync action has skipped=True."""
+    auto = ctx["automation"]
+    assert auto is not None, f"raised={ctx.get('raised')}"
+    actions = auto.get("sync_actions") or []
+    skipped = [
+        a for a in actions if (a.get("result") or {}).get("skipped") is True
+    ]
+    assert skipped, f"no skipped actions found in sync_actions: {actions!r}"

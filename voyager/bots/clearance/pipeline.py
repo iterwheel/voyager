@@ -326,6 +326,7 @@ async def _process_thread(
         github_state=GitHubThreadState(
             isResolved=bool(thread_dict.get("isResolved")),
             isOutdated=bool(thread_dict.get("isOutdated")),
+            viewerCanResolve=bool(thread_dict.get("viewerCanResolve", True)),
         ),
     )
     return thread_model, snapshot
@@ -416,6 +417,33 @@ async def _maybe_sync_stage_15(
         if not snap or not snap.github_state:
             continue
         if snap.github_state.isResolved:
+            continue
+
+        # Issue #100: skip resolveReviewThread when the viewer (Clearance app)
+        # cannot resolve this thread. This is non-fatal — the thread verdict is
+        # already RESOLVED; we just cannot sync the GitHub UI state for this
+        # particular thread. Record the skip as an operator-visible action
+        # without triggering a writeback failure.
+        if snap.github_state.viewerCanResolve is False:
+            skip_reason = (
+                f"Unsupported capability: Clearance cannot resolve thread "
+                f"{thread.id} because viewerCanResolve is false. "
+                f"The thread verdict is already RESOLVED; no action needed."
+            )
+            _log.info(skip_reason)
+            actions.append(
+                Stage15Action(
+                    mutation=Stage15Mutation.RESOLVE_REVIEW_THREAD,
+                    threadId=thread.id,
+                    result={
+                        "skipped": True,
+                        "skip_reason": "viewerCanResolve is false",
+                        "repo": repository,
+                        "pr": pr,
+                        "thread_id": thread.id,
+                    },
+                )
+            )
             continue
 
         comment_body = build_close_reason_comment(thread, snap, head_sha=head_sha)
@@ -518,6 +546,7 @@ async def _maybe_sync_stage_15(
         snap.github_state = GitHubThreadState(
             isResolved=True,
             isOutdated=snap.github_state.isOutdated,
+            viewerCanResolve=snap.github_state.viewerCanResolve,
             resolvedBy=(result or {}).get("resolvedBy", {}).get("login"),
             synced_via="Stage 1.5 resolveReviewThread",
             synced_at=now,

@@ -287,6 +287,7 @@ class GitHubAppClient:
                   id
                   isResolved
                   isOutdated
+                  viewerCanResolve
                   path
                   line
                   startLine
