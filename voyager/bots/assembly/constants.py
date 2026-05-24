@@ -32,6 +32,8 @@ ASSEMBLY_PI_WORKDIR_ENV = "ASSEMBLY_PI_WORKDIR"
 ASSEMBLY_PI_DEFAULT_COMMAND_PATH = "omp"
 ASSEMBLY_PI_DEFAULT_TIMEOUT_SECONDS = 900
 ASSEMBLY_PI_DEFAULT_WORKDIR = "~/.voyager/state/assembly"
+ASSEMBLY_VERIFICATION_COMMANDS_ENV = "ASSEMBLY_VERIFICATION_COMMANDS"
+ASSEMBLY_VERIFICATION_COMMANDS_REPOSITORY_ENV_PREFIX = "ASSEMBLY_VERIFICATION_COMMANDS_"
 
 # VOY-1811 §Codex Review Trigger Phase 8 — pin per D12.
 CODEX_REVIEW_BOT_LOGIN = "chatgpt-codex-connector[bot]"
@@ -60,8 +62,8 @@ AUTHORIZED_ASSOCIATIONS_ENV = "BRIDGE_ASSEMBLY_AUTHORIZED_ASSOCIATIONS"
 DEFAULT_AUTHORIZED_ASSOCIATIONS: tuple[str, ...] = ("OWNER", "MEMBER", "COLLABORATOR")
 
 # Verification commands the adapter is expected to run before pushing
-# commits. Locked per D9 so a future backend cannot silently weaken
-# verification.
+# commits. Locked per D9 as the default command set; operators may override
+# via trusted runtime env for non-Voyager repositories.
 VERIFICATION_COMMANDS: tuple[str, ...] = (
     "pytest tests/",
     "ruff check .",

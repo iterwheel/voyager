@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from voyager.bots.assembly.constants import FORBIDDEN_OPERATIONS, VERIFICATION_COMMANDS
+from voyager.bots.assembly.constants import (
+    ASSEMBLY_VERIFICATION_COMMANDS_ENV,
+    FORBIDDEN_OPERATIONS,
+    VERIFICATION_COMMANDS,
+)
 from voyager.bots.assembly.job_contract import build_job_contract
 
 _ISSUE_BODY = """## Problem / Goal
@@ -60,6 +64,102 @@ def test_verification_commands_present() -> None:
     data = _build()
     assert tuple(data["verification_commands"]) == VERIFICATION_COMMANDS
     assert "pytest tests/" in data["verification_commands"]
+
+
+def test_verification_commands_can_be_overridden_per_repository(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "ASSEMBLY_VERIFICATION_COMMANDS_FRANKYXHL__TRINITY",
+        "make verify-built;;af validate --root .",
+    )
+    monkeypatch.setenv(ASSEMBLY_VERIFICATION_COMMANDS_ENV, "should not run")
+    contract = build_job_contract(
+        issue={
+            "number": 79,
+            "title": "[Refactor]: Manifest-driven install file lists",
+            "html_url": "https://github.com/frankyxhl/trinity/issues/79",
+            "body": _ISSUE_BODY,
+        },
+        repository="frankyxhl/trinity",
+        branch_name="79-manifest-driven-install-file-lists",
+        delivery_id="abc-123",
+    ).to_dict()
+    assert tuple(contract["verification_commands"]) == (
+        "make verify-built",
+        "af validate --root .",
+    )
+
+
+def test_verification_commands_can_be_overridden_globally(monkeypatch) -> None:
+    monkeypatch.setenv(
+        ASSEMBLY_VERIFICATION_COMMANDS_ENV,
+        "make verify-built\naf validate --root .",
+    )
+    contract = build_job_contract(
+        issue={
+            "number": 79,
+            "title": "[Refactor]: Manifest-driven install file lists",
+            "html_url": "https://github.com/frankyxhl/trinity/issues/79",
+            "body": _ISSUE_BODY,
+        },
+        repository="frankyxhl/trinity",
+        branch_name="79-manifest-driven-install-file-lists",
+        delivery_id="abc-123",
+    ).to_dict()
+    assert tuple(contract["verification_commands"]) == (
+        "make verify-built",
+        "af validate --root .",
+    )
+
+
+def test_verification_commands_empty_repository_override_is_explicit(monkeypatch) -> None:
+    monkeypatch.setenv("ASSEMBLY_VERIFICATION_COMMANDS_FRANKYXHL__TRINITY", "")
+    contract = build_job_contract(
+        issue={
+            "number": 79,
+            "title": "[Refactor]: Manifest-driven install file lists",
+            "html_url": "https://github.com/frankyxhl/trinity/issues/79",
+            "body": _ISSUE_BODY,
+        },
+        repository="frankyxhl/trinity",
+        branch_name="79-manifest-driven-install-file-lists",
+        delivery_id="abc-123",
+    ).to_dict()
+    assert tuple(contract["verification_commands"]) == ()
+
+
+def test_verification_commands_repository_keys_do_not_collide(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "ASSEMBLY_VERIFICATION_COMMANDS_FOO_DBAR__BAZ",
+        "make verify-built",
+    )
+    monkeypatch.setenv(
+        "ASSEMBLY_VERIFICATION_COMMANDS_FOO__BAR_UBAZ",
+        "af validate --root .",
+    )
+    hyphen_contract = build_job_contract(
+        issue={
+            "number": 1,
+            "title": "A",
+            "html_url": "https://example/issues/1",
+            "body": _ISSUE_BODY,
+        },
+        repository="foo-bar/baz",
+        branch_name="1-a",
+        delivery_id="abc-123",
+    ).to_dict()
+    underscore_contract = build_job_contract(
+        issue={
+            "number": 2,
+            "title": "B",
+            "html_url": "https://example/issues/2",
+            "body": _ISSUE_BODY,
+        },
+        repository="foo/bar_baz",
+        branch_name="2-b",
+        delivery_id="abc-123",
+    ).to_dict()
+    assert tuple(hyphen_contract["verification_commands"]) == ("make verify-built",)
+    assert tuple(underscore_contract["verification_commands"]) == ("af validate --root .",)
 
 
 def test_acceptance_criteria_extracted_from_bullets() -> None:

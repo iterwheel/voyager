@@ -6,12 +6,18 @@ acceptance-criteria and task-summary fallbacks.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from .constants import FORBIDDEN_OPERATIONS, VERIFICATION_COMMANDS
+from .constants import (
+    ASSEMBLY_VERIFICATION_COMMANDS_ENV,
+    ASSEMBLY_VERIFICATION_COMMANDS_REPOSITORY_ENV_PREFIX,
+    FORBIDDEN_OPERATIONS,
+    VERIFICATION_COMMANDS,
+)
 
 
 @dataclass(frozen=True)
@@ -157,6 +163,47 @@ def _extract_acceptance_criteria(body: str, title: str) -> tuple[list[str], str]
     return [], "empty_fallback"
 
 
+def _verification_commands_env_key(repository: str) -> str:
+    encoded: list[str] = []
+    for char in repository.lower():
+        if char.isalnum():
+            encoded.append(char.upper())
+        elif char == "/":
+            encoded.append("__")
+        elif char == "_":
+            encoded.append("_U")
+        elif char == "-":
+            encoded.append("_D")
+        else:
+            encoded.append(f"_X{ord(char):02X}")
+    return f"{ASSEMBLY_VERIFICATION_COMMANDS_REPOSITORY_ENV_PREFIX}{''.join(encoded)}"
+
+
+def _parse_verification_commands(value: str) -> tuple[str, ...]:
+    return tuple(item.strip() for item in re.split(r"(?:\n|;;)+", value) if item.strip())
+
+
+def _verification_commands_for_repository(repository: str) -> tuple[str, ...]:
+    """Return operator-trusted verification commands for this repository.
+
+    The default remains the D9-locked Voyager command set. Env overrides are
+    trusted runtime configuration, not issue/model-controlled input:
+    - ASSEMBLY_VERIFICATION_COMMANDS_<encoded-repo> wins for a specific repo.
+    - ASSEMBLY_VERIFICATION_COMMANDS is the global fallback.
+    - unset env falls back to VERIFICATION_COMMANDS.
+
+    Values are split on newlines or ``;;`` so launchd env files can keep the
+    override on one quoted line.
+    """
+    repository_specific = os.environ.get(_verification_commands_env_key(repository))
+    if repository_specific is not None:
+        return _parse_verification_commands(repository_specific)
+    global_value = os.environ.get(ASSEMBLY_VERIFICATION_COMMANDS_ENV)
+    if global_value is not None:
+        return _parse_verification_commands(global_value)
+    return VERIFICATION_COMMANDS
+
+
 def build_job_contract(
     *,
     issue: dict[str, Any],
@@ -181,7 +228,7 @@ def build_job_contract(
         task_summary=task_summary,
         acceptance_criteria=criteria,
         forbidden_operations=FORBIDDEN_OPERATIONS,
-        verification_commands=VERIFICATION_COMMANDS,
+        verification_commands=_verification_commands_for_repository(repository),
         delivery_id=delivery_id,
         requested_at=datetime.now(UTC).isoformat(),
         acceptance_criteria_source=ac_source,

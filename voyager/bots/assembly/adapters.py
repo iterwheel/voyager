@@ -510,8 +510,9 @@ async def _run_verification_commands(
     timeout_seconds: int,
     env: dict[str, str],
 ) -> str | None:
-    # Trust boundary: these shell commands come from the D9-locked
-    # VERIFICATION_COMMANDS constant, not user/model-controlled input.
+    # Trust boundary: these shell commands come from the D9-locked default
+    # command set or trusted operator runtime config, not user/model-controlled
+    # input.
     for command in contract.verification_commands:
         result = await _run_shell(
             command,

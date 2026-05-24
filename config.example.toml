@@ -76,6 +76,12 @@ default_profile = "flash_no_thinking"
 #   ASSEMBLY_PI_TIMEOUT_SECONDS=900
 #   ASSEMBLY_PI_WORKDIR=~/.voyager/state/assembly
 #
+# Optional operator-trusted verification override. Defaults remain
+# Voyager-specific (`pytest tests/`, `ruff check .`, `mypy voyager`); use a
+# repo-specific key when expanding Assembly beyond Voyager/sandbox. Commands
+# are split on newlines or `;;`:
+#   ASSEMBLY_VERIFICATION_COMMANDS_FRANKYXHL__TRINITY="make verify-built;;af validate --root ."
+#
 # Activate actor authorization (default: empty / deny). Either env var alone is
 # sufficient — a comment is authorized when its login is on the allow-list OR
 # its author_association is in the trusted set. Bot actors are always refused
