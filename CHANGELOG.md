@@ -8,6 +8,49 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-05-24
+
+### Added — Assembly production-loop SOPs and audit lookup ([#94](https://github.com/iterwheel/voyager/issues/94), [#95](https://github.com/iterwheel/voyager/pull/95), [#92](https://github.com/iterwheel/voyager/issues/92), [#97](https://github.com/iterwheel/voyager/pull/97))
+
+- Added `VOY-1822`, the Assembly-driven implementation loop SOP for real issue
+  to PR work, including Codex review settle gates, Clearance handoff, retry
+  rules, and operator checklists.
+- Added private Assembly OMP audit manifests plus `VOY-1823` audit lookup
+  guidance so operators can inspect backend session metadata without putting
+  secrets or private traces on GitHub.
+
+### Added — Assembly repository-specific verification commands ([#90](https://github.com/iterwheel/voyager/issues/90), [#91](https://github.com/iterwheel/voyager/pull/91))
+
+- Added per-repository Assembly verification command overrides via
+  `ASSEMBLY_VERIFICATION_COMMANDS_<encoded-repo>`, with config examples for
+  repositories whose test/lint/typecheck commands differ from Voyager's
+  defaults.
+
+### Changed — Codex review settle gate for managed Assembly loops ([#98](https://github.com/iterwheel/voyager/issues/98), [#101](https://github.com/iterwheel/voyager/pull/101))
+
+- Tightened `VOY-1822` so operators wait for a terminal Codex review signal on
+  the current head SHA, including a delayed-review settle check, before
+  declaring an Assembly PR ready for approval.
+
+### Fixed — Clearance unsupported auto-resolve boundary ([#100](https://github.com/iterwheel/voyager/issues/100), [#103](https://github.com/iterwheel/voyager/pull/103))
+
+- Clearance Stage 1.5 now skips unsupported auto-resolve attempts when GitHub
+  reports that the viewer cannot resolve a review thread, instead of trying a
+  mutation that is known to fail.
+
+### Changed — Same-repository PR requirement for managed Assembly flows ([#99](https://github.com/iterwheel/voyager/issues/99), [#104](https://github.com/iterwheel/voyager/pull/104))
+
+- `VOY-1822` now requires managed Assembly/Codex implementation PRs to use a
+  branch in the target repository, so `headRepository == baseRepository`.
+  Fork PRs remain a human-managed exception path and are documented as a
+  Clearance auto-resolve risk.
+- Assembly writeback now verifies existing, newly-created, and duplicate
+  no-change PR contexts before preserving them, failing closed when PR
+  repository metadata is missing or points at a fork.
+- Release guidance now cross-links the human-managed fork release flow to the
+  managed-flow same-repository requirement, so future agents do not copy the
+  release PR topology into Assembly-managed work.
+
 ## [0.4.0] — 2026-05-24
 
 ### Added — Assembly bot MVP and GitHub App writeback ([#67](https://github.com/iterwheel/voyager/issues/67), [#68](https://github.com/iterwheel/voyager/issues/68), [#69](https://github.com/iterwheel/voyager/pull/74))
