@@ -110,8 +110,12 @@ repositories, manage secrets, deploy production, or merge code directly.
    - `Pull requests: read & write` allows PR review workflow participation for
      Clearance. Countdown also receives pull-request write access so it can
      create approving reviews, resolve review threads through the GraphQL API,
-     and react to pull request review comments. Stack does not need pull request
-     access because it is issue-only.
+     and react to pull request review comments. Review-thread resolution is
+     still gated by GitHub's GraphQL `viewerCanResolve` field; same-repository
+     PRs can return `viewerCanResolve=false`, so Clearance must skip the
+     mutation and surface the skip instead of assuming same-repo implies
+     resolvability. Stack does not need pull request access because it is
+     issue-only.
    - `Checks: read & write` allows each bot that publishes a verdict to create
      check runs.
    - `Actions: read-only` and `Commit statuses: read-only` are reserved for bots

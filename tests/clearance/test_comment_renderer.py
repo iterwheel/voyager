@@ -144,6 +144,31 @@ def test_writeback_failure_warning_appears_in_comment() -> None:
     assert "Verify the GitHub App permissions" in comment
 
 
+def test_graphql_writeback_failure_summary_appears_in_comment() -> None:
+    from voyager.bots.clearance.enrichment import build_clearance_comment
+
+    automation = _automation_with_writeback_failure(
+        error_class="GraphQLError",
+        http_status=None,
+    )
+    automation["writeback_failures"][0].update(
+        {
+            "graphql_error_types": ["FORBIDDEN"],
+            "graphql_error_messages": ["Resource not accessible by integration"],
+            "graphql_error_summary": "FORBIDDEN: Resource not accessible by integration",
+            "suggested_action": "Check reviewThreads.viewerCanResolve before retrying.",
+        }
+    )
+    comment = build_clearance_comment(
+        _evaluation(status="clearance_blocked", label="clearance-2-blocked"),
+        automation=automation,
+        provenance={"updated_at": "2026-05-17T00:00:00Z"},
+    )
+
+    assert "GitHub GraphQL: FORBIDDEN: Resource not accessible by integration." in comment
+    assert "reviewThreads.viewerCanResolve" in comment
+
+
 def test_writeback_failure_warning_contains_no_secrets() -> None:
     from voyager.bots.clearance.enrichment import build_clearance_comment
 

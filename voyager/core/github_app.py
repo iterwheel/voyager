@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -197,6 +198,12 @@ class GitHubAppClient:
         response.raise_for_status()
         data = response.json()
         if data.get("errors"):
+            _log.warning(
+                "github.graphql.errors app_slug=%s repository=%s errors=%s",
+                app_slug,
+                repository,
+                json.dumps(data["errors"], default=str),
+            )
             raise GitHubGraphQLError(data["errors"])
         return data.get("data")
 

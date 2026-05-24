@@ -73,7 +73,9 @@ def test_build_writeback_failure_timeout_error():
 
 
 def test_build_writeback_failure_graphql_error():
-    exc = GitHubGraphQLError([{"type": "FORBIDDEN", "message": "not accessible"}])
+    exc = GitHubGraphQLError(
+        [{"type": "FORBIDDEN", "message": "Resource not accessible by integration"}]
+    )
     failure = build_writeback_failure(
         operation="resolveReviewThread",
         exc=exc,
@@ -84,6 +86,34 @@ def test_build_writeback_failure_graphql_error():
     assert failure["error_class"] == "GraphQLError"
     assert failure["status"] is None
     assert "Verify the GitHub App permissions" in failure["suggested_action"]
+    assert "viewerCanResolve" in failure["suggested_action"]
+    assert failure["graphql_error_types"] == ["FORBIDDEN"]
+    assert failure["graphql_error_messages"] == ["Resource not accessible by integration"]
+    assert failure["graphql_error_summary"] == "FORBIDDEN: Resource not accessible by integration"
+
+
+def test_build_writeback_failure_graphql_error_sanitizes_public_fields():
+    exc = GitHubGraphQLError(
+        [
+            {
+                "type": "FORBIDDEN",
+                "message": "Resource token=ghp_SECRET123 Bearer ghs_SECRET456 not accessible",
+            }
+        ]
+    )
+    failure = build_writeback_failure(
+        operation="resolveReviewThread",
+        exc=exc,
+        repository="iterwheel/sandbox",
+        pr=49,
+        thread_id="PRRT_abc",
+    )
+    all_text = str(failure)
+    assert "ghp_" not in all_text
+    assert "ghs_" not in all_text
+    assert "token=ghp" not in all_text
+    assert "token=[redacted]" in all_text
+    assert "Bearer [redacted]" in all_text
 
 
 def test_build_writeback_failure_http_status_error_403():
@@ -157,6 +187,23 @@ def test_format_warning_thread_operation():
     assert "⚠️ Automation writeback: resolveReviewThread failed (HTTPStatusError, HTTP 403)" in line
     assert "iterwheel/sandbox#49 thread PRRT_abc" in line
     assert "Verify permissions." in line
+
+
+def test_format_warning_includes_graphql_summary():
+    failure = {
+        "operation": "resolveReviewThread",
+        "error_class": "GraphQLError",
+        "status": None,
+        "repo": "iterwheel/sandbox",
+        "pr": 49,
+        "issue": None,
+        "thread_id": "PRRT_abc",
+        "graphql_error_summary": "FORBIDDEN: Resource not accessible by integration",
+        "suggested_action": "Check reviewThreads.viewerCanResolve before retrying.",
+    }
+    line = format_writeback_failure_warning(failure)
+    assert "GitHub GraphQL: FORBIDDEN: Resource not accessible by integration." in line
+    assert "reviewThreads.viewerCanResolve" in line
 
 
 def test_format_warning_issue_operation():

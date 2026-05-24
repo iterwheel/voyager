@@ -599,13 +599,14 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     And exactly 1 resolveReviewThread mutation was invoked
 
   # ---------------------------------------------------------------------------
-  # Issue #100: viewerCanResolve=false — same-repo unsupported auto-resolve
+  # Issues #100/#106: viewerCanResolve=false — same-repo unsupported auto-resolve
   # ---------------------------------------------------------------------------
 
-  Scenario: Issue #100 same-repo viewerCanResolve=false — resolveReviewThread skipped, reaches ready
+  Scenario: Issue #106 same-repo viewerCanResolve=false — resolveReviewThread skipped, reaches ready
     Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with substantive author reply and isResolved false
     And the thread viewerCanResolve is false
     When compute_clearance_automation runs with DRY_RUN false
     Then the automation status is "ready"
     And exactly 0 resolveReviewThread mutations were invoked
     And the Stage 1.5 action has a skipped action
+    And the Stage 1.5 skipped action reason is "viewerCanResolve is false"

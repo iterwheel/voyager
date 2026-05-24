@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -15,6 +16,39 @@ if TYPE_CHECKING:
     from .github_app import GitHubAppClient
 
 CLEARANCE_AGENT_SLUG = "iterwheel-clearance"  # voyager clearance bot App
+_GITHUB_TOKEN_RE = re.compile(r"\bgh[opsru]_[A-Za-z0-9_]+\b")
+_TOKEN_QUERY_RE = re.compile(r"(?i)(token=)[^\s&]+")
+
+
+def _sanitize_public_text(value: Any, *, limit: int = 180) -> str:
+    text = " ".join(str(value or "").split())
+    text = _GITHUB_TOKEN_RE.sub("[redacted]", text)
+    text = _TOKEN_QUERY_RE.sub(r"\1[redacted]", text)
+    text = text.replace("Bearer ", "Bearer [redacted] ")
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+
+def _graphql_error_public_fields(errors: list[dict[str, Any]]) -> dict[str, Any]:
+    types: list[str] = []
+    messages: list[str] = []
+    for error in errors[:3]:
+        error_type = _sanitize_public_text(error.get("type") or "unknown", limit=80)
+        message = _sanitize_public_text(error.get("message") or "", limit=180)
+        if error_type and error_type not in types:
+            types.append(error_type)
+        if message and message not in messages:
+            messages.append(message)
+
+    first_type = types[0] if types else "unknown"
+    first_message = messages[0] if messages else "no message"
+    summary = f"{first_type}: {first_message}"
+    return {
+        "graphql_error_types": types,
+        "graphql_error_messages": messages,
+        "graphql_error_summary": _sanitize_public_text(summary, limit=220),
+    }
 
 
 def _safe_exception_fields(exc: BaseException) -> dict[str, Any]:
@@ -60,7 +94,11 @@ def build_writeback_failure(
 
     # Determine suggested_action based on failure family
     if isinstance(exc, GitHubGraphQLError):
-        suggested_action = "Verify the GitHub App permissions, repository installation, and installation access for this operation."
+        suggested_action = (
+            "Verify the GitHub App permissions, repository installation, and installation "
+            "access for this operation. For resolveReviewThread, check "
+            "reviewThreads.viewerCanResolve before retrying."
+        )
     elif isinstance(exc, _httpx.HTTPStatusError) and exc.response is not None:
         code = exc.response.status_code
         if code == 429:
@@ -80,7 +118,7 @@ def build_writeback_failure(
     else:
         suggested_action = "Review the structured writeback failure fields and retry after correcting the operation target."
 
-    return {
+    failure = {
         "operation": operation,
         "error_class": error_class,
         "status": status,
@@ -90,6 +128,9 @@ def build_writeback_failure(
         "thread_id": thread_id,
         "suggested_action": suggested_action,
     }
+    if isinstance(exc, GitHubGraphQLError):
+        failure.update(_graphql_error_public_fields(exc.errors))
+    return failure
 
 
 def format_writeback_failure_warning(failure: dict[str, Any]) -> str:
@@ -106,6 +147,8 @@ def format_writeback_failure_warning(failure: dict[str, Any]) -> str:
     issue = failure.get("issue")
     thread_id = failure.get("thread_id")
     suggested_action = failure.get("suggested_action", "")
+    graphql_summary = failure.get("graphql_error_summary")
+    details = f" GitHub GraphQL: {graphql_summary}." if graphql_summary else ""
 
     status_part = f", HTTP {status}" if status is not None else ""
 
@@ -114,17 +157,17 @@ def format_writeback_failure_warning(failure: dict[str, Any]) -> str:
         thread_part = f" thread {thread_id}" if thread_id else ""
         return (
             f"⚠️ Automation writeback: {operation} failed ({error_class}{status_part}) "
-            f"on {target}{thread_part}. {suggested_action}"
+            f"on {target}{thread_part}.{details} {suggested_action}"
         )
     elif issue is not None:
         return (
             f"⚠️ Automation writeback: {operation} failed ({error_class}{status_part}) "
-            f"on {repo}#{issue}. {suggested_action}"
+            f"on {repo}#{issue}.{details} {suggested_action}"
         )
     else:
         return (
             f"⚠️ Automation writeback: {operation} failed ({error_class}{status_part}) "
-            f"on {repo} unknown target. {suggested_action}"
+            f"on {repo} unknown target.{details} {suggested_action}"
         )
 
 

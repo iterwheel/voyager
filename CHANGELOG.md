@@ -15,6 +15,13 @@ release note for the explicit migration path.
   auto-resolve attempts so operators can tell when GitHub conversations remain
   visually unresolved even though Clearance no longer treats them as blockers.
 
+### Fixed — Clearance same-repo auto-resolve diagnostics ([#106](https://github.com/iterwheel/voyager/issues/106))
+
+- Clearance now preserves sanitized GitHub GraphQL error type/message details
+  in writeback failures, includes them in readiness warnings, and documents that
+  even same-repository PR review threads must be gated on `viewerCanResolve`
+  before attempting `resolveReviewThread`.
+
 ## [0.4.1] — 2026-05-24
 
 ### Added — Assembly production-loop SOPs and audit lookup ([#94](https://github.com/iterwheel/voyager/issues/94), [#95](https://github.com/iterwheel/voyager/pull/95), [#92](https://github.com/iterwheel/voyager/issues/92), [#97](https://github.com/iterwheel/voyager/pull/97))

@@ -1833,3 +1833,14 @@ def then_stage15_skipped_action(ctx) -> None:
     actions = auto.get("sync_actions") or []
     skipped = [a for a in actions if (a.get("result") or {}).get("skipped") is True]
     assert skipped, f"no skipped actions found in sync_actions: {actions!r}"
+
+
+@then(parsers.parse('the Stage 1.5 skipped action reason is "{reason}"'))
+def then_stage15_skipped_action_reason(ctx, reason: str) -> None:
+    auto = ctx["automation"]
+    assert auto is not None, f"raised={ctx.get('raised')}"
+    actions = auto.get("sync_actions") or []
+    skipped = [a for a in actions if (a.get("result") or {}).get("skipped") is True]
+    assert skipped, f"no skipped actions found in sync_actions: {actions!r}"
+    actual = (skipped[0].get("result") or {}).get("skip_reason")
+    assert actual == reason, f"expected skip_reason={reason!r}, got {actual!r}"
