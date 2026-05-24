@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from voyager.core.redaction import sanitize_public_text
+
 from .audit import lookup_hint
 from .constants import ASSEMBLY_COMMENT_MARKER
 
@@ -24,6 +26,39 @@ def _format_failures(failures: list[dict[str, Any]] | None) -> list[str]:
         status_part = f", HTTP {status}" if status is not None else ""
         suggested = fail.get("suggested_action", "")
         lines.append(f"- `{op}` failed ({cls}{status_part}). {suggested}")
+    return lines
+
+
+def _format_backend_failure(adapter_result: dict[str, Any]) -> list[str]:
+    details = adapter_result.get("details")
+    if not isinstance(details, dict):
+        return []
+    failure = details.get("failure_diagnostic")
+    if not isinstance(failure, dict) or not failure:
+        return []
+
+    phase = sanitize_public_text(failure.get("phase") or "unknown", limit=80)
+    category = sanitize_public_text(failure.get("command_category") or "unknown", limit=80)
+    exit_code = failure.get("exit_code")
+    timed_out = bool(failure.get("timed_out"))
+    stderr_tail = sanitize_public_text(failure.get("stderr_tail") or "", limit=260)
+    stdout_tail = sanitize_public_text(failure.get("stdout_tail") or "", limit=180)
+    lines = [
+        "",
+        "**Backend failure diagnostics:**",
+        f"- Phase: `{phase}`",
+        f"- Command: `{category}`",
+    ]
+    if exit_code is not None:
+        lines.append(f"- Exit code: `{exit_code}`")
+    if timed_out:
+        lines.append("- Timeout: `true`")
+    if stderr_tail:
+        lines.append(f"- Stderr tail: `{stderr_tail}`")
+    elif stdout_tail:
+        lines.append(f"- Stdout tail: `{stdout_tail}`")
+    if details.get("failure_debug_bundle_path"):
+        lines.append("- Debug bundle: recorded in the private audit manifest.")
     return lines
 
 
@@ -151,6 +186,8 @@ def build_assembly_comment(
     repository = contract.get("repository") or ""
     if audit_id and repository and issue_number:
         lines.append(f"- {lookup_hint(audit_id, str(repository), int(issue_number))}")
+
+    lines.extend(_format_backend_failure(adapter_result))
 
     criteria = contract.get("acceptance_criteria") or []
     if criteria:

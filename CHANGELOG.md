@@ -8,6 +8,15 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+### Added — Assembly backend failure diagnostics ([#93](https://github.com/iterwheel/voyager/issues/93))
+
+- Assembly now records sanitized subprocess backend failure diagnostics for
+  clone/config/fetch/checkout/OMP/git/verification/push phases, surfaces a
+  compact public failure panel in progress comments, and retains failed OMP
+  checkouts under a deterministic private debug bundle path.
+- Added `VOY-1824`, the Assembly failure diagnostics SOP, and extended private
+  audit manifests with `failure_diagnostic` and `failure_debug_bundle_path`.
+
 ## [0.4.2] — 2026-05-25
 
 ### Added — Assembly resumable backend sessions ([#105](https://github.com/iterwheel/voyager/issues/105))

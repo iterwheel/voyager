@@ -60,10 +60,18 @@ class PublishResult:
     Attributes:
         success: True when the push completed without error.
         message: Human-readable summary of the result (success or failure).
+        returncode: Git subprocess return code for the failed phase, if known.
+        stdout: Captured stdout for the failed phase, if any.
+        stderr: Captured stderr for the failed phase, if any.
+        timed_out: True when the failed phase hit the configured timeout.
     """
 
     success: bool
     message: str = ""
+    returncode: int | None = None
+    stdout: str = ""
+    stderr: str = ""
+    timed_out: bool = False
 
 
 def _github_safe_remote(repository: str) -> str:
@@ -224,6 +232,10 @@ async def publish_branch(
             return PublishResult(
                 success=False,
                 message=(f"Failed to add temporary remote {remote_name}: {stderr_add.strip()}"),
+                returncode=rc_add,
+                stdout=_stdout_add,
+                stderr=stderr_add,
+                timed_out="timed out" in stderr_add.lower(),
             )
         remote_created = True
 
@@ -256,6 +268,10 @@ async def publish_branch(
                     message=(
                         f"Failed to fetch {branch_name} from {remote_name}: {stderr_fetch.strip()}"
                     ),
+                    returncode=rc_fetch,
+                    stdout=_stdout_fetch,
+                    stderr=stderr_fetch,
+                    timed_out="timed out" in stderr_fetch.lower(),
                 )
 
         # ---- Step 3: push via named remote ----
@@ -287,6 +303,10 @@ async def publish_branch(
             return PublishResult(
                 success=False,
                 message=f"git push failed (exit {returncode}): {stderr.strip()}",
+                returncode=returncode,
+                stdout=_stdout,
+                stderr=stderr,
+                timed_out="timed out" in stderr.lower(),
             )
 
         return PublishResult(

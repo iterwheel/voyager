@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from voyager.bots.assembly import adapters as adapters_module
 from voyager.bots.assembly import writeback as writeback_module
 from voyager.bots.assembly.adapters import (
     AdapterExecutionContext,
@@ -26,6 +27,7 @@ from voyager.bots.assembly.adapters import (
 )
 from voyager.bots.assembly.constants import ASSEMBLY_BACKEND_PI_OH_MY_PI_DEEPSEEK
 from voyager.bots.assembly.job_contract import build_job_contract
+from voyager.bots.assembly.publish import PublishResult
 
 VALID_SHA = "0123456789abcdef0123456789abcdef01234567"
 INSTALLATION_TOKEN = "ghs_stage2_real_omp_secret_token"
@@ -54,6 +56,7 @@ def _context(
     token: str = INSTALLATION_TOKEN,
     session_mode: str = "fresh",
     resume_session_id: str | None = None,
+    audit_id: str = "asmb-0123456789abcdef",
 ) -> AdapterExecutionContext:
     return AdapterExecutionContext(
         repository="iterwheel/voyager-sandbox",
@@ -64,6 +67,7 @@ def _context(
         resume_requested=resume_session_id is not None,
         session_mode=session_mode,
         resume_session_id=resume_session_id,
+        audit_id=audit_id,
     )
 
 
@@ -431,6 +435,102 @@ async def test_pi_adapter_uses_askpass_without_installation_token_in_argv(
     clone_calls = recorder.git_calls("clone")
     assert clone_calls
     assert "https://github.com/iterwheel/voyager-sandbox.git" in clone_calls[0]["argv"]
+
+
+@pytest.mark.asyncio
+async def test_pi_adapter_git_push_failure_records_diagnostic_and_retains_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    token = "ghs_stage2_push_failure_secret"
+    recorder = _CommandRecorder(status_porcelain="M voyager/example.py\n")
+    _install_command_fakes(monkeypatch, recorder)
+    audit_id = "asmb-0123456789abcdef"
+
+    async def fake_publish_branch(**kwargs: Any) -> PublishResult:
+        assert kwargs["installation_token"] == token
+        return PublishResult(
+            success=False,
+            message="git push failed (exit 128)",
+            returncode=128,
+            stdout="",
+            stderr=(
+                "remote: Invalid username or token "
+                f"ASSEMBLY_GITHUB_TOKEN={token} "
+                "DEEPSEEK_API_KEY=sk-live-secret"
+            ),
+        )
+
+    monkeypatch.setattr(adapters_module, "publish_branch", fake_publish_branch)
+    adapter = PiOhMyPiDeepSeekAdapter()
+
+    result = await adapter.execute(_contract(), _context(tmp_path, token=token, audit_id=audit_id))
+
+    assert result.status == "failed"
+    assert result.commit_shas == []
+    failure = result.details["failure_diagnostic"]
+    assert failure["phase"] == "git_push"
+    assert failure["command_category"] == "git"
+    assert failure["exit_code"] == 128
+    assert failure["timed_out"] is False
+    serialized = json.dumps(result.details, sort_keys=True)
+    assert token not in serialized
+    assert "sk-live-secret" not in serialized
+    assert "ASSEMBLY_GITHUB_TOKEN=" not in serialized
+    bundle_path = Path(result.details["failure_debug_bundle_path"])
+    assert bundle_path == (
+        tmp_path / "failures" / "iterwheel" / "voyager-sandbox" / "1821" / audit_id
+    )
+    assert bundle_path.exists()
+    assert (bundle_path / "repo").exists()
+    metadata_path = bundle_path / "assembly-failure.json"
+    assert metadata_path.exists()
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert metadata["failure_diagnostic"]["phase"] == "git_push"
+    assert token not in json.dumps(metadata, sort_keys=True)
+    assert not list(tmp_path.glob("assembly-omp-*"))
+
+
+@pytest.mark.asyncio
+async def test_pi_adapter_verification_failure_records_sanitized_diagnostic(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    token = "ghs_stage2_verification_secret"
+    recorder = _CommandRecorder(status_porcelain="M voyager/example.py\n")
+    _install_command_fakes(monkeypatch, recorder)
+
+    async def fake_run_shell(
+        command: str,
+        *,
+        cwd: Path,
+        timeout_seconds: int,
+        env: dict[str, str],
+    ) -> adapters_module._ProcessResult:
+        _ = (command, cwd, timeout_seconds, env)
+        return adapters_module._ProcessResult(
+            returncode=7,
+            stdout=f"stdout leaked {token}",
+            stderr=(
+                f"pytest failed with ASSEMBLY_GITHUB_TOKEN={token} OPENAI_API_KEY=sk-proj-secret"
+            ),
+        )
+
+    monkeypatch.setattr(adapters_module, "_run_shell", fake_run_shell)
+    adapter = PiOhMyPiDeepSeekAdapter()
+
+    result = await adapter.execute(_contract(), _context(tmp_path, token=token))
+
+    assert result.status == "failed"
+    failure = result.details["failure_diagnostic"]
+    assert failure["phase"] == "verification"
+    assert failure["command_category"] == "verification"
+    assert failure["exit_code"] == 7
+    assert failure["command"] == "pytest tests/"
+    serialized = json.dumps(result.details, sort_keys=True)
+    assert token not in serialized
+    assert "sk-proj-secret" not in serialized
+    assert "ASSEMBLY_GITHUB_TOKEN=" not in serialized
 
 
 @pytest.mark.asyncio

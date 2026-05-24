@@ -133,6 +133,7 @@ async def _build_adapter_context(
     *,
     is_dry_run: bool,
     session: dict[str, Any] | None = None,
+    audit_id: str | None = None,
 ) -> AdapterExecutionContext:
     installation_token: str | None = None
     if getattr(adapter, "requires_installation_token", False) is True and not is_dry_run:
@@ -155,6 +156,7 @@ async def _build_adapter_context(
         resume_requested=bool(session.get("requested")),
         session_mode=str(session.get("mode") or "fresh"),
         resume_session_id=session.get("session_id"),
+        audit_id=audit_id,
     )
 
 
@@ -214,6 +216,36 @@ def _redact_secret(value: Any, secret: str | None) -> Any:
             _redact_secret(key, secret): _redact_secret(item, secret) for key, item in value.items()
         }
     return value
+
+
+def _log_adapter_failure_diagnostic(
+    *,
+    repository: str,
+    issue_number: int,
+    audit_id: str | None,
+    backend_name: str,
+    adapter_result: dict[str, Any],
+) -> None:
+    details = adapter_result.get("details")
+    if not isinstance(details, dict):
+        return
+    diagnostic = details.get("failure_diagnostic")
+    if not isinstance(diagnostic, dict) or not diagnostic:
+        return
+    _log.warning(
+        "Assembly backend failure diagnostic",
+        extra={
+            "repository": repository,
+            "issue": issue_number,
+            "audit_id": audit_id,
+            "backend": backend_name,
+            "phase": diagnostic.get("phase"),
+            "command_category": diagnostic.get("command_category"),
+            "exit_code": diagnostic.get("exit_code"),
+            "timed_out": diagnostic.get("timed_out"),
+            "failure_debug_bundle_path": details.get("failure_debug_bundle_path"),
+        },
+    )
 
 
 def _fresh_session(*, requested: bool = False) -> dict[str, Any]:
@@ -434,6 +466,8 @@ def _write_audit_manifest(
         checkout_dir=details.get("checkout_dir"),
         omp_session_jsonl_path=details.get("omp_session_jsonl_path"),
         exported_html_path=details.get("exported_html_path"),
+        failure_diagnostic=dict(details.get("failure_diagnostic") or {}),
+        failure_debug_bundle_path=details.get("failure_debug_bundle_path"),
         verification_commands=tuple(contract.verification_commands),
         adapter_status=adapter_result.get("status"),
         adapter_summary=adapter_result.get("summary"),
@@ -675,6 +709,7 @@ async def dispatch_assembly_writeback(
                 repository,
                 is_dry_run=is_dry_run,
                 session=base_result.get("session"),
+                audit_id=base_result.get("audit_id"),
             )
             adapter_result = await _execute_adapter(adapter, contract, adapter_context)
         except NotImplementedError as exc:
@@ -716,6 +751,13 @@ async def dispatch_assembly_writeback(
                 "summary": _redact_secret(adapter_result.summary, secret),
                 "details": _redact_secret(adapter_result.details, secret),
             }
+            _log_adapter_failure_diagnostic(
+                repository=repository,
+                issue_number=contract.issue_number,
+                audit_id=base_result.get("audit_id"),
+                backend_name=backend_name,
+                adapter_result=base_result["adapter_result"],
+            )
         else:
             base_result["adapter_result"] = {
                 "status": "failed",

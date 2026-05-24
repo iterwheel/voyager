@@ -1,13 +1,13 @@
 # SOP-1823: Assembly OMP Audit Lookup
 
 **Applies to:** Voyager Assembly bot operators and managed repositories
-**Last updated:** 2026-05-24
-**Last reviewed:** 2026-05-24
+**Last updated:** 2026-05-25
+**Last reviewed:** 2026-05-25
 **Status:** Active
 **Date:** 2026-05-24
 **Requested by:** Frank Xu (via issue #92)
 **Priority:** P2
-**Related:** VOY-1817, VOY-1821, VOY-1822, #92, #93
+**Related:** VOY-1817, VOY-1821, VOY-1822, VOY-1824, #92, #93
 
 ---
 
@@ -109,10 +109,12 @@ Before lookup:
    - `session_mode`
    - `resume_requested`
    - `resume_fallback_reason`
-   - `session_id`
-   - `expected_head_sha`
-   - `created_at`
-   - `completed_at`
+  - `session_id`
+  - `expected_head_sha`
+   - `failure_diagnostic`
+   - `failure_debug_bundle_path`
+  - `created_at`
+  - `completed_at`
 
 6. If `omp_session_jsonl_path` is present, inspect the JSONL transcript
    locally. Keep it private.
@@ -210,8 +212,17 @@ If the transcript exists but the checkout path is missing:
 - The checkout may have been cleaned by an older backend or operator cleanup.
 - Use the commit SHA and PR branch as the durable GitHub-side record.
 
+If `failure_diagnostic` or `failure_debug_bundle_path` is present:
+
+- Follow VOY-1824 before retrying the Assembly run.
+- Inspect the retained `assembly-failure.json` metadata before opening the
+  retained checkout.
+- Keep retained checkout contents private unless they have been manually
+  reviewed and redacted.
+
 ## Change History
 
 | Date | Change | By |
 |------|--------|----|
 | 2026-05-24 | Added private Assembly OMP audit lookup procedure | Codex |
+| 2026-05-25 | Cross-linked failure diagnostic fields and VOY-1824 | Codex |
