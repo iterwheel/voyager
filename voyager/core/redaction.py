@@ -3,8 +3,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
-_GITHUB_LEGACY_TOKEN = r"gh[opru]_[A-Za-z0-9_]+"
-_GITHUB_STATELESS_INSTALLATION_TOKEN = r"ghs_[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*"
+_GITHUB_LEGACY_TOKEN = r"gh[opru]_[A-Za-z0-9_]+"  # nosec B105
+_GITHUB_STATELESS_INSTALLATION_TOKEN = (  # nosec B105
+    r"ghs_[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*"
+)
 _GITHUB_FINE_GRAINED_PAT = r"github_pat_[A-Za-z0-9_.-]+"
 _GITHUB_TOKEN_RE = re.compile(
     rf"\b(?:{_GITHUB_LEGACY_TOKEN}|{_GITHUB_STATELESS_INSTALLATION_TOKEN}|"
