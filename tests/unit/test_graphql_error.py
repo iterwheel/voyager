@@ -44,7 +44,7 @@ async def test_graphql_error_log_sanitizes_token_messages(monkeypatch, caplog):
             "type": "FORBIDDEN",
             "message": (
                 "Denied token=github_pat_SECRET123 Bearer ghp_SECRET456 "
-                "ghs_SECRET789 ghs_abc.def-ghi.jkl"
+                "ghs_SECRET789 ghs_abc.def-ghi.jkl ghs_abcd-ef-"
             ),
         }
     ]
@@ -77,6 +77,7 @@ async def test_graphql_error_log_sanitizes_token_messages(monkeypatch, caplog):
     assert "ghp_" not in log_text
     assert "ghs_" not in log_text
     assert "def-ghi" not in log_text
+    assert "abcd-ef" not in log_text
     assert "SECRET" not in log_text
 
 
@@ -146,7 +147,8 @@ def test_build_writeback_failure_graphql_error_sanitizes_public_fields():
                 "type": "FORBIDDEN",
                 "message": (
                     "Resource token=ghp_SECRET123 Bearer ghs_SECRET456 "
-                    "github_pat_SECRET789 ghs_abc.def-ghi.jkl not accessible"
+                    "github_pat_SECRET789 ghs_abc.def-ghi.jkl "
+                    "ghs_abcd-ef- not accessible"
                 ),
             }
         ]
@@ -163,6 +165,7 @@ def test_build_writeback_failure_graphql_error_sanitizes_public_fields():
     assert "ghs_" not in all_text
     assert "github_pat_" not in all_text
     assert "def-ghi" not in all_text
+    assert "abcd-ef" not in all_text
     assert "token=ghp" not in all_text
     assert "token=[redacted]" in all_text
     assert "Bearer [redacted]" in all_text
