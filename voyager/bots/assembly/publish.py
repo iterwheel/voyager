@@ -7,6 +7,20 @@ the explicit HTTPS remote derived from the repository name, never a named
 remote like ``origin``, so fork remotes or SSH remotes cannot bypass
 App-token auth.
 
+**When to use vs. personal auth:**
+
+Use ``publish_branch()`` when the local git checkout's ``origin`` is an
+SSH or fork URL and the operator's ``gh`` / SSH identity lacks write
+access to the target repository.  The function configures a temporary
+dedicated remote (``assembly-publish``) pointing to
+``https://github.com/<owner>/<repo>.git``, pushes over HTTPS with the
+App installation token, and always cleans up after itself (removes the
+temporary remote, askpass script, and temp directory).
+
+Do **not** use when the local identity already has write access — a
+simple ``git push origin HEAD:refs/heads/<branch>`` is sufficient.  Also
+avoid for non-GitHub or SSH-only repos.
+
 Usage::
 
     result = await publish_branch(
@@ -28,6 +42,7 @@ Safety:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import shutil
@@ -162,8 +177,15 @@ async def publish_branch(
     """Push ``HEAD:refs/heads/<branch_name>`` to the target repository.
 
     Uses the Assembly App installation token for authentication via a
-    temporary GIT_ASKPASS script.  The push target is always the explicit
-    HTTPS remote URL derived from ``repository``, never a named remote.
+    temporary GIT_ASKPASS script.  The push target is always an explicit
+    temporary named remote pointing to the target HTTPS URL, never a
+    named remote like ``origin``, so fork remotes or SSH remotes cannot
+    bypass App-token auth.
+
+    Uses a temporary named remote (``assembly-publish``) instead of
+    pushing directly to the URL so that ``--force-with-lease`` has a
+    remote-tracking ref to check — pushing to a bare URL makes the lease
+    check a no-op.
 
     Args:
         repository: ``"owner/repo"`` format.
@@ -175,10 +197,12 @@ async def publish_branch(
     Returns:
         ``PublishResult`` with ``success=True`` on clean push.
 
-    The temporary askpass script and temp directory are removed before
-    returning in all paths (success, failure, or timeout).
+    The temporary askpass script, temp directory, and temporary remote
+    are removed before returning in all paths (success, failure, or
+    timeout).
     """
     remote_url = _github_safe_remote(repository)
+    remote_name = "assembly-publish"
     askpass: Path | None = None
     temp_dir: Path | None = None
 
@@ -187,13 +211,30 @@ async def publish_branch(
         askpass = _write_git_askpass(temp_dir)
         env = _git_push_env(token=installation_token, askpass=askpass)
 
+        # ---- Step 1: add temporary named remote ----
+        rc_add, _stdout_add, stderr_add = await _run_git_push(
+            ["git", "remote", "add", remote_name, remote_url],
+            cwd=checkout_dir,
+            timeout_seconds=timeout_seconds,
+            env=env,
+        )
+        if rc_add != 0:
+            return PublishResult(
+                success=False,
+                message=(f"Failed to add temporary remote {remote_name}: {stderr_add.strip()}"),
+            )
+
+        # ---- Step 2: push via named remote ----
+        # --force-with-lease is safe here because the named remote
+        # establishes remote-tracking refs that the lease check can
+        # verify against.
         returncode, _stdout, stderr = await _run_git_push(
             [
                 "git",
                 "push",
                 "--force-with-lease",
                 "--no-verify",
-                remote_url,
+                remote_name,
                 f"HEAD:refs/heads/{branch_name}",
             ],
             cwd=checkout_dir,
@@ -219,6 +260,21 @@ async def publish_branch(
         )
 
     finally:
+        # Best-effort remove temporary remote so the checkout is not
+        # polluted. Uses a lightweight subprocess (not _run_git_push) to
+        # avoid requiring the auth env during cleanup.
+        if checkout_dir.exists():
+            with contextlib.suppress(Exception):
+                proc = await asyncio.create_subprocess_exec(
+                    "git",
+                    "remote",
+                    "remove",
+                    remote_name,
+                    cwd=checkout_dir,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await asyncio.wait_for(proc.wait(), timeout=10)
         if askpass is not None and askpass.exists():
             askpass.unlink(missing_ok=True)
         if temp_dir is not None:

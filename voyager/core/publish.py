@@ -8,6 +8,22 @@ and posts a ``@codex review`` comment.
 Intended for VOY-1822 managed-flow publishing where the local operator's
 ``gh`` or SSH identity lacks write access to the target repository.
 
+**When to use this path (operator runbook):**
+
+Use the App-token publish path when the local git remote ``origin`` is
+configured with an SSH URL or a personal fork URL and the operator's
+``gh`` / SSH identity lacks write access to the target repository.
+The path pushes over HTTPS to the explicit target-repository URL
+(``https://github.com/<owner>/<repo>.git``) using a temporary named
+remote (``assembly-publish``), bypassing whatever ``origin`` points to.
+This avoids fork PRs and personal-credential fallbacks.
+
+Do **not** use this path in cases where the local identity already has
+write access to the target repository — a plain ``git push origin
+HEAD:refs/heads/<branch>`` is simpler and sufficient.  Also avoid this
+path for repositories that require SSH host-key verification or are not
+hosted on GitHub.
+
 Usage (operator runbook)::
 
     # This function is called by the Assembly writeback path.  It can also
@@ -217,23 +233,40 @@ async def assembly_app_publish(
     # ---- Step 2: create temp dir and askpass helper ----
     tmp_dir: Path | None = None
     askpass: Path | None = None
+    remote_name = "assembly-publish"
     try:
         tmp_dir_obj = Path(tempfile.mkdtemp(prefix="assembly-publish-"))
         tmp_dir = tmp_dir_obj
         askpass = _write_git_askpass(tmp_dir_obj)
         auth_env = _git_auth_env(token, askpass)
 
-        # ---- Step 3: git push HEAD:refs/heads/<branch> ----
-        # Always safe: --force-with-lease refuses if the remote ref has moved.
-        # The push target is the explicit HTTPS URL, never a named remote, so
-        # fork or SSH remotes cannot bypass App-token auth.
+        # ---- Step 3: add temporary named remote and push ----
+        # A named remote is required so that --force-with-lease has a
+        # remote-tracking ref to check. Pushing directly to a URL makes
+        # the lease check a no-op.
         remote_url = f"https://github.com/{repository}.git"
+        rc = await _run_exec(
+            ["git", "remote", "add", remote_name, remote_url],
+            cwd=work_dir,
+            timeout_seconds=timeout_seconds,
+            env=auth_env,
+        )
+        if rc != 0:
+            return PublishResult(
+                pushed=False,
+                pr_number=None,
+                pr_url=None,
+                pr_action=None,
+                codex_comment_id=None,
+                error=f"Failed to add temporary remote {remote_name}",
+            )
+
         argv = [
             "git",
             "push",
             "--force-with-lease",
             "--no-verify",
-            remote_url,
+            remote_name,
             f"HEAD:refs/heads/{branch}",
         ]
         rc = await _run_exec(argv, cwd=work_dir, timeout_seconds=timeout_seconds, env=auth_env)
@@ -358,6 +391,20 @@ async def assembly_app_publish(
         )
 
     finally:
+        # ---- Cleanup: remove temporary remote ----
+        # Best-effort; uses a lightweight direct subprocess to avoid
+        # requiring the auth env during cleanup.
+        with contextlib.suppress(Exception):
+            proc = await asyncio.create_subprocess_exec(
+                "git",
+                "remote",
+                "remove",
+                remote_name,
+                cwd=work_dir,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await asyncio.wait_for(proc.wait(), timeout=10)
         # ---- Cleanup: remove askpass ----
         if askpass is not None and askpass.exists():
             with contextlib.suppress(OSError):

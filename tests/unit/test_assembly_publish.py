@@ -204,14 +204,29 @@ class TestPublishBranch:
         )
 
         assert result.success
+        # The push argv must use the named remote, not the URL directly
         push_calls = [call for call in recorder.calls if "push" in " ".join(call["argv"])]
         assert push_calls, "No git push call recorded"
         push_argv = " ".join(push_calls[0]["argv"])
-        assert TEST_REMOTE_URL in push_argv, (
-            f"push argv must contain HTTPS remote, got: {push_argv}"
+        assert "assembly-publish" in push_argv, (
+            f"push argv must use the named remote, got: {push_argv}"
+        )
+        assert TEST_REMOTE_URL not in push_argv, (
+            f"push argv must not contain the URL directly, got: {push_argv}"
         )
         assert " origin " not in f" {push_argv} ", (
             f"push argv must not contain literal 'origin', got: {push_argv}"
+        )
+        # Verify the git remote add command was issued with the URL
+        remote_add_calls = [
+            call
+            for call in recorder.calls
+            if "remote" in " ".join(call["argv"]) and "add" in " ".join(call["argv"])
+        ]
+        assert remote_add_calls, "No git remote add call recorded"
+        remote_add_argv = " ".join(remote_add_calls[0]["argv"])
+        assert TEST_REMOTE_URL in remote_add_argv, (
+            f"remote add argv must contain the HTTPS URL, got: {remote_add_argv}"
         )
 
     @pytest.mark.asyncio

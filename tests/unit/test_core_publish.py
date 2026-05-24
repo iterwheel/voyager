@@ -127,11 +127,15 @@ class TestPublishPushNewBranch:
         assert result.error is None
 
         # Verify the correct git push command was constructed
-        call_args = mock_exec.call_args[0]
-        assert call_args[1] == "push"
-        assert "--force-with-lease" in call_args
-        assert "--no-verify" in call_args
-        assert call_args[-1] == "HEAD:refs/heads/102-my-feature"
+        push_call_args = None
+        for call_args, _ in mock_exec.call_args_list:
+            if len(call_args) > 1 and call_args[1] == "push":
+                push_call_args = call_args
+                break
+        assert push_call_args is not None, "No git push call found"
+        assert "--force-with-lease" in push_call_args
+        assert "--no-verify" in push_call_args
+        assert push_call_args[-1] == "HEAD:refs/heads/102-my-feature"
 
         # Verify PR was created with correct data
         client.create_pull_request.assert_awaited_once()
@@ -258,7 +262,13 @@ class TestPublishTokenFailure:
 class TestPublishPushFailure:
     @patch("voyager.core.publish.asyncio.create_subprocess_exec")
     async def test_push_failure_returns_error(self, mock_exec: MagicMock) -> None:
-        mock_exec.return_value = _mock_subprocess(returncode=128)
+        # git remote add must succeed; git push must fail with 128
+        def _side_effect(*args: object, **kwargs: object) -> MagicMock:
+            if len(args) > 2 and str(args[1]) == "push":
+                return _mock_subprocess(returncode=128)
+            return _mock_subprocess(returncode=0)
+
+        mock_exec.side_effect = _side_effect
         client = _mock_client()
 
         result = await assembly_app_publish(
@@ -300,10 +310,28 @@ class TestPublishPushRemoteURL:
         assert result.pushed is True
         assert result.error is None
 
-        call_args = mock_exec.call_args[0]
-        assert "https://github.com/iterwheel/voyager.git" in call_args
+        # The push argv must use the named remote, not the URL directly
+        first_push_call = None
+        for call_args, _ in mock_exec.call_args_list:
+            if len(call_args) > 2 and call_args[1] == "push":
+                first_push_call = call_args
+                break
+        assert first_push_call is not None, "No push call found"
+        push_args = first_push_call
+        assert "assembly-publish" in push_args, (
+            f"push argv must use the named remote, got: {push_args}"
+        )
+        assert "https://github.com/iterwheel/voyager.git" not in push_args
         # Verify no literal "origin" appears as a push remote
-        assert "origin" not in call_args
+        assert "origin" not in push_args
+        # Verify the git remote add call has the URL
+        remote_add_found = False
+        for call_args, _ in mock_exec.call_args_list:
+            if len(call_args) > 3 and call_args[1] == "remote" and call_args[2] == "add":
+                remote_add_found = True
+                assert "https://github.com/iterwheel/voyager.git" in call_args
+                break
+        assert remote_add_found, "No git remote add call found"
 
     @patch("voyager.core.publish.asyncio.create_subprocess_exec")
     async def test_push_uses_different_repo_remote(self, mock_exec: MagicMock) -> None:
@@ -321,9 +349,23 @@ class TestPublishPushRemoteURL:
         )
 
         assert result.pushed is True
-        call_args = mock_exec.call_args[0]
-        assert "https://github.com/other-org/other-repo.git" in call_args
-        assert "iterwheel" not in call_args
+        # Push uses the named remote; the URL appears in git remote add
+        first_push_call = None
+        for call_args, _ in mock_exec.call_args_list:
+            if len(call_args) > 2 and call_args[1] == "push":
+                first_push_call = call_args
+                break
+        assert first_push_call is not None, "No push call found"
+        push_args = first_push_call
+        assert "assembly-publish" in push_args
+        # The URL should be in the git remote add call, not the push
+        url_found = False
+        for call_args, _ in mock_exec.call_args_list:
+            if "https://github.com/other-org/other-repo.git" in call_args:
+                url_found = True
+                break
+        assert url_found, "The HTTPS remote URL must appear in one of the git command args"
+        assert "iterwheel" not in push_args
 
 
 class TestPublishTimeout:
@@ -332,10 +374,19 @@ class TestPublishTimeout:
     @patch("voyager.core.publish.asyncio.create_subprocess_exec")
     async def test_timeout_returns_structured_failure(self, mock_exec: MagicMock) -> None:
         """A subprocess that times out returns pulled=False with a timeout error."""
-        proc = MagicMock()
-        proc.communicate = AsyncMock(side_effect=TimeoutError())
-        proc.kill = MagicMock()
-        mock_exec.return_value = proc
+        timeout_proc: MagicMock | None = None
+
+        def _side_effect(*args: object, **kwargs: object) -> MagicMock:
+            nonlocal timeout_proc
+            if len(args) > 2 and str(args[1]) == "push":
+                proc = MagicMock()
+                proc.communicate = AsyncMock(side_effect=TimeoutError())
+                proc.kill = MagicMock()
+                timeout_proc = proc
+                return proc
+            return _mock_subprocess(returncode=0)
+
+        mock_exec.side_effect = _side_effect
 
         client = _mock_client()
 
@@ -353,7 +404,8 @@ class TestPublishTimeout:
         assert result.error is not None
         assert "timed out" in (result.error or "").lower()
         # Verify kill was called on the timed-out process
-        proc.kill.assert_called_once()
+        assert timeout_proc is not None
+        timeout_proc.kill.assert_called_once()
         # No GitHub API calls beyond token
         client.create_pull_request.assert_not_awaited()
         client.update_pull_request.assert_not_awaited()

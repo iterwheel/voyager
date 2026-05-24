@@ -288,13 +288,26 @@ async def test_pi_adapter_executes_omp_in_clone_pushes_branch_and_returns_sha(
     assert recorder.git_calls("clone")
     push_calls = recorder.git_calls("push")
     assert push_calls
-    # VOY-1822: push must use explicit HTTPS remote, never literal "origin".
+    # VOY-1822: push must use a dedicated named remote, not the URL directly.
     push_argv = " ".join(push_calls[0]["argv"])
-    assert "https://github.com/iterwheel/voyager-sandbox.git" in push_argv, (
-        f"push argv must use explicit HTTPS remote, got: {push_argv}"
+    assert "assembly-publish" in push_argv, f"push argv must use the named remote, got: {push_argv}"
+    remote_url = "https://github.com/iterwheel/voyager-sandbox.git"
+    assert remote_url not in push_argv, (
+        f"push argv must not contain the URL directly, got: {push_argv}"
     )
     assert " origin " not in f" {push_argv} ", (
         f"push argv must not contain literal 'origin', got: {push_argv}"
+    )
+    # Verify the git remote add was issued with the HTTPS URL
+    remote_add_calls = [
+        call
+        for call in recorder.calls
+        if "remote" in " ".join(call["argv"]) and "add" in " ".join(call["argv"])
+    ]
+    assert remote_add_calls, "No git remote add call recorded"
+    remote_add_argv = " ".join(remote_add_calls[0]["argv"])
+    assert remote_url in remote_add_argv, (
+        f"remote add argv must contain the HTTPS URL, got: {remote_add_argv}"
     )
     assert any(_contract().branch_name in " ".join(call["argv"]) for call in push_calls)
     flattened_argv = "\n".join(" ".join(call["argv"]) for call in recorder.calls)
@@ -306,6 +319,11 @@ async def test_pi_adapter_executes_omp_in_clone_pushes_branch_and_returns_sha(
             call in recorder.git_calls("clone")
             or call in recorder.git_calls("fetch")
             or call in recorder.git_calls("push")
+            or (
+                call in recorder.git_calls("remote")
+                and len(call["argv"]) > 2
+                and call["argv"][2] == "add"
+            )
         )
         if is_auth_git:
             assert INSTALLATION_TOKEN in env_json
