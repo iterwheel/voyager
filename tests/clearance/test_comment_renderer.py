@@ -51,6 +51,41 @@ def _automation(status: str = "ready") -> dict:
     }
 
 
+def _automation_with_skipped_stage15_actions() -> dict:
+    return {
+        "enabled": True,
+        "status": "ready",
+        "reason": "all Codex review threads RESOLVED",
+        "sync_actions": [
+            {
+                "mutation": "resolveReviewThread",
+                "threadId": "PRRT_alpha",
+                "result": {
+                    "skipped": True,
+                    "skip_reason": "viewerCanResolve is false",
+                    "repo": "frankyxhl/trinity",
+                    "pr": 133,
+                    "thread_id": "PRRT_alpha",
+                },
+            },
+            {
+                "mutation": "resolveReviewThread",
+                "threadId": "PRRT_beta",
+                "result": {
+                    "skipped": True,
+                    "skip_reason": "viewerCanResolve is false",
+                    "repo": "frankyxhl/trinity",
+                    "pr": 133,
+                    "thread_id": "PRRT_beta",
+                },
+            },
+        ],
+        "sync_actions_count": 2,
+        "dry_run": False,
+        "head_sha": "sha-abc",
+    }
+
+
 # ---------------------------------------------------------------------------
 # CHG-1813: writeback failure warning in comment rendering
 # ---------------------------------------------------------------------------
@@ -137,6 +172,28 @@ def test_no_writeback_failure_warning_when_no_failures() -> None:
 
     assert "⚠️ Automation writeback:" not in comment
     assert "writeback failure" not in comment.lower()
+
+
+def test_stage15_skipped_actions_are_visible_without_looking_successful() -> None:
+    from voyager.bots.clearance.enrichment import build_clearance_comment
+
+    comment = build_clearance_comment(
+        _evaluation(status="clearance_ready_for_approval", label="clearance-3-ready-for-approval"),
+        automation=_automation_with_skipped_stage15_actions(),
+        provenance={"updated_at": "2026-05-17T00:00:00Z"},
+    )
+
+    summary = "thread sync actions: 2 (applied: 0, skipped: 2, failed: 0)"
+    assert f"✅ Automation: ready; {summary}" in comment
+    assert f"- Automation: ready; {summary}; dry-run: false" in comment
+    assert (
+        "- Skipped resolveReviewThread: 2 threads, reason: viewerCanResolve is false. "
+        "GitHub conversations may remain visually unresolved/outdated even though "
+        "Clearance no longer treats them as blockers."
+    ) in comment
+    assert "ghp_" not in comment
+    assert "token=" not in comment
+    assert "Authorization" not in comment
 
 
 def test_writeback_failure_warning_for_generic_issue_operation() -> None:

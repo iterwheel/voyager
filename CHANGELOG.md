@@ -8,6 +8,13 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+### Fixed — Clearance Stage 1.5 observability ([#110](https://github.com/iterwheel/voyager/issues/110))
+
+- Clearance readiness comments now distinguish applied, skipped, and failed
+  Stage 1.5 review-thread sync actions, and surface skipped `viewerCanResolve`
+  auto-resolve attempts so operators can tell when GitHub conversations remain
+  visually unresolved even though Clearance no longer treats them as blockers.
+
 ## [0.4.1] — 2026-05-24
 
 ### Added — Assembly production-loop SOPs and audit lookup ([#94](https://github.com/iterwheel/voyager/issues/94), [#95](https://github.com/iterwheel/voyager/pull/95), [#92](https://github.com/iterwheel/voyager/issues/92), [#97](https://github.com/iterwheel/voyager/pull/97))

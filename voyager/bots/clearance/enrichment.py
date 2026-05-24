@@ -157,10 +157,82 @@ def _automation_status_line(automation: dict[str, Any] | None) -> str:
         if status in {"blocked", "error"}
         else "⏳"
     )
+    sync_summary = _stage15_sync_summary_text(automation)
     return (
         f"{icon} Automation: {status.replace('_', ' ')}; "
-        f"thread sync actions: {automation.get('sync_actions_count', 0)}"
+        f"thread sync actions: {automation.get('sync_actions_count', 0)}{sync_summary}"
     )
+
+
+def _stage15_action_counts(automation: dict[str, Any] | None) -> dict[str, int] | None:
+    if not automation:
+        return None
+    actions = automation.get("sync_actions")
+    if not isinstance(actions, list) or not actions:
+        return None
+
+    counts = {"applied": 0, "skipped": 0, "failed": 0, "dry_run": 0}
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        result = action.get("result")
+        if not isinstance(result, dict):
+            result = {}
+
+        if result.get("skipped") is True:
+            counts["skipped"] += 1
+        elif result.get("dry_run") is True:
+            counts["dry_run"] += 1
+        elif result.get("applied") is False:
+            counts["failed"] += 1
+        else:
+            counts["applied"] += 1
+
+    return counts
+
+
+def _stage15_sync_summary_text(automation: dict[str, Any] | None) -> str:
+    counts = _stage15_action_counts(automation)
+    if not counts:
+        return ""
+    parts = [
+        f"applied: {counts['applied']}",
+        f"skipped: {counts['skipped']}",
+        f"failed: {counts['failed']}",
+    ]
+    if counts["dry_run"]:
+        parts.append(f"dry-run: {counts['dry_run']}")
+    return f" ({', '.join(parts)})"
+
+
+def _stage15_skip_detail_lines(automation: dict[str, Any] | None) -> list[str]:
+    if not automation:
+        return []
+    actions = automation.get("sync_actions")
+    if not isinstance(actions, list) or not actions:
+        return []
+
+    grouped: dict[tuple[str, str], int] = {}
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        result = action.get("result")
+        if not isinstance(result, dict) or result.get("skipped") is not True:
+            continue
+        mutation = str(action.get("mutation") or result.get("operation") or "Stage 1.5 action")
+        reason = str(result.get("skip_reason") or "unspecified")
+        key = (mutation, reason)
+        grouped[key] = grouped.get(key, 0) + 1
+
+    lines: list[str] = []
+    for (mutation, reason), count in sorted(grouped.items()):
+        noun = "thread" if count == 1 else "threads"
+        lines.append(
+            f"- Skipped {mutation}: {count} {noun}, reason: {one_line(reason, limit=160)}. "
+            "GitHub conversations may remain visually unresolved/outdated even though "
+            "Clearance no longer treats them as blockers."
+        )
+    return lines
 
 
 def _author_only_deadlock_warning(review_request: dict[str, Any] | None) -> str | None:
@@ -229,7 +301,8 @@ def _automation_details(automation: dict[str, Any] | None) -> str:
         return "not run; thread sync actions: 0"
     parts = [
         str(automation.get("status") or "unknown"),
-        f"thread sync actions: {automation.get('sync_actions_count', 0)}",
+        f"thread sync actions: {automation.get('sync_actions_count', 0)}"
+        f"{_stage15_sync_summary_text(automation)}",
     ]
     if "dry_run" in automation:
         parts.append(f"dry-run: {str(bool(automation.get('dry_run'))).lower()}")
@@ -454,6 +527,7 @@ def build_clearance_comment(
             f"- Changes requested: {format_user_list(review_state['blocking_reviewers'])}",
             f"- Unresolved threads: {review_state['unresolved_thread_count']}",
             f"- Automation: {_automation_details(automation)}",
+            *_stage15_skip_detail_lines(automation),
             f"- Last updated: {_last_updated_line(provenance)}",
         ]
     )

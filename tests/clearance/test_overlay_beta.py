@@ -276,6 +276,31 @@ def test_plain_ready_status_clears_thread_only_blocker() -> None:
     assert "+1" in result["reactions"]["add"]
 
 
+def test_plain_ready_status_with_skipped_sync_actions_still_clears_thread_only_blocker() -> None:
+    """Skipped native UI sync must not make resolved SWM threads block readiness."""
+    automation = {
+        "enabled": True,
+        "status": "ready",
+        "reason": "all Codex review threads RESOLVED",
+        "sync_actions": [
+            {
+                "mutation": "resolveReviewThread",
+                "threadId": "thread-1",
+                "result": {
+                    "skipped": True,
+                    "skip_reason": "viewerCanResolve is false",
+                },
+            }
+        ],
+        "sync_actions_count": 1,
+        "unresolved_codex_thread_count": 0,
+    }
+    result = apply_swm_overlay(_blocked_evaluation(), automation)
+    assert result["conclusion"] == "success"
+    assert result["status"] == "clearance_ready"
+    assert CLEARANCE_READY_LABEL in result["labels"]["add"]
+
+
 def test_plain_ready_status_preserves_non_thread_blocker() -> None:
     """automation.status='ready' must not clear draft / PR-state blockers."""
     automation = {
