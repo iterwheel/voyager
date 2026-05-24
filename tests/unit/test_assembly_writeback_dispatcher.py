@@ -17,7 +17,15 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from voyager.bots.assembly.audit import find_audit_manifest, is_audit_id, load_audit_manifest
+from voyager.bots.assembly.audit import (
+    AssemblySessionMetadata,
+    find_audit_manifest,
+    is_audit_id,
+    load_audit_manifest,
+    load_session_metadata,
+    session_metadata_path,
+    write_session_metadata,
+)
 from voyager.bots.assembly.constants import (
     ASSEMBLY_AUDIT_DIR_ENV,
     ASSEMBLY_BACKEND_DRY_RUN,
@@ -67,7 +75,7 @@ def _route(
         "writeback": {
             "dynamic": "assembly_implementation",
             "command": "/assembly",
-            "command_flags": {"dry_run": False, "allow_missing_stack": False},
+            "command_flags": {"dry_run": False, "allow_missing_stack": False, "resume": False},
             "contract": contract,
             "branch_name": "69-implement-assembly-bot-mvp",
             "refusal": refusal,
@@ -94,6 +102,18 @@ def _mock_client_for_writes() -> Any:
     client.upsert_issue_comment = AsyncMock(return_value={"id": 777})
     client.installation_token = AsyncMock(return_value="")
     return client
+
+
+def _existing_same_repo_pr(*, number: int = 1234, sha: str = "a" * 40) -> dict[str, Any]:
+    return {
+        "number": number,
+        "html_url": f"https://example/pr/{number}",
+        "head": {
+            "sha": sha,
+            "repo": {"full_name": "iterwheel/voyager-sandbox"},
+        },
+        "base": {"repo": {"full_name": "iterwheel/voyager-sandbox"}},
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -423,6 +443,224 @@ def test_duplicate_no_changes_preserves_existing_pr_progress_context(monkeypatch
     assert "- Pull request: #1234 (updated)" in issue_body
     assert "- Adapter: `no_changes`" in issue_body
     assert "status: `no_changes`" not in issue_body
+
+
+def test_resume_request_uses_compatible_stored_session(monkeypatch, tmp_path) -> None:
+    from voyager.bots.assembly import adapters
+    from voyager.bots.assembly import writeback as wb_module
+
+    monkeypatch.setenv("DRY_RUN", "false")
+    route = _route()
+    route["writeback"]["command_flags"]["resume"] = True
+    session_id = "/private/session.jsonl"
+    previous_sha = "a" * 40
+    new_sha = "b" * 40
+
+    write_session_metadata(
+        AssemblySessionMetadata(
+            repository="iterwheel/voyager-sandbox",
+            issue_number=69,
+            branch_name="69-implement-assembly-bot-mvp",
+            pr_number=1234,
+            head_sha=previous_sha,
+            backend_name="resume-capable",
+            session_id=session_id,
+        )
+    )
+
+    class _ResumeAdapter:
+        name = "resume-capable"
+        supports_resume = True
+
+        async def execute(self, contract, context):
+            assert context.session_mode == "resumed"
+            assert context.resume_requested is True
+            assert context.resume_session_id == session_id
+            return adapters.AdapterResult(
+                status="executed",
+                commit_shas=[new_sha],
+                summary="resumed session and committed changes",
+                details={"session_id": session_id},
+            )
+
+    monkeypatch.setattr(
+        wb_module, "select_execution_adapter", lambda backend=None: _ResumeAdapter()
+    )
+
+    client = _mock_client_for_writes()
+    client.find_pull_request_by_head = AsyncMock(
+        side_effect=[
+            _existing_same_repo_pr(number=1234, sha=previous_sha),
+            _existing_same_repo_pr(number=1234, sha=previous_sha),
+        ]
+    )
+    client.branch_ref_exists = AsyncMock(return_value=True)
+
+    result = asyncio.run(
+        dispatch_assembly_writeback(client, route, repository="iterwheel/voyager-sandbox")
+    )
+
+    assert result["session"]["mode"] == "resumed"
+    assert result["session"]["expected_head_sha"] == previous_sha
+    assert result["branch"]["sha"] == new_sha
+    issue_body = client.upsert_issue_comment.call_args_list[-2].kwargs["body"]
+    assert "- Session: `resumed`" in issue_body
+    assert session_id not in issue_body
+
+    manifest_path = find_audit_manifest(result["audit_id"], root=tmp_path / "audit")
+    assert manifest_path is not None
+    manifest = load_audit_manifest(manifest_path)
+    assert manifest.session_mode == "resumed"
+    assert manifest.session_id == session_id
+
+    stored_path = session_metadata_path(
+        repository="iterwheel/voyager-sandbox",
+        issue_number=69,
+        branch_name="69-implement-assembly-bot-mvp",
+        pr_number=1234,
+        root=tmp_path / "audit",
+    )
+    stored = load_session_metadata(stored_path)
+    assert stored.head_sha == new_sha
+    assert stored.session_id == session_id
+
+
+def test_resume_resolution_runs_under_branch_lock(monkeypatch) -> None:
+    from voyager.bots.assembly import adapters
+    from voyager.bots.assembly import writeback as wb_module
+
+    monkeypatch.setenv("DRY_RUN", "false")
+    route = _route()
+    route["writeback"]["command_flags"]["resume"] = True
+
+    class _NoChangesAdapter:
+        name = "resume-capable"
+        supports_resume = True
+
+        async def execute(self, contract, context):
+            return adapters.AdapterResult(
+                status="no_changes",
+                commit_shas=[],
+                summary="no changes",
+            )
+
+    async def _assert_locked_resolve(**kwargs):
+        repository = kwargs["repository"]
+        contract = kwargs["contract"]
+        assert wb_module._get_lock(repository, contract.branch_name).locked()
+        return {
+            "requested": True,
+            "mode": "resume_fallback",
+            "fallback_reason": "test fallback",
+            "pr_number": None,
+            "expected_head_sha": None,
+        }
+
+    monkeypatch.setattr(
+        wb_module, "select_execution_adapter", lambda backend=None: _NoChangesAdapter()
+    )
+    monkeypatch.setattr(wb_module, "_resolve_session", _assert_locked_resolve)
+
+    client = _mock_client_for_writes()
+    result = asyncio.run(
+        dispatch_assembly_writeback(client, route, repository="iterwheel/voyager-sandbox")
+    )
+
+    assert result["session"]["mode"] == "resume_fallback"
+
+
+def test_resume_request_falls_back_when_stored_head_is_stale(monkeypatch) -> None:
+    from voyager.bots.assembly import adapters
+    from voyager.bots.assembly import writeback as wb_module
+
+    monkeypatch.setenv("DRY_RUN", "false")
+    route = _route()
+    route["writeback"]["command_flags"]["resume"] = True
+    session_id = "/private/stale-session.jsonl"
+
+    write_session_metadata(
+        AssemblySessionMetadata(
+            repository="iterwheel/voyager-sandbox",
+            issue_number=69,
+            branch_name="69-implement-assembly-bot-mvp",
+            pr_number=1234,
+            head_sha="a" * 40,
+            backend_name="resume-capable",
+            session_id=session_id,
+        )
+    )
+
+    class _ResumeAdapter:
+        name = "resume-capable"
+        supports_resume = True
+
+        async def execute(self, contract, context):
+            assert context.session_mode == "resume_fallback"
+            assert context.resume_session_id is None
+            return adapters.AdapterResult(
+                status="no_changes",
+                commit_shas=[],
+                summary="fresh fallback completed without changes",
+            )
+
+    monkeypatch.setattr(
+        wb_module, "select_execution_adapter", lambda backend=None: _ResumeAdapter()
+    )
+    client = _mock_client_for_writes()
+    client.find_pull_request_by_head = AsyncMock(
+        side_effect=[
+            _existing_same_repo_pr(number=1234, sha="c" * 40),
+            _existing_same_repo_pr(number=1234, sha="c" * 40),
+        ]
+    )
+
+    result = asyncio.run(
+        dispatch_assembly_writeback(client, route, repository="iterwheel/voyager-sandbox")
+    )
+
+    assert result["session"]["mode"] == "resume_fallback"
+    assert "head" in result["session"]["fallback_reason"]
+    issue_body = client.upsert_issue_comment.call_args_list[-2].kwargs["body"]
+    assert "- Session: `resume_fallback`" in issue_body
+    assert "stored session metadata mismatch: head" in issue_body
+    assert session_id not in issue_body
+
+
+def test_resume_request_falls_back_when_backend_does_not_support_resume(monkeypatch) -> None:
+    from voyager.bots.assembly import adapters
+    from voyager.bots.assembly import writeback as wb_module
+
+    monkeypatch.setenv("DRY_RUN", "false")
+    route = _route()
+    route["writeback"]["command_flags"]["resume"] = True
+
+    class _FreshOnlyAdapter:
+        name = "fresh-only"
+        supports_resume = False
+
+        async def execute(self, contract, context):
+            assert context.session_mode == "resume_fallback"
+            assert context.resume_requested is True
+            return adapters.AdapterResult(
+                status="no_changes",
+                commit_shas=[],
+                summary="backend ran fresh",
+            )
+
+    monkeypatch.setattr(
+        wb_module, "select_execution_adapter", lambda backend=None: _FreshOnlyAdapter()
+    )
+    client = _mock_client_for_writes()
+
+    result = asyncio.run(
+        dispatch_assembly_writeback(client, route, repository="iterwheel/voyager-sandbox")
+    )
+
+    assert result["session"]["mode"] == "resume_fallback"
+    assert result["session"]["fallback_reason"] == "backend `fresh-only` does not support resume"
+    body = client.upsert_issue_comment.await_args.kwargs["body"]
+    assert "- Session: `resume_fallback`" in body
+    assert "backend `fresh-only` does not support resume" in body
 
 
 def test_first_run_no_changes_stays_visible_without_existing_pr(monkeypatch) -> None:

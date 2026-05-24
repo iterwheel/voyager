@@ -102,6 +102,19 @@ Feature: Assembly bot — code implementation routing and writeback
     And the dispatcher posted a Codex review trigger
     And the dispatcher upserted progress comments on the issue and pull request
 
+  Scenario: /assembly --resume reports resume fallback when no prior PR exists
+    Given a webhook payload "assembly_command_ready"
+    And the Assembly command body is "/assembly --resume"
+    And DRY_RUN is "false"
+    And ASSEMBLY_EXECUTION_BACKEND is "fake-subprocess"
+    And the fake subprocess backend is allowed
+    And the fake subprocess backend will return no_changes
+    When Assembly receives the "issue_comment" event
+    And Assembly dispatches the route with a mock GitHub client
+    Then the dispatcher result session mode is "resume_fallback"
+    And the dispatcher upserted at least one progress comment
+    And the latest Assembly progress comment includes "Session: `resume_fallback`"
+
   # ---------------------------------------------------------------------------
   # Scenario 6 (VOY-1818) — /assembly from an authorized maintainer (OWNER)
   # on a ready, allow-listed issue runs the dry-run plan.

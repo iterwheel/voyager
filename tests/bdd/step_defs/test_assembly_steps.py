@@ -70,6 +70,24 @@ def fake_subprocess_returns_commit(monkeypatch, sha: str) -> None:
     )
 
 
+@given("the fake subprocess backend will return no_changes")
+def fake_subprocess_returns_no_changes(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "ASSEMBLY_FAKE_SUBPROCESS_OUTPUT",
+        json.dumps(
+            {
+                "status": "no_changes",
+                "summary": "BDD fake subprocess no changes",
+            }
+        ),
+    )
+
+
+@given(parsers.parse('the Assembly command body is "{body}"'))
+def assembly_command_body(payload: dict, body: str) -> None:
+    payload.setdefault("comment", {})["body"] = body
+
+
 @given("the repository allow-list is empty")
 def empty_allow_list(monkeypatch) -> None:
     monkeypatch.delenv("BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_ASSEMBLY", raising=False)
@@ -266,6 +284,19 @@ def dispatcher_no_branch_pr(dispatch_outcome: dict) -> None:
 def dispatcher_progress_comment(dispatch_outcome: dict) -> None:
     client = dispatch_outcome["client"]
     assert client.upsert_issue_comment.await_count >= 1
+
+
+@then(parsers.parse('the dispatcher result session mode is "{mode}"'))
+def dispatcher_session_mode(dispatch_outcome: dict, mode: str) -> None:
+    assert dispatch_outcome["result"]["session"]["mode"] == mode
+
+
+@then(parsers.parse('the latest Assembly progress comment includes "{text}"'))
+def latest_progress_comment_includes(dispatch_outcome: dict, text: str) -> None:
+    client = dispatch_outcome["client"]
+    assert client.upsert_issue_comment.await_count >= 1
+    body = client.upsert_issue_comment.call_args_list[-1].kwargs["body"]
+    assert text in body
 
 
 @then("the dispatcher created a branch and opened a pull request")

@@ -8,6 +8,16 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+### Added — Assembly resumable backend sessions ([#105](https://github.com/iterwheel/voyager/issues/105))
+
+- Assembly now accepts `/assembly --resume`, validates compatible private
+  session metadata for the same repository, issue, branch, PR, head SHA, and
+  backend, and reports `fresh`, `resumed`, or `resume_fallback` in progress
+  comments and audit manifests.
+- The OMP-backed adapter passes a compatible stored session path through
+  `omp --resume=...`; unsafe, expired, missing, or unsupported resume requests
+  fall back to a fresh run without exposing private session paths on GitHub.
+
 ### Fixed — Clearance Stage 1.5 observability ([#110](https://github.com/iterwheel/voyager/issues/110))
 
 - Clearance readiness comments now distinguish applied, skipped, and failed

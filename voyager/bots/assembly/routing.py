@@ -56,6 +56,7 @@ def _actor_denial_route(
     command_flags = {
         "dry_run": command.dry_run,
         "allow_missing_stack": command.allow_missing_stack,
+        "resume": command.resume,
     }
     validation: dict[str, Any] = {
         "status": "assembly_refused",
@@ -140,6 +141,7 @@ def route_assembly_event(event: str, payload: dict[str, Any]) -> list[dict[str, 
         "command_flags": {
             "dry_run": command.dry_run,
             "allow_missing_stack": command.allow_missing_stack,
+            "resume": command.resume,
         },
     }
     if not pre.ok:

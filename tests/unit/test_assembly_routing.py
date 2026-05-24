@@ -104,7 +104,13 @@ def test_route_carries_command_flags() -> None:
         _comment_payload("/assembly --dry-run --allow-missing-stack"),
     )
     flags = routes[0]["validation"]["command_flags"]
-    assert flags == {"dry_run": True, "allow_missing_stack": True}
+    assert flags == {"dry_run": True, "allow_missing_stack": True, "resume": False}
+
+
+def test_route_carries_resume_flag() -> None:
+    routes = route_assembly_event("issue_comment", _comment_payload("/assembly --resume"))
+    flags = routes[0]["validation"]["command_flags"]
+    assert flags == {"dry_run": False, "allow_missing_stack": False, "resume": True}
 
 
 def test_route_refusal_on_missing_blueprint_ready() -> None:

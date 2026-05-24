@@ -88,6 +88,7 @@ def build_assembly_comment(
     pull_request: dict[str, Any] | None = None,
     writeback_failures: list[dict[str, Any]] | None = None,
     audit_id: str | None = None,
+    session: dict[str, Any] | None = None,
     dry_run: bool = False,
     surface: str = "issue",
 ) -> str:
@@ -109,6 +110,7 @@ def build_assembly_comment(
     adapter_result = adapter_result or {}
     branch = branch or {}
     pull_request = pull_request or {}
+    session = session or {}
 
     heading = "Assembly progress" if surface == "pr" else "Assembly acknowledgement"
 
@@ -131,6 +133,13 @@ def build_assembly_comment(
     lines.append(f"- Adapter: `{backend}`")
     if summary:
         lines.append(f"  > {summary}")
+
+    session_mode = session.get("mode")
+    if session_mode:
+        lines.append(f"- Session: `{session_mode}`")
+        fallback_reason = session.get("fallback_reason")
+        if fallback_reason:
+            lines.append(f"  > {fallback_reason}")
 
     if dry_run:
         lines.append("- Dry-run mode: no GitHub mutations performed.")

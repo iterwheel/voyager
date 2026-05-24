@@ -142,7 +142,9 @@ Post one issue comment:
 Use `/implement` only as an alias when the operator explicitly prefers it.
 Use `--dry-run` for contract inspection without writes. Use
 `--allow-missing-stack` only when the missing Stack label is understood and the
-operator accepts the weaker gate.
+operator accepts the weaker gate. Use `--resume` only when the operator wants
+the backend to attempt a compatible prior session for the same issue, branch,
+and PR; see §6.2.
 
 ### 4. Monitor The Issue Progress Comment
 
@@ -309,7 +311,34 @@ Retry scope:
 After every retry push, trigger a fresh `@codex review` and restart the Codex
 review settle gate for the new head SHA.
 
-### 6.2. Codex Review Settle Gate
+### 6.2. Resume Versus Fresh Runs
+
+Use `/assembly --resume` only for a follow-up run where all of these are true:
+
+- the same issue, Assembly branch, and same-repository PR are still the managed
+  flow;
+- the branch head SHA still matches the stored private session metadata;
+- the backend supports resume for the stored session id;
+- the retry contract is incremental and benefits from prior backend context.
+
+Use a fresh `/assembly` run instead when acceptance criteria changed
+substantially, a human manually rewrote the branch, the prior PR was closed or
+replaced, the backend changed, the stored session expired, or the next action is
+primarily verification/review rather than implementation continuity.
+
+Assembly reports one of three session modes in progress comments and audit
+manifests:
+
+| Mode | Meaning | Operator action |
+|------|---------|-----------------|
+| `fresh` | No resume was requested | Normal run |
+| `resumed` | Stored session metadata matched repo, issue, branch, PR, head SHA, and backend | Verify the new diff still follows GitHub-visible state |
+| `resume_fallback` | Resume was requested but unavailable, expired, unsupported, or unsafe | Treat as a fresh run and inspect the fallback reason |
+
+GitHub comments may show only the session mode and fallback reason. Private
+session ids, transcript paths, and prompt traces remain local per VOY-1823.
+
+### 6.3. Codex Review Settle Gate
 
 Run this gate after every `@codex review` trigger and after every push that
 changes the PR head SHA.
@@ -416,7 +445,7 @@ If Codex posts actionable feedback, fix it, push, post a fresh `@codex review`,
 and restart this settle gate for the new head SHA. Do not report the PR as ready
 for human approval while a requested Codex review is still settling.
 
-### 6.3. Ready-For-Approval Declaration Checklist
+### 6.4. Ready-For-Approval Declaration Checklist
 
 Before telling the requester that a PR is ready for approval, verify all of the
 following for the current head SHA:
@@ -439,7 +468,7 @@ Approval-ready means the current head SHA has passed verification, Codex has
 settled, thread-aware review inspection has no unresolved actionable blockers,
 and Clearance has reached Stage 3 after those facts are true.
 
-### 6.4. Follow-Up Issue Boundary
+### 6.5. Follow-Up Issue Boundary
 
 Create a follow-up issue instead of broadening the current implementation PR
 when the new work is not required to satisfy the current issue's acceptance
@@ -706,6 +735,8 @@ Before triggering:
 - [ ] Backend selection is intentional.
 - [ ] Verification commands are correct for the target repo.
 - [ ] Bridge health shows expected build commit and `dry_run` state.
+- [ ] If using `--resume`, the operator expects the same issue, branch, PR, and
+      head SHA to match prior private session metadata.
 
 When inspecting private audit or temp checkout state:
 
@@ -789,3 +820,4 @@ this SOP by name: `VOY-1822 Assembly-Driven Implementation Loop`.
 | 2026-05-24 | Added Codex review settle gate and final ready-for-approval checklist for issue #98. | Codex |
 | 2026-05-24 | Added PR source precondition, fork PR caveats, and code-level `headRepository == baseRepository` gate for issue #99. | Codex |
 | 2026-05-24 | Added Assembly retry discipline, no-diff observation windows, VOY-1823 audit checklist, follow-up boundary, and retrospective template for issue #109. | Codex |
+| 2026-05-24 | Documented `/assembly --resume` session modes and fresh-run fallback guidance for issue #105. | Codex |

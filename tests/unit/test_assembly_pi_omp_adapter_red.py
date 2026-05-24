@@ -48,13 +48,22 @@ def _contract():
     )
 
 
-def _context(tmp_path: Path, *, token: str = INSTALLATION_TOKEN) -> AdapterExecutionContext:
+def _context(
+    tmp_path: Path,
+    *,
+    token: str = INSTALLATION_TOKEN,
+    session_mode: str = "fresh",
+    resume_session_id: str | None = None,
+) -> AdapterExecutionContext:
     return AdapterExecutionContext(
         repository="iterwheel/voyager-sandbox",
         workdir=tmp_path,
         timeout_seconds=120,
         command_path="omp",
         installation_token=token,
+        resume_requested=resume_session_id is not None,
+        session_mode=session_mode,
+        resume_session_id=resume_session_id,
     )
 
 
@@ -350,6 +359,30 @@ async def test_pi_adapter_executes_omp_in_clone_pushes_branch_and_returns_sha(
             assert INSTALLATION_TOKEN in env_json
         else:
             assert INSTALLATION_TOKEN not in env_json
+
+
+@pytest.mark.asyncio
+async def test_pi_adapter_passes_resume_session_path_to_omp(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    recorder = _CommandRecorder(status_porcelain="M voyager/example.py\n")
+    _install_command_fakes(monkeypatch, recorder)
+    adapter = PiOhMyPiDeepSeekAdapter()
+    session_id = "/private/omp/session.jsonl"
+
+    result = await adapter.execute(
+        _contract(),
+        _context(tmp_path, session_mode="resumed", resume_session_id=session_id),
+    )
+
+    assert result.status == "executed"
+    omp_calls = recorder.command_calls("omp")
+    assert len(omp_calls) == 1
+    omp_argv = omp_calls[0]["argv"]
+    assert f"--resume={session_id}" in omp_argv
+    assert result.details["session_id"] == session_id
+    assert INSTALLATION_TOKEN not in " ".join(omp_argv)
 
 
 @pytest.mark.asyncio

@@ -61,6 +61,9 @@ class AdapterExecutionContext:
     timeout_seconds: int
     command_path: str | None
     installation_token: str | None = field(default=None, repr=False)
+    resume_requested: bool = False
+    session_mode: str = "fresh"
+    resume_session_id: str | None = None
 
     def to_safe_dict(self) -> dict[str, Any]:
         return {
@@ -68,6 +71,8 @@ class AdapterExecutionContext:
             "workdir": str(self.workdir),
             "timeout_seconds": self.timeout_seconds,
             "command_path": self.command_path,
+            "resume_requested": self.resume_requested,
+            "session_mode": self.session_mode,
         }
 
 
@@ -83,6 +88,7 @@ class ExecutionAdapter(Protocol):
 
     name: str
     requires_installation_token: bool = False
+    supports_resume: bool = False
 
     async def execute(
         self,
@@ -101,6 +107,7 @@ class DryRunAdapter:
 
     name: str = ASSEMBLY_BACKEND_DRY_RUN
     requires_installation_token: bool = False
+    supports_resume: bool = False
     last_contract: AssemblyJobContract | None = None
 
     async def execute(
@@ -136,6 +143,7 @@ class PiOhMyPiDeepSeekAdapter:
 
     name: str = ASSEMBLY_BACKEND_PI_OH_MY_PI_DEEPSEEK
     requires_installation_token: bool = True
+    supports_resume: bool = True
 
     async def execute(
         self,
@@ -162,6 +170,8 @@ class PiOhMyPiDeepSeekAdapter:
             "omp_session_jsonl_path": None,
             "exported_html_path": None,
         }
+        if context.session_mode == "resumed" and context.resume_session_id:
+            details["session_id"] = context.resume_session_id
         temp_root_path: Path | None = None
 
         try:
@@ -256,8 +266,11 @@ class PiOhMyPiDeepSeekAdapter:
                 )
 
             prompt = _build_omp_prompt(contract)
+            omp_argv = [command_path, "-p", prompt]
+            if context.session_mode == "resumed" and context.resume_session_id:
+                omp_argv = [command_path, "-p", f"--resume={context.resume_session_id}", prompt]
             omp = await _run_exec(
-                [command_path, "-p", prompt],
+                omp_argv,
                 cwd=checkout_dir,
                 timeout_seconds=timeout_seconds,
                 env=_omp_env(),
@@ -645,13 +658,14 @@ class FakeSubprocessAdapter:
 
     name: str = ASSEMBLY_BACKEND_FAKE_SUBPROCESS
     requires_installation_token: bool = False
+    supports_resume: bool = True
 
     async def execute(
         self,
         contract: AssemblyJobContract,
         context: AdapterExecutionContext | None = None,
     ) -> AdapterResult:
-        _ = contract, context
+        _ = contract
         if not _truthy_env(ASSEMBLY_FAKE_SUBPROCESS_ALLOW_ENV):
             return AdapterResult(
                 status="failed",
@@ -689,12 +703,14 @@ class FakeSubprocessAdapter:
                 status="no_changes",
                 commit_shas=[],
                 summary=summary or "Fake subprocess reported no changes.",
+                details=_fake_details(payload, context),
             )
         if status == "failed":
             return AdapterResult(
                 status="failed",
                 commit_shas=[],
                 summary=summary or "Fake subprocess reported failure.",
+                details=_fake_details(payload, context),
             )
         if status != "executed":
             return AdapterResult(
@@ -724,7 +740,19 @@ class FakeSubprocessAdapter:
             status="executed",
             commit_shas=safe_shas,
             summary=summary or "Fake subprocess reported commits.",
+            details=_fake_details(payload, context),
         )
+
+
+def _fake_details(
+    payload: dict[str, Any], context: AdapterExecutionContext | None
+) -> dict[str, Any]:
+    raw = payload.get("details")
+    details = dict(raw) if isinstance(raw, dict) else {}
+    if context and context.session_mode == "resumed" and context.resume_session_id:
+        details.setdefault("session_id", context.resume_session_id)
+        details.setdefault("resumed", True)
+    return details
 
 
 def _truthy_env(name: str) -> bool:

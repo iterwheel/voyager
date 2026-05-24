@@ -42,6 +42,7 @@ class AssemblyCommand:
     command: str  # canonical lowercase form, e.g. "/assembly"
     dry_run: bool
     allow_missing_stack: bool
+    resume: bool
 
 
 def parse_assembly_command(body: str | None) -> AssemblyCommand | None:
@@ -50,8 +51,8 @@ def parse_assembly_command(body: str | None) -> AssemblyCommand | None:
     Behavior:
     - ``/assembly`` and ``/implement`` are equivalent triggers.
     - The command must start a line (leading whitespace allowed).
-    - ``--dry-run`` and ``--allow-missing-stack`` flags are recognised in
-      any order following the command.
+    - ``--dry-run``, ``--allow-missing-stack``, and ``--resume`` flags are
+      recognised in any order following the command.
     - Case-insensitive matching: ``/Assembly --Dry-Run`` is accepted.
     - Only the *first* matching line wins.  Additional commands in the same
       body are ignored.
@@ -70,4 +71,5 @@ def parse_assembly_command(body: str | None) -> AssemblyCommand | None:
         command=command,
         dry_run="--dry-run" in flags,
         allow_missing_stack="--allow-missing-stack" in flags,
+        resume="--resume" in flags,
     )

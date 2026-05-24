@@ -106,6 +106,11 @@ Before lookup:
    - `verification_commands`
    - `adapter_status`
    - `commit_shas`
+   - `session_mode`
+   - `resume_requested`
+   - `resume_fallback_reason`
+   - `session_id`
+   - `expected_head_sha`
    - `created_at`
    - `completed_at`
 

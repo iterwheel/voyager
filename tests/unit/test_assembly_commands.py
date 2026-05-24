@@ -13,6 +13,7 @@ def test_assembly_command_matches() -> None:
     assert cmd.command == "/assembly"
     assert cmd.dry_run is False
     assert cmd.allow_missing_stack is False
+    assert cmd.resume is False
 
 
 def test_implement_command_is_equivalent() -> None:
@@ -56,6 +57,15 @@ def test_allow_missing_stack_flag_parsed() -> None:
     assert cmd is not None
     assert cmd.allow_missing_stack is True
     assert cmd.dry_run is False
+    assert cmd.resume is False
+
+
+def test_resume_flag_parsed() -> None:
+    cmd = parse_assembly_command("/assembly --resume")
+    assert cmd is not None
+    assert cmd.resume is True
+    assert cmd.dry_run is False
+    assert cmd.allow_missing_stack is False
 
 
 def test_both_flags_parsed_either_order() -> None:
@@ -68,6 +78,7 @@ def test_both_flags_parsed_either_order() -> None:
     assert cmd2 is not None
     assert cmd2.dry_run is True
     assert cmd2.allow_missing_stack is True
+    assert cmd2.resume is False
 
 
 def test_unknown_flag_does_not_set_known_flags() -> None:
@@ -158,6 +169,8 @@ def test_crlf_line_endings_accepted(body: str) -> None:
         "/assembly --dry-run",
         "/assembly --allow-missing-stack",
         "/assembly --dry-run --allow-missing-stack",
+        "/assembly --resume",
+        "/assembly --dry-run --resume",
         # Adversarial: a flag-shaped substring that mimics the deferred
         # ``--backend`` feature.  Must NOT surface as a parsed field.
         "/assembly --backend pi-oh-my-pi-deepseek",
@@ -168,14 +181,14 @@ def test_crlf_line_endings_accepted(body: str) -> None:
 )
 def test_parse_command_never_emits_backend_key(body: str) -> None:
     """F2 (part a): every parsed command's serialized fields expose
-    EXACTLY ``{"dry_run", "allow_missing_stack"}`` for flag-shaped state.
+    EXACTLY ``{"dry_run", "allow_missing_stack", "resume"}`` for flag-shaped state.
 
     The check has three layers:
       1. The frozen dataclass has no ``backend`` attribute.
       2. ``dataclasses.asdict`` never contains a ``backend`` key.
       3. The downstream ``command_flags`` dict (built by ``routing.py``
          as ``{"dry_run": cmd.dry_run, "allow_missing_stack":
-         cmd.allow_missing_stack}``) has exactly that key set.
+         cmd.allow_missing_stack, "resume": cmd.resume}``) has exactly that key set.
     """
     from dataclasses import asdict
 
@@ -201,7 +214,8 @@ def test_parse_command_never_emits_backend_key(body: str) -> None:
     command_flags = {
         "dry_run": cmd.dry_run,
         "allow_missing_stack": cmd.allow_missing_stack,
+        "resume": cmd.resume,
     }
-    assert set(command_flags.keys()) == {"dry_run", "allow_missing_stack"}, (
+    assert set(command_flags.keys()) == {"dry_run", "allow_missing_stack", "resume"}, (
         f"command_flags set for {body!r}: {set(command_flags.keys())!r}"
     )

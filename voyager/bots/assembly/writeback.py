@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import logging
 import os
 from pathlib import Path
@@ -27,9 +28,13 @@ from voyager.core.writeback import build_writeback_failure, dry_run_enabled
 from .adapters import AdapterExecutionContext, AdapterResult, select_execution_adapter
 from .audit import (
     AssemblyAuditManifest,
+    AssemblySessionMetadata,
+    find_session_metadata,
     generate_audit_id,
+    load_session_metadata,
     utc_now_iso,
     write_audit_manifest,
+    write_session_metadata,
 )
 from .branch import make_branch_name
 from .comment import build_assembly_comment
@@ -127,6 +132,7 @@ async def _build_adapter_context(
     repository: str,
     *,
     is_dry_run: bool,
+    session: dict[str, Any] | None = None,
 ) -> AdapterExecutionContext:
     installation_token: str | None = None
     if getattr(adapter, "requires_installation_token", False) is True and not is_dry_run:
@@ -134,6 +140,7 @@ async def _build_adapter_context(
             ASSEMBLY_AGENT_SLUG,
             repository=repository,
         )
+    session = session or {}
     return AdapterExecutionContext(
         repository=repository,
         workdir=_path_env(ASSEMBLY_PI_WORKDIR_ENV, ASSEMBLY_PI_DEFAULT_WORKDIR),
@@ -145,6 +152,9 @@ async def _build_adapter_context(
             os.environ.get(ASSEMBLY_PI_COMMAND_PATH_ENV) or ASSEMBLY_PI_DEFAULT_COMMAND_PATH
         ),
         installation_token=installation_token,
+        resume_requested=bool(session.get("requested")),
+        session_mode=str(session.get("mode") or "fresh"),
+        resume_session_id=session.get("session_id"),
     )
 
 
@@ -206,6 +216,192 @@ def _redact_secret(value: Any, secret: str | None) -> Any:
     return value
 
 
+def _fresh_session(*, requested: bool = False) -> dict[str, Any]:
+    return {
+        "requested": requested,
+        "mode": "fresh",
+        "fallback_reason": None,
+        "pr_number": None,
+        "expected_head_sha": None,
+    }
+
+
+def _resume_fallback(reason: str) -> dict[str, Any]:
+    return {
+        "requested": True,
+        "mode": "resume_fallback",
+        "fallback_reason": reason,
+        "pr_number": None,
+        "expected_head_sha": None,
+    }
+
+
+def _safe_pr_number(pr: dict[str, Any]) -> int | None:
+    try:
+        value = int(pr.get("number") or 0)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _pr_head_sha(pr: dict[str, Any]) -> str | None:
+    value = (pr.get("head") or {}).get("sha")
+    return str(value) if value else None
+
+
+def _pr_is_same_repo(pr: dict[str, Any]) -> bool:
+    head_repo = ((pr.get("head") or {}).get("repo") or {}).get("full_name") or ""
+    base_repo = ((pr.get("base") or {}).get("repo") or {}).get("full_name") or ""
+    return bool(head_repo and base_repo and head_repo == base_repo)
+
+
+def _session_id_from_adapter_result(adapter_result: dict[str, Any]) -> str | None:
+    details = adapter_result.get("details")
+    if not isinstance(details, dict):
+        return None
+    raw = details.get("session_id") or details.get("omp_session_jsonl_path")
+    return str(raw) if raw else None
+
+
+async def _resolve_session(
+    *,
+    client: GitHubAppClient,
+    adapter: Any,
+    repository: str,
+    contract: AssemblyJobContract,
+    command_flags: dict[str, Any],
+) -> dict[str, Any]:
+    """Return session mode metadata for this invocation.
+
+    Resume is opt-in. Every unsafe or unavailable state falls back to a fresh
+    run with an operator-visible reason; it does not fail the Assembly run.
+    """
+    if not bool(command_flags.get("resume")):
+        return _fresh_session(requested=False)
+
+    if getattr(adapter, "supports_resume", False) is not True:
+        return _resume_fallback(f"backend `{adapter.name}` does not support resume")
+
+    try:
+        existing = await client.find_pull_request_by_head(
+            ASSEMBLY_AGENT_SLUG, repository, contract.branch_name
+        )
+    except (httpx.HTTPError, TimeoutError):
+        return _resume_fallback("could not inspect existing pull request")
+    if not existing:
+        return _resume_fallback("no open pull request exists for the Assembly branch")
+    if not _pr_is_same_repo(existing):
+        return _resume_fallback("existing pull request is not a same-repository PR")
+
+    pr_number = _safe_pr_number(existing)
+    head_sha = _pr_head_sha(existing)
+    if pr_number is None or not head_sha:
+        return _resume_fallback("existing pull request metadata is incomplete")
+
+    path = find_session_metadata(
+        repository=repository,
+        issue_number=contract.issue_number,
+        branch_name=contract.branch_name,
+        pr_number=pr_number,
+    )
+    if path is None:
+        fallback = _resume_fallback("no compatible stored session metadata")
+        fallback["pr_number"] = pr_number
+        fallback["expected_head_sha"] = head_sha
+        return fallback
+
+    try:
+        metadata = load_session_metadata(path)
+    except (AttributeError, OSError, TypeError, ValueError, json.JSONDecodeError):
+        fallback = _resume_fallback("stored session metadata is unreadable")
+        fallback["pr_number"] = pr_number
+        fallback["expected_head_sha"] = head_sha
+        return fallback
+
+    checks = {
+        "repository": metadata.repository == repository,
+        "issue": metadata.issue_number == contract.issue_number,
+        "branch": metadata.branch_name == contract.branch_name,
+        "pr": metadata.pr_number == pr_number,
+        "head": metadata.head_sha == head_sha,
+        "backend": metadata.backend_name == adapter.name,
+    }
+    failed = [name for name, ok in checks.items() if not ok]
+    if failed:
+        fallback = _resume_fallback(f"stored session metadata mismatch: {', '.join(failed)}")
+        fallback["pr_number"] = pr_number
+        fallback["expected_head_sha"] = head_sha
+        return fallback
+    if metadata.is_expired():
+        fallback = _resume_fallback("stored session metadata expired")
+        fallback["pr_number"] = pr_number
+        fallback["expected_head_sha"] = head_sha
+        return fallback
+    if not metadata.session_id:
+        fallback = _resume_fallback("stored session id is unavailable")
+        fallback["pr_number"] = pr_number
+        fallback["expected_head_sha"] = head_sha
+        return fallback
+
+    return {
+        "requested": True,
+        "mode": "resumed",
+        "fallback_reason": None,
+        "pr_number": pr_number,
+        "expected_head_sha": head_sha,
+        "session_id": metadata.session_id,
+    }
+
+
+def _persist_session_metadata(
+    *,
+    contract: AssemblyJobContract,
+    result: dict[str, Any],
+    repository: str,
+) -> None:
+    adapter_result = result.get("adapter_result") or {}
+    session_id = _session_id_from_adapter_result(adapter_result)
+    if not session_id:
+        return
+
+    pull_request = result.get("pull_request") or {}
+    pr_number_raw = pull_request.get("number")
+    try:
+        pr_number = int(pr_number_raw) if pr_number_raw else None
+    except (TypeError, ValueError):
+        pr_number = None
+    if not pr_number:
+        return
+
+    branch = result.get("branch") or {}
+    head_sha = branch.get("sha") or (result.get("session") or {}).get("expected_head_sha")
+    if not head_sha:
+        return
+
+    metadata = AssemblySessionMetadata(
+        repository=repository,
+        issue_number=contract.issue_number,
+        branch_name=contract.branch_name,
+        pr_number=int(pr_number),
+        head_sha=str(head_sha),
+        backend_name=str(result.get("execution_backend") or ""),
+        session_id=session_id,
+        audit_id=result.get("audit_id"),
+    )
+    try:
+        write_session_metadata(metadata)
+    except OSError as exc:
+        result["writeback_failures"].append(
+            build_writeback_failure(
+                operation="writeAssemblySessionMetadata",
+                exc=exc,
+                repository=repository,
+                pr=int(pr_number),
+                issue=contract.issue_number,
+            )
+        )
+
+
 def _write_audit_manifest(
     *,
     contract: AssemblyJobContract,
@@ -242,6 +438,12 @@ def _write_audit_manifest(
         adapter_status=adapter_result.get("status"),
         adapter_summary=adapter_result.get("summary"),
         commit_shas=tuple(adapter_result.get("commit_shas") or ()),
+        session_mode=(result.get("session") or {}).get("mode") or "fresh",
+        resume_requested=bool((result.get("session") or {}).get("requested")),
+        resume_fallback_reason=(result.get("session") or {}).get("fallback_reason"),
+        session_id=_session_id_from_adapter_result(adapter_result),
+        expected_head_sha=(result.get("session") or {}).get("expected_head_sha")
+        or ((result.get("branch") or {}).get("sha")),
         completed_at=utc_now_iso(),
         extra={
             "branch": result.get("branch"),
@@ -355,7 +557,7 @@ async def dispatch_assembly_writeback(
     delivery_id = str(route.get("delivery_id") or "")
 
     # Backend selection is env-only (`ASSEMBLY_EXECUTION_BACKEND`) per VOY-1817 D3.
-    # `command_flags` carries `dry_run` / `allow_missing_stack` only; there is
+    # `command_flags` carries `dry_run` / `allow_missing_stack` / `resume`; there is
     # no `--backend` command flag (closed by CHG-1819 F2; see VOY-1819).
     adapter = select_execution_adapter()
     backend_name = adapter.name
@@ -374,6 +576,7 @@ async def dispatch_assembly_writeback(
         "pull_request": None,
         "codex_review_comment_id": None,
         "assembly_comment_id": None,
+        "session": _fresh_session(requested=bool(command_flags.get("resume"))),
         "writeback_failures": [],
     }
 
@@ -447,6 +650,17 @@ async def dispatch_assembly_writeback(
     # growth is documented on `_get_lock`.
     # ------------------------------------------------------------------
     async with _get_lock(repository, contract.branch_name):
+        # Resolve session metadata inside the same per-branch lock that
+        # protects adapter execution. This keeps the PR head-SHA compatibility
+        # check adjacent to the run that consumes the session and avoids a
+        # stale resume window between validation and execution.
+        base_result["session"] = await _resolve_session(
+            client=client,
+            adapter=adapter,
+            repository=repository,
+            contract=contract,
+            command_flags=command_flags,
+        )
         # --------------------------------------------------------------
         # Adapter execution.  Failures are captured but do NOT abort the
         # progress-comment step (D11 "always runs").
@@ -460,6 +674,7 @@ async def dispatch_assembly_writeback(
                 adapter,
                 repository,
                 is_dry_run=is_dry_run,
+                session=base_result.get("session"),
             )
             adapter_result = await _execute_adapter(adapter, contract, adapter_context)
         except NotImplementedError as exc:
@@ -555,6 +770,11 @@ async def dispatch_assembly_writeback(
             await _preserve_existing_pr_context_for_no_changes(
                 client, repository, contract, base_result
             )
+            _persist_session_metadata(
+                contract=contract,
+                result=base_result,
+                repository=repository,
+            )
             _write_audit_manifest(
                 contract=contract,
                 result=base_result,
@@ -574,6 +794,11 @@ async def dispatch_assembly_writeback(
         if pr_ok:
             await _post_codex_trigger(client, repository, contract, base_result)
 
+        _persist_session_metadata(
+            contract=contract,
+            result=base_result,
+            repository=repository,
+        )
         _write_audit_manifest(
             contract=contract,
             result=base_result,
@@ -621,6 +846,7 @@ async def _post_refusal_comment(
         contract=contract or None,
         adapter_result=None,
         refusal=result.get("refusal"),
+        session=result.get("session"),
         dry_run=result.get("dry_run", True),
         surface="issue",
     )
@@ -965,6 +1191,7 @@ async def _upsert_progress_comments(
         pull_request=pull_request,
         writeback_failures=failures,
         audit_id=result.get("audit_id"),
+        session=result.get("session"),
         dry_run=result.get("dry_run", False),
         surface="issue",
     )
@@ -1000,6 +1227,7 @@ async def _upsert_progress_comments(
         pull_request=pull_request,
         writeback_failures=failures,
         audit_id=result.get("audit_id"),
+        session=result.get("session"),
         dry_run=result.get("dry_run", False),
         surface="pr",
     )
