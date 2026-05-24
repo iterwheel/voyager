@@ -90,7 +90,12 @@ def _mock_client(*, token: str = "ghs_test_installation_token") -> AsyncMock:
     client.create_branch_ref = AsyncMock(return_value={"object": {"sha": VALID_SHA}})
     client.find_pull_request_by_head = AsyncMock(return_value=None)
     client.create_pull_request = AsyncMock(
-        return_value={"number": 1234, "html_url": "https://example/pr/1234"}
+        return_value={
+            "number": 1234,
+            "html_url": "https://example/pr/1234",
+            "head": {"repo": {"full_name": "iterwheel/voyager-sandbox"}},
+            "base": {"repo": {"full_name": "iterwheel/voyager-sandbox"}},
+        }
     )
     client.update_pull_request = AsyncMock(return_value={})
     client.create_issue_comment = AsyncMock(return_value={"id": 999})
@@ -390,7 +395,12 @@ async def test_concurrent_fake_subprocess_dispatches_serialize_without_duplicate
     client = _mock_client()
     branch_created = False
     pr_created = False
-    pr_payload = {"number": 1234, "html_url": "https://example/pr/1234"}
+    pr_payload = {
+        "number": 1234,
+        "html_url": "https://example/pr/1234",
+        "head": {"repo": {"full_name": "iterwheel/voyager-sandbox"}},
+        "base": {"repo": {"full_name": "iterwheel/voyager-sandbox"}},
+    }
 
     branch_entered = asyncio.Event()
     branch_release = asyncio.Event()

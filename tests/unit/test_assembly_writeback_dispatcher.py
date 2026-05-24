@@ -82,7 +82,12 @@ def _mock_client_for_writes() -> Any:
     client.create_branch_ref = AsyncMock(return_value={"object": {"sha": "newsha"}})
     client.find_pull_request_by_head = AsyncMock(return_value=None)
     client.create_pull_request = AsyncMock(
-        return_value={"number": 1234, "html_url": "https://example/pr/1234"}
+        return_value={
+            "number": 1234,
+            "html_url": "https://example/pr/1234",
+            "head": {"repo": {"full_name": "iterwheel/voyager-sandbox"}},
+            "base": {"repo": {"full_name": "iterwheel/voyager-sandbox"}},
+        }
     )
     client.update_pull_request = AsyncMock(return_value={})
     client.create_issue_comment = AsyncMock(return_value={"id": 999})
@@ -327,7 +332,12 @@ def test_existing_pr_is_updated_not_recreated(monkeypatch) -> None:
     )
     client = _mock_client_for_writes()
     client.find_pull_request_by_head = AsyncMock(
-        return_value={"number": 555, "html_url": "https://example/pr/555"}
+        return_value={
+            "number": 555,
+            "html_url": "https://example/pr/555",
+            "head": {"repo": {"full_name": "iterwheel/voyager-sandbox"}},
+            "base": {"repo": {"full_name": "iterwheel/voyager-sandbox"}},
+        }
     )
     result = asyncio.run(
         dispatch_assembly_writeback(client, _route(), repository="iterwheel/voyager-sandbox")
@@ -377,7 +387,12 @@ def test_duplicate_no_changes_preserves_existing_pr_progress_context(monkeypatch
     client.find_pull_request_by_head = AsyncMock(
         side_effect=[
             None,
-            {"number": 1234, "html_url": "https://example/pr/1234"},
+            {
+                "number": 1234,
+                "html_url": "https://example/pr/1234",
+                "head": {"repo": {"full_name": "iterwheel/voyager-sandbox"}},
+                "base": {"repo": {"full_name": "iterwheel/voyager-sandbox"}},
+            },
         ]
     )
 

@@ -93,7 +93,14 @@ class TestBranchIdempotency:
         client.branch_ref_exists = AsyncMock(return_value=True)
         client.branch_protected = AsyncMock(return_value=False)
         client.find_pull_request_by_head = AsyncMock(return_value=None)
-        client.create_pull_request = AsyncMock(return_value={"number": 42, "html_url": "http://pr"})
+        client.create_pull_request = AsyncMock(
+            return_value={
+                "number": 42,
+                "html_url": "http://pr",
+                "head": {"repo": {"full_name": "o/r"}},
+                "base": {"repo": {"full_name": "o/r"}},
+            }
+        )
         client.create_issue_comment = AsyncMock(return_value={"id": 100})
         client.upsert_issue_comment = AsyncMock(return_value={"id": 999})
 
@@ -118,7 +125,14 @@ class TestBranchIdempotency:
             return_value={"ref": "refs/heads/1-test", "object": {"sha": "abc"}}
         )
         client.find_pull_request_by_head = AsyncMock(return_value=None)
-        client.create_pull_request = AsyncMock(return_value={"number": 42, "html_url": "http://pr"})
+        client.create_pull_request = AsyncMock(
+            return_value={
+                "number": 42,
+                "html_url": "http://pr",
+                "head": {"repo": {"full_name": "o/r"}},
+                "base": {"repo": {"full_name": "o/r"}},
+            }
+        )
         client.create_issue_comment = AsyncMock(return_value={"id": 100})
         client.upsert_issue_comment = AsyncMock(return_value={"id": 999})
 
@@ -139,7 +153,14 @@ class TestBranchIdempotency:
         client.branch_ref_exists = AsyncMock(return_value=True)
         client.branch_protected = AsyncMock(return_value=False)
         client.find_pull_request_by_head = AsyncMock(return_value=None)
-        client.create_pull_request = AsyncMock(return_value={"number": 42, "html_url": "http://pr"})
+        client.create_pull_request = AsyncMock(
+            return_value={
+                "number": 42,
+                "html_url": "http://pr",
+                "head": {"repo": {"full_name": "o/r"}},
+                "base": {"repo": {"full_name": "o/r"}},
+            }
+        )
         client.create_issue_comment = AsyncMock(return_value={"id": 100})
         client.upsert_issue_comment = AsyncMock(return_value={"id": 999})
 
@@ -170,7 +191,12 @@ class TestPRIdempotency:
         client.branch_ref_exists = AsyncMock(return_value=True)
         client.branch_protected = AsyncMock(return_value=False)
         client.find_pull_request_by_head = AsyncMock(
-            return_value={"number": 55, "html_url": "http://existing-pr"}
+            return_value={
+                "number": 55,
+                "html_url": "http://existing-pr",
+                "head": {"repo": {"full_name": "o/r"}},
+                "base": {"repo": {"full_name": "o/r"}},
+            }
         )
         client.update_pull_request = AsyncMock(return_value={"number": 55, "html_url": "http://pr"})
         client.create_issue_comment = AsyncMock(return_value={"id": 100})
@@ -193,7 +219,12 @@ class TestPRIdempotency:
         client.branch_ref_exists = AsyncMock(return_value=True)
         client.branch_protected = AsyncMock(return_value=False)
         client.find_pull_request_by_head = AsyncMock(
-            return_value={"number": 55, "html_url": "http://existing-pr"}
+            return_value={
+                "number": 55,
+                "html_url": "http://existing-pr",
+                "head": {"repo": {"full_name": "o/r"}},
+                "base": {"repo": {"full_name": "o/r"}},
+            }
         )
         client.update_pull_request = AsyncMock(return_value={"number": 55, "html_url": "http://pr"})
         client.create_issue_comment = AsyncMock(return_value={"id": 100})
@@ -216,7 +247,12 @@ class TestPRIdempotency:
         client.branch_ref_exists = AsyncMock(return_value=True)
         client.branch_protected = AsyncMock(return_value=False)
         client.find_pull_request_by_head = AsyncMock(
-            return_value={"number": 55, "html_url": "http://existing-pr"}
+            return_value={
+                "number": 55,
+                "html_url": "http://existing-pr",
+                "head": {"repo": {"full_name": "o/r"}},
+                "base": {"repo": {"full_name": "o/r"}},
+            }
         )
         client.update_pull_request = AsyncMock(return_value={"number": 55, "html_url": "http://pr"})
         client.create_issue_comment = AsyncMock(return_value={"id": 100})
@@ -243,7 +279,12 @@ class TestPRIdempotency:
         client.branch_protected = AsyncMock(return_value=False)
         client.find_pull_request_by_head = AsyncMock(return_value=None)
         client.create_pull_request = AsyncMock(
-            return_value={"number": 42, "html_url": "http://new-pr"}
+            return_value={
+                "number": 42,
+                "html_url": "http://new-pr",
+                "head": {"repo": {"full_name": "o/r"}},
+                "base": {"repo": {"full_name": "o/r"}},
+            }
         )
         client.create_issue_comment = AsyncMock(return_value={"id": 100})
         client.upsert_issue_comment = AsyncMock(return_value={"id": 999})

@@ -180,8 +180,11 @@ When Assembly opens or updates a PR:
 6. Confirm `headRepository` matches `baseRepository` on the PR. Fork PRs are
    forbidden for managed Assembly loops (see §5.1 for why). Verify with:
    ```bash
-   gh pr view <N> --repo <owner/repo> --json headRepository,baseRepository | grep -q '"nameWithOwner": "<owner/repo>"'
+   gh pr view <N> --repo <owner/repo> --json headRepository,isCrossRepository | jq -e '(.isCrossRepository | not) and (.headRepository.nameWithOwner == "<owner>/<repo>")' > /dev/null
    ```
+   When the check passes (`isCrossRepository` is `false` and
+   `headRepository.nameWithOwner` matches the expected owner/repo) the exit
+   code is 0.  A non-zero exit indicates a fork PR.
 
 Assembly's own validation is evidence, not a substitute for operator
 acceptance. The operator is still responsible for checking semantic fit before

@@ -93,7 +93,12 @@ def _base_client() -> AsyncMock:
     client.create_branch_ref = AsyncMock(return_value={"object": {"sha": "newsha"}})
     client.find_pull_request_by_head = AsyncMock(return_value=None)
     client.create_pull_request = AsyncMock(
-        return_value={"number": 1, "html_url": "https://example/pr/1"}
+        return_value={
+            "number": 1,
+            "html_url": "https://example/pr/1",
+            "head": {"repo": {"full_name": "iterwheel/voyager-sandbox"}},
+            "base": {"repo": {"full_name": "iterwheel/voyager-sandbox"}},
+        }
     )
     client.update_pull_request = AsyncMock(return_value={})
     client.create_issue_comment = AsyncMock(return_value={"id": 200})
@@ -126,7 +131,12 @@ def test_branch_succeeds_pr_open_fails_progress_comment_runs(commit_adapter) -> 
 def test_existing_pr_codex_trigger_fails_progress_still_runs(commit_adapter) -> None:
     client = _base_client()
     client.find_pull_request_by_head = AsyncMock(
-        return_value={"number": 7, "html_url": "https://example/pr/7"}
+        return_value={
+            "number": 7,
+            "html_url": "https://example/pr/7",
+            "head": {"repo": {"full_name": "iterwheel/voyager-sandbox"}},
+            "base": {"repo": {"full_name": "iterwheel/voyager-sandbox"}},
+        }
     )
     client.create_issue_comment = AsyncMock(side_effect=_http_error(403))
 

@@ -280,7 +280,14 @@ class TestProgressCommentCodexTriggerFails:
         client.branch_ref_exists = AsyncMock(return_value=True)
         client.branch_protected = AsyncMock(return_value=False)
         client.find_pull_request_by_head = AsyncMock(return_value=None)
-        client.create_pull_request = AsyncMock(return_value={"number": 42, "html_url": "http://pr"})
+        client.create_pull_request = AsyncMock(
+            return_value={
+                "number": 42,
+                "html_url": "http://pr",
+                "head": {"repo": {"full_name": "o/r"}},
+                "base": {"repo": {"full_name": "o/r"}},
+            }
+        )
         client.upsert_issue_comment = AsyncMock(return_value={"id": 999})
 
         response = Mock(spec=httpx.Response)

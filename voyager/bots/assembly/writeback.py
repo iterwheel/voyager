@@ -705,19 +705,35 @@ async def _verify_pr_head_repo(
     because Clearance cannot auto-resolve review threads without GitHub App
     access to the fork head repository.
 
-    Returns True when the head repo matches (or when the repo fields are not
-    present in the response — the caller already ensures same-repo creation via
-    the remote URL and bare branch name).  On explicit mismatch records a
-    writeback failure and returns False.
+    Returns True when the head repo matches.  On missing metadata or explicit
+    mismatch records a writeback failure and returns False.
     """
     head_repo = ((pr.get("head") or {}).get("repo") or {}).get("full_name") or ""
     base_repo = ((pr.get("base") or {}).get("repo") or {}).get("full_name") or ""
 
-    # If either field is missing (e.g. simplified test mock or deleted fork),
-    # skip the check — the creation path already enforces same-repo via
-    # the remote URL and bare branch-name in create_pull_request.
+    # Missing metadata → fail closed.  A deleted/inaccessible fork head repo
+    # would produce null fields here; the same-repo invariant cannot be
+    # verified so the managed flow must not proceed.
     if not head_repo or not base_repo:
-        return True
+        missing = "head" if not head_repo else "base"
+        result["writeback_failures"].append(
+            {
+                "operation": "verifyPRHeadRepo",
+                "error_class": "UnverifiableRepoMetadata",
+                "status": None,
+                "repo": repository,
+                "pr": pr.get("number"),
+                "issue": None,
+                "thread_id": None,
+                "suggested_action": (
+                    f"PR {missing} repository metadata is missing or empty.  "
+                    "VOY-1822 requires same-repo PR branches for managed flows; "
+                    "the PR source cannot be verified.  "
+                    "Close this PR and create a new one from the target repository."
+                ),
+            }
+        )
+        return False
 
     if head_repo != base_repo:
         result["writeback_failures"].append(

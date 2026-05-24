@@ -153,7 +153,12 @@ def dispatch_route(routes: list, payload: dict) -> dict:
     client.create_branch_ref = AsyncMock(return_value={"object": {"sha": "newsha"}})
     client.find_pull_request_by_head = AsyncMock(return_value=None)
     client.create_pull_request = AsyncMock(
-        return_value={"number": 999, "html_url": "https://example/pr/999"}
+        return_value={
+            "number": 999,
+            "html_url": "https://example/pr/999",
+            "head": {"repo": {"full_name": "iterwheel/voyager"}},
+            "base": {"repo": {"full_name": "iterwheel/voyager"}},
+        }
     )
     client.update_pull_request = AsyncMock(return_value={})
     client.create_issue_comment = AsyncMock(return_value={"id": 1})
