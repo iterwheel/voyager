@@ -880,6 +880,12 @@ async def _preserve_existing_pr_context_for_no_changes(
         return
     if pr_number <= 0:
         return
+    # VOY-1822: verify the PR is not from a fork before preserving its
+    # context.  Without this gate a duplicate no_changes run could
+    # overwrite the "skipped_no_changes" action with "updated" and
+    # record the stale fork PR as the current state.
+    if not await _verify_pr_head_repo(existing, repository, result):
+        return
 
     result["branch"] = {
         "name": contract.branch_name,

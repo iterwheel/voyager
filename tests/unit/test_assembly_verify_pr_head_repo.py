@@ -8,13 +8,20 @@ Tests cover:
   - Fork PR: head_repo differs from base_repo → reject, write failure.
   - Missing head repo metadata (e.g. deleted/inaccessible fork) → fail closed.
   - Missing base repo metadata → fail closed.
+  - Fork PR in no_changes path: preserve_existing respects same-repo gate (no "updated").
 """
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import pytest
 
-from voyager.bots.assembly.writeback import _verify_pr_head_repo
+from voyager.bots.assembly.job_contract import AssemblyJobContract
+from voyager.bots.assembly.writeback import (
+    _preserve_existing_pr_context_for_no_changes,
+    _verify_pr_head_repo,
+)
 
 REPOSITORY = "iterwheel/voyager"
 
@@ -131,3 +138,142 @@ async def test_head_repo_empty_string_returns_false() -> None:
     ok = await _verify_pr_head_repo(pr, REPOSITORY, result)
     assert ok is False
     assert len(result["writeback_failures"]) == 1
+
+
+def _fake_contract(*, issue_number: int) -> AssemblyJobContract:
+    """Build a minimal contract for no_changes tests."""
+    return AssemblyJobContract(
+        repository=REPOSITORY,
+        issue_number=issue_number,
+        issue_url=f"https://github.com/{REPOSITORY}/issues/{issue_number}",
+        issue_title="Test",
+        issue_body="body",
+        branch_name=f"{issue_number}-test",
+        base_branch="main",
+        task_summary="summary",
+        acceptance_criteria=["ac1"],
+        forbidden_operations=[],
+        verification_commands=[],
+        delivery_id="d1",
+        requested_at="2026-01-01T00:00:00Z",
+        acceptance_criteria_source="section",
+        task_summary_source="section",
+        extra={},
+    )
+
+
+# ---------------------------------------------------------------------------
+# _preserve_existing_pr_context_for_no_changes — no_changes fork PR path
+# ---------------------------------------------------------------------------
+# These tests verify that duplicate no_changes runs do NOT preserve the
+# PR context when the existing PR is from a fork (VOY-1822 Follow-up 5).
+
+
+def _no_changes_adapter_result() -> dict:
+    """Build an adapter_result dict with no_changes status (no commits)."""
+    return {"status": "no_changes", "commit_shas": [], "summary": "nothing to do", "details": {}}
+
+
+@pytest.mark.asyncio
+async def test_no_changes_fork_pr_does_not_preserve_context() -> None:
+    """Fork PR in no_changes path does NOT set pull_request as updated.
+
+    Regression gate for VOY-1822 Follow-up 5: _preserve_existing_pr_context_for_no_changes
+    must verify head repo before preserving context, otherwise a duplicate
+    no_changes run overwrites the "skipped_no_changes" state with "updated".
+    """
+    client = AsyncMock()
+    client.find_pull_request_by_head = AsyncMock(
+        return_value={
+            "number": 1,
+            "html_url": "http://pr",
+            "head": {"repo": {"full_name": "fork/voyager"}, "sha": "abc"},
+            "base": {"repo": {"full_name": REPOSITORY}},
+        }
+    )
+    result: dict = {
+        "writeback_failures": [],
+        "adapter_result": _no_changes_adapter_result(),
+        "pull_request": {"number": None, "url": None, "action": "skipped_no_changes"},
+    }
+    contract = _fake_contract(issue_number=1)
+    await _preserve_existing_pr_context_for_no_changes(client, REPOSITORY, contract, result)
+    # pull_request must remain "skipped_no_changes" — NOT "updated"
+    assert result["pull_request"]["action"] == "skipped_no_changes"
+    # branch key is NOT set when verification fails (context not preserved)
+    assert result.get("branch") is None
+
+
+@pytest.mark.asyncio
+async def test_no_changes_fork_pr_records_failure() -> None:
+    """Fork PR in no_changes path records verifyPRHeadRepo failure."""
+    client = AsyncMock()
+    client.find_pull_request_by_head = AsyncMock(
+        return_value={
+            "number": 1,
+            "html_url": "http://pr",
+            "head": {"repo": {"full_name": "fork/voyager"}, "sha": "abc"},
+            "base": {"repo": {"full_name": REPOSITORY}},
+        }
+    )
+    result: dict = {
+        "writeback_failures": [],
+        "adapter_result": _no_changes_adapter_result(),
+        "pull_request": {"number": None, "url": None, "action": "skipped_no_changes"},
+    }
+    contract = _fake_contract(issue_number=1)
+    await _preserve_existing_pr_context_for_no_changes(client, REPOSITORY, contract, result)
+    failures = result["writeback_failures"]
+    assert len(failures) == 1
+    assert failures[0]["operation"] == "verifyPRHeadRepo"
+    assert failures[0]["error_class"] == "ForkHeadRepo"
+    assert failures[0]["pr"] == 1
+
+
+@pytest.mark.asyncio
+async def test_no_changes_missing_head_repo_does_not_preserve_context() -> None:
+    """Missing head repo metadata in no_changes path does NOT preserve context."""
+    client = AsyncMock()
+    client.find_pull_request_by_head = AsyncMock(
+        return_value={
+            "number": 1,
+            "html_url": "http://pr",
+            "head": {"sha": "abc"},
+        }
+    )
+    result: dict = {
+        "writeback_failures": [],
+        "adapter_result": _no_changes_adapter_result(),
+        "pull_request": {"number": None, "url": None, "action": "skipped_no_changes"},
+    }
+    contract = _fake_contract(issue_number=1)
+    await _preserve_existing_pr_context_for_no_changes(client, REPOSITORY, contract, result)
+    assert result["pull_request"]["action"] == "skipped_no_changes"
+    assert len(result["writeback_failures"]) == 1
+    assert result["writeback_failures"][0]["operation"] == "verifyPRHeadRepo"
+
+
+@pytest.mark.asyncio
+async def test_no_changes_same_repo_preserves_context() -> None:
+    """Same-repo PR in no_changes path preserves PR context (no regression)."""
+    client = AsyncMock()
+    client.find_pull_request_by_head = AsyncMock(
+        return_value={
+            "number": 42,
+            "html_url": "http://pr",
+            "head": {"repo": {"full_name": REPOSITORY}, "sha": "abc"},
+            "base": {"repo": {"full_name": REPOSITORY}},
+        }
+    )
+    result: dict = {
+        "writeback_failures": [],
+        "adapter_result": _no_changes_adapter_result(),
+        "pull_request": {"number": None, "url": None, "action": "skipped_no_changes"},
+    }
+    contract = _fake_contract(issue_number=1)
+    await _preserve_existing_pr_context_for_no_changes(client, REPOSITORY, contract, result)
+    # Same-repo PR must be preserved — pull_request should be "updated"
+    assert result["pull_request"]["action"] == "updated"
+    assert result["pull_request"]["number"] == 42
+    assert result["branch"]["name"] == contract.branch_name
+    assert result["writeback_failures"] == []
