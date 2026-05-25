@@ -12,6 +12,7 @@ Covers all five rows of the §Gate Corner Table:
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -214,6 +215,122 @@ def test_dry_run_false_pi_backend_progress_comment_runs_anyway(monkeypatch) -> N
     assert client.upsert_issue_comment.await_count == 1
     client.installation_token.assert_awaited_once()
     assert result["writeback_failures"] == []
+
+
+def test_adapter_failure_diagnostic_reaches_comment_manifest_and_log(
+    monkeypatch,
+    tmp_path,
+    caplog,
+) -> None:
+    from voyager.bots.assembly import adapters
+    from voyager.bots.assembly import writeback as wb_module
+
+    monkeypatch.setenv("DRY_RUN", "false")
+
+    class _FailureAdapter:
+        name = "fake-diagnostic-adapter"
+
+        async def execute(self, contract, context):
+            assert context.audit_id
+            return adapters.AdapterResult(
+                status="failed",
+                commit_shas=[],
+                summary="git push failed",
+                details={
+                    "failure_debug_bundle_path": str(tmp_path / "failures" / "x"),
+                    "failure_diagnostic": {
+                        "phase": "git_push",
+                        "command_category": "git",
+                        "command": "git push",
+                        "exit_code": 128,
+                        "timed_out": False,
+                        "stderr_tail": (
+                            "remote: invalid ASSEMBLY_GITHUB_TOKEN=ghs_comment_secret "
+                            "OPENAI_API_KEY=sk-proj-secret"
+                        ),
+                    },
+                },
+            )
+
+    monkeypatch.setattr(
+        wb_module, "select_execution_adapter", lambda backend=None: _FailureAdapter()
+    )
+    client = _mock_client_for_writes()
+
+    with caplog.at_level(logging.WARNING, logger="voyager.bots.assembly.writeback"):
+        result = asyncio.run(
+            dispatch_assembly_writeback(client, _route(), repository="iterwheel/voyager-sandbox")
+        )
+
+    assert result["adapter_result"]["status"] == "failed"
+    assert result["pull_request"]["action"] == "skipped_no_changes"
+    body = client.upsert_issue_comment.await_args.kwargs["body"]
+    assert "**Backend failure diagnostics:**" in body
+    assert "- Phase: `git_push`" in body
+    assert "- Command: `git`" in body
+    assert "- Exit code: `128`" in body
+    assert "ghs_comment_secret" not in body
+    assert "sk-proj-secret" not in body
+    assert "ASSEMBLY_GITHUB_TOKEN=" not in body
+
+    manifest_path = find_audit_manifest(result["audit_id"], root=tmp_path / "audit")
+    assert manifest_path is not None
+    manifest = load_audit_manifest(manifest_path)
+    assert manifest.failure_diagnostic["phase"] == "git_push"
+    assert manifest.failure_debug_bundle_path.endswith("/failures/x")
+    serialized_manifest = str(manifest.to_dict())
+    assert "ghs_comment_secret" not in serialized_manifest
+    assert "sk-proj-secret" not in serialized_manifest
+    assert "ASSEMBLY_GITHUB_TOKEN=" not in serialized_manifest
+
+    assert any(
+        record.message == "Assembly backend failure diagnostic"
+        and record.__dict__.get("phase") == "git_push"
+        and record.__dict__.get("command_category") == "git"
+        for record in caplog.records
+    )
+
+
+def test_adapter_non_mapping_failure_diagnostic_does_not_break_manifest(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from voyager.bots.assembly import adapters
+    from voyager.bots.assembly import writeback as wb_module
+
+    monkeypatch.setenv("DRY_RUN", "false")
+
+    class _FailureAdapter:
+        name = "fake-diagnostic-adapter"
+
+        async def execute(self, contract, context):
+            _ = (contract, context)
+            return adapters.AdapterResult(
+                status="failed",
+                commit_shas=[],
+                summary="adapter failed",
+                details={"failure_diagnostic": ["not", "a", "mapping"]},
+            )
+
+    monkeypatch.setattr(
+        wb_module, "select_execution_adapter", lambda backend=None: _FailureAdapter()
+    )
+    client = _mock_client_for_writes()
+
+    result = asyncio.run(
+        dispatch_assembly_writeback(client, _route(), repository="iterwheel/voyager-sandbox")
+    )
+
+    assert result["adapter_result"]["status"] == "failed"
+    assert result["pull_request"]["action"] == "skipped_no_changes"
+    assert client.upsert_issue_comment.await_count == 1
+    body = client.upsert_issue_comment.await_args.kwargs["body"]
+    assert "**Backend failure diagnostics:**" not in body
+
+    manifest_path = find_audit_manifest(result["audit_id"], root=tmp_path / "audit")
+    assert manifest_path is not None
+    manifest = load_audit_manifest(manifest_path)
+    assert manifest.failure_diagnostic == {}
 
 
 # ---------------------------------------------------------------------------

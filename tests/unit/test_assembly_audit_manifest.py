@@ -102,6 +102,37 @@ def test_manifest_redacts_token_values_and_secret_keys() -> None:
     assert data["extra"]["nested"]["message"] == "saw [redacted] in output"
 
 
+def test_manifest_carries_sanitized_failure_diagnostic() -> None:
+    manifest = AssemblyAuditManifest(
+        audit_id="asmb-0123456789abcdef",
+        repository="iterwheel/voyager",
+        issue_number=93,
+        delivery_id="delivery-1",
+        backend_name="pi-oh-my-pi-deepseek",
+        failure_debug_bundle_path="/Users/frank/.voyager/state/assembly/failures/x",
+        failure_diagnostic={
+            "phase": "git_push",
+            "command_category": "git",
+            "exit_code": 128,
+            "timed_out": False,
+            "stderr_tail": (
+                "remote: invalid "
+                "ASSEMBLY_GITHUB_TOKEN=ghs_manifest_secret "
+                "OPENAI_API_KEY=sk-proj-secret"
+            ),
+        },
+    )
+
+    data = manifest.to_dict()
+
+    assert data["failure_debug_bundle_path"].endswith("/failures/x")
+    assert data["failure_diagnostic"]["phase"] == "git_push"
+    serialized = str(data)
+    assert "ghs_manifest_secret" not in serialized
+    assert "sk-proj-secret" not in serialized
+    assert "ASSEMBLY_GITHUB_TOKEN=" not in serialized
+
+
 def test_comment_renders_public_audit_hint_only() -> None:
     audit_id = "asmb-0123456789abcdef"
 
@@ -122,6 +153,77 @@ def test_comment_renders_public_audit_hint_only() -> None:
     assert f"rules/{ASSEMBLY_AUDIT_SOP}" in body
     assert "/Users/frank/.omp/agent/sessions" not in body
     assert "ghp_" not in body
+
+
+def test_comment_renders_public_backend_failure_diagnostics_safely() -> None:
+    body = build_assembly_comment(
+        status="failed",
+        contract={
+            "repository": "iterwheel/voyager",
+            "issue_number": 93,
+            "acceptance_criteria": [],
+        },
+        adapter_result={
+            "status": "failed",
+            "summary": "Git push failed for Assembly OMP backend.",
+            "details": {
+                "failure_debug_bundle_path": "/Users/frank/.voyager/state/assembly/failures/x",
+                "failure_diagnostic": {
+                    "phase": "git_push",
+                    "command_category": "git",
+                    "exit_code": 128,
+                    "timed_out": False,
+                    "stderr_tail": (
+                        "remote: invalid "
+                        "ASSEMBLY_GITHUB_TOKEN=ghs_comment_secret "
+                        "DEEPSEEK_API_KEY=sk-live-secret"
+                    ),
+                },
+            },
+        },
+        branch={"name": "93-failure-diagnostics"},
+        pull_request={"action": "skipped_no_changes"},
+        audit_id="asmb-0123456789abcdef",
+    )
+
+    assert "**Backend failure diagnostics:**" in body
+    assert "- Phase: `git_push`" in body
+    assert "- Command: `git`" in body
+    assert "- Exit code: `128`" in body
+    assert "- Debug bundle: recorded in the private audit manifest." in body
+    assert "ghs_comment_secret" not in body
+    assert "sk-live-secret" not in body
+    assert "ASSEMBLY_GITHUB_TOKEN=" not in body
+
+
+def test_comment_wraps_failure_tail_with_backtick_safe_code_span() -> None:
+    body = build_assembly_comment(
+        status="failed",
+        contract={
+            "repository": "iterwheel/voyager",
+            "issue_number": 93,
+            "acceptance_criteria": [],
+        },
+        adapter_result={
+            "status": "failed",
+            "summary": "Verification failed.",
+            "details": {
+                "failure_diagnostic": {
+                    "phase": "verification",
+                    "command_category": "verification",
+                    "exit_code": 2,
+                    "timed_out": False,
+                    "stderr_tail": "parser saw `bad` token @iterwheel",
+                },
+            },
+        },
+        branch={"name": "93-failure-diagnostics"},
+        pull_request={"action": "skipped_no_changes"},
+        audit_id="asmb-0123456789abcdef",
+    )
+
+    assert "- Stderr tail: `` parser saw `bad` token @iterwheel ``" in body
+    assert "- Stderr tail: `parser saw `bad` token @iterwheel`" not in body
 
 
 def test_lookup_hint_names_path_and_sop() -> None:

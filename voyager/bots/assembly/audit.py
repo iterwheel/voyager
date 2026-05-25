@@ -15,6 +15,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from voyager.core.redaction import sanitize_public_text
+
 from .constants import ASSEMBLY_AUDIT_DIR_DEFAULT, ASSEMBLY_AUDIT_DIR_ENV, ASSEMBLY_AUDIT_SOP
 
 _SCHEMA_VERSION = 1
@@ -117,7 +119,7 @@ def _display_audit_root() -> Path:
 
 def _redact(value: Any) -> Any:
     if isinstance(value, str):
-        return _TOKEN_VALUE_RE.sub("[redacted]", value)
+        return sanitize_public_text(_TOKEN_VALUE_RE.sub("[redacted]", value), limit=2000)
     if isinstance(value, tuple):
         return [_redact(item) for item in value]
     if isinstance(value, list):
@@ -155,6 +157,8 @@ class AssemblyAuditManifest:
     resume_fallback_reason: str | None = None
     session_id: str | None = None
     expected_head_sha: str | None = None
+    failure_diagnostic: dict[str, Any] = field(default_factory=dict)
+    failure_debug_bundle_path: str | None = None
     created_at: str = field(default_factory=utc_now_iso)
     completed_at: str | None = None
     schema_version: int = _SCHEMA_VERSION
@@ -189,6 +193,8 @@ class AssemblyAuditManifest:
             resume_fallback_reason=data.get("resume_fallback_reason"),
             session_id=data.get("session_id"),
             expected_head_sha=data.get("expected_head_sha"),
+            failure_diagnostic=dict(data.get("failure_diagnostic") or {}),
+            failure_debug_bundle_path=data.get("failure_debug_bundle_path"),
             created_at=str(data.get("created_at") or ""),
             completed_at=data.get("completed_at"),
             schema_version=int(data.get("schema_version") or _SCHEMA_VERSION),

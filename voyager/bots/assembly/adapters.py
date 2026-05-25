@@ -12,14 +12,18 @@ default is ``dry-run``.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
 import shutil
 import tempfile
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
+
+from voyager.core.redaction import sanitize_public_text
 
 from .constants import (
     ASSEMBLY_BACKEND_DRY_RUN,
@@ -33,6 +37,7 @@ from .job_contract import AssemblyJobContract
 from .publish import publish_branch
 
 _COMMIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+_FAILURE_TAIL_LIMIT = 600
 
 
 @dataclass(frozen=True)
@@ -64,6 +69,7 @@ class AdapterExecutionContext:
     resume_requested: bool = False
     session_mode: str = "fresh"
     resume_session_id: str | None = None
+    audit_id: str | None = None
 
     def to_safe_dict(self) -> dict[str, Any]:
         return {
@@ -73,6 +79,7 @@ class AdapterExecutionContext:
             "command_path": self.command_path,
             "resume_requested": self.resume_requested,
             "session_mode": self.session_mode,
+            "audit_id": self.audit_id,
         }
 
 
@@ -130,6 +137,7 @@ class _ProcessResult:
     returncode: int
     stdout: str = ""
     stderr: str = ""
+    timed_out: bool = False
 
 
 @dataclass
@@ -197,7 +205,19 @@ class PiOhMyPiDeepSeekAdapter:
             )
             if clone.returncode != 0:
                 return _failed_pi_result(
-                    "Git clone failed for Assembly OMP backend.", token, details
+                    "Git clone failed for Assembly OMP backend.",
+                    token,
+                    details,
+                    failure_diagnostic=_diagnostic_from_process(
+                        phase="clone",
+                        command_category="git",
+                        command="git clone",
+                        process=clone,
+                        secret=token,
+                    ),
+                    temp_root_path=temp_root_path,
+                    contract=contract,
+                    context=context,
                 )
 
             git_user = await _run_exec(
@@ -211,6 +231,16 @@ class PiOhMyPiDeepSeekAdapter:
                     "Git user.name config failed for Assembly OMP backend.",
                     token,
                     details,
+                    failure_diagnostic=_diagnostic_from_process(
+                        phase="git_config",
+                        command_category="git",
+                        command="git config user.name",
+                        process=git_user,
+                        secret=token,
+                    ),
+                    temp_root_path=temp_root_path,
+                    contract=contract,
+                    context=context,
                 )
             git_email = await _run_exec(
                 [
@@ -228,15 +258,36 @@ class PiOhMyPiDeepSeekAdapter:
                     "Git user.email config failed for Assembly OMP backend.",
                     token,
                     details,
+                    failure_diagnostic=_diagnostic_from_process(
+                        phase="git_config",
+                        command_category="git",
+                        command="git config user.email",
+                        process=git_email,
+                        secret=token,
+                    ),
+                    temp_root_path=temp_root_path,
+                    contract=contract,
+                    context=context,
                 )
 
-            branch_start_ref = await _branch_start_ref(
+            branch_start_ref, branch_start_failure = await _branch_start_ref(
                 contract,
                 checkout_dir,
                 timeout_seconds,
                 git_env=git_env,
                 git_auth_env=git_auth_env,
+                secret=token,
             )
+            if branch_start_failure is not None:
+                return _failed_pi_result(
+                    "Git branch-start fetch failed for Assembly OMP backend.",
+                    token,
+                    details,
+                    failure_diagnostic=branch_start_failure,
+                    temp_root_path=temp_root_path,
+                    contract=contract,
+                    context=context,
+                )
 
             checkout = await _run_exec(
                 [
@@ -255,6 +306,16 @@ class PiOhMyPiDeepSeekAdapter:
                     "Git checkout failed for Assembly OMP backend.",
                     token,
                     details,
+                    failure_diagnostic=_diagnostic_from_process(
+                        phase="checkout",
+                        command_category="git",
+                        command="git checkout",
+                        process=checkout,
+                        secret=token,
+                    ),
+                    temp_root_path=temp_root_path,
+                    contract=contract,
+                    context=context,
                 )
 
             base_sha = await _git_head_sha(checkout_dir, timeout_seconds, git_env)
@@ -263,6 +324,14 @@ class PiOhMyPiDeepSeekAdapter:
                     "Could not read base commit for Assembly OMP backend.",
                     token,
                     details,
+                    failure_diagnostic=_simple_diagnostic(
+                        phase="git_rev_parse",
+                        command_category="git",
+                        command="git rev-parse HEAD",
+                    ),
+                    temp_root_path=temp_root_path,
+                    contract=contract,
+                    context=context,
                 )
 
             prompt = _build_omp_prompt(contract)
@@ -281,6 +350,16 @@ class PiOhMyPiDeepSeekAdapter:
                     f"OMP subprocess failed with exit code {omp.returncode}.",
                     token,
                     details,
+                    failure_diagnostic=_diagnostic_from_process(
+                        phase="omp_execution",
+                        command_category="omp",
+                        command=Path(command_path).name or "omp",
+                        process=omp,
+                        secret=token,
+                    ),
+                    temp_root_path=temp_root_path,
+                    contract=contract,
+                    context=context,
                 )
 
             status = await _run_exec(
@@ -294,6 +373,16 @@ class PiOhMyPiDeepSeekAdapter:
                     "Git status failed for Assembly OMP backend.",
                     token,
                     details,
+                    failure_diagnostic=_diagnostic_from_process(
+                        phase="git_status",
+                        command_category="git",
+                        command="git status --porcelain",
+                        process=status,
+                        secret=token,
+                    ),
+                    temp_root_path=temp_root_path,
+                    contract=contract,
+                    context=context,
                 )
 
             dirty_tree = bool(status.stdout.strip())
@@ -309,6 +398,16 @@ class PiOhMyPiDeepSeekAdapter:
                         "Git add failed for Assembly OMP backend.",
                         token,
                         details,
+                        failure_diagnostic=_diagnostic_from_process(
+                            phase="git_add",
+                            command_category="git",
+                            command="git add -A",
+                            process=staged,
+                            secret=token,
+                        ),
+                        temp_root_path=temp_root_path,
+                        contract=contract,
+                        context=context,
                     )
                 commit = await _run_exec(
                     [
@@ -326,6 +425,16 @@ class PiOhMyPiDeepSeekAdapter:
                         "Git commit failed for Assembly OMP backend.",
                         token,
                         details,
+                        failure_diagnostic=_diagnostic_from_process(
+                            phase="git_commit",
+                            command_category="git",
+                            command="git commit",
+                            process=commit,
+                            secret=token,
+                        ),
+                        temp_root_path=temp_root_path,
+                        contract=contract,
+                        context=context,
                     )
 
             head_sha = await _git_head_sha(checkout_dir, timeout_seconds, git_env)
@@ -334,12 +443,29 @@ class PiOhMyPiDeepSeekAdapter:
                     "Git rev-parse failed for Assembly OMP backend.",
                     token,
                     details,
+                    failure_diagnostic=_simple_diagnostic(
+                        phase="git_rev_parse",
+                        command_category="git",
+                        command="git rev-parse HEAD",
+                    ),
+                    temp_root_path=temp_root_path,
+                    contract=contract,
+                    context=context,
                 )
             if not _COMMIT_SHA_RE.fullmatch(head_sha):
                 return _failed_pi_result(
                     "Assembly OMP backend produced an invalid commit SHA.",
                     token,
                     details,
+                    failure_diagnostic=_simple_diagnostic(
+                        phase="git_rev_parse",
+                        command_category="git",
+                        command="git rev-parse HEAD",
+                        stderr_tail="invalid commit SHA",
+                    ),
+                    temp_root_path=temp_root_path,
+                    contract=contract,
+                    context=context,
                 )
             if not dirty_tree and head_sha == base_sha:
                 return AdapterResult(
@@ -354,9 +480,18 @@ class PiOhMyPiDeepSeekAdapter:
                 checkout_dir,
                 timeout_seconds,
                 git_env,
+                secret=token,
             )
             if verification is not None:
-                return _failed_pi_result(verification, token, details)
+                return _failed_pi_result(
+                    str(verification["summary"]),
+                    token,
+                    details,
+                    failure_diagnostic=dict(verification["failure_diagnostic"]),
+                    temp_root_path=temp_root_path,
+                    contract=contract,
+                    context=context,
+                )
 
             publish_result = await publish_branch(
                 repository=repository,
@@ -370,6 +505,13 @@ class PiOhMyPiDeepSeekAdapter:
                     f"Git push failed for Assembly OMP backend: {publish_result.message}",
                     token,
                     details,
+                    failure_diagnostic=_diagnostic_from_publish_result(
+                        publish_result,
+                        secret=token,
+                    ),
+                    temp_root_path=temp_root_path,
+                    contract=contract,
+                    context=context,
                 )
 
             return AdapterResult(
@@ -379,10 +521,31 @@ class PiOhMyPiDeepSeekAdapter:
                 details=details,
             )
         except TimeoutError:
-            return _failed_pi_result("Assembly OMP backend timed out.", token, details)
+            return _failed_pi_result(
+                "Assembly OMP backend timed out.",
+                token,
+                details,
+                failure_diagnostic=_simple_diagnostic(
+                    phase="subprocess",
+                    command_category="subprocess",
+                    timed_out=True,
+                ),
+                temp_root_path=temp_root_path,
+                contract=contract,
+                context=context,
+            )
         except OSError:
             return _failed_pi_result(
-                "Assembly OMP backend could not start a subprocess.", token, details
+                "Assembly OMP backend could not start a subprocess.",
+                token,
+                details,
+                failure_diagnostic=_simple_diagnostic(
+                    phase="subprocess_start",
+                    command_category="subprocess",
+                ),
+                temp_root_path=temp_root_path,
+                contract=contract,
+                context=context,
             )
         finally:
             if temp_root_path is not None:
@@ -456,7 +619,12 @@ async def _run_exec(
         kill = getattr(process, "kill", None)
         if callable(kill):
             kill()
-        raise
+        return _ProcessResult(
+            returncode=124,
+            stdout="",
+            stderr=f"command timed out after {timeout_seconds}s",
+            timed_out=True,
+        )
     return _ProcessResult(
         returncode=int(process.returncode or 0),
         stdout=stdout_raw.decode(errors="replace"),
@@ -487,7 +655,12 @@ async def _run_shell(
         kill = getattr(process, "kill", None)
         if callable(kill):
             kill()
-        raise
+        return _ProcessResult(
+            returncode=124,
+            stdout="",
+            stderr=f"command timed out after {timeout_seconds}s",
+            timed_out=True,
+        )
     return _ProcessResult(
         returncode=int(process.returncode or 0),
         stdout=stdout_raw.decode(errors="replace"),
@@ -518,7 +691,8 @@ async def _branch_start_ref(
     *,
     git_env: dict[str, str],
     git_auth_env: dict[str, str],
-) -> str:
+    secret: str,
+) -> tuple[str, dict[str, Any] | None]:
     fetch = await _run_exec(
         [
             "git",
@@ -531,7 +705,22 @@ async def _branch_start_ref(
         env=git_auth_env,
     )
     if fetch.returncode != 0:
-        return f"origin/{contract.base_branch}"
+        fetch_err = fetch.stderr.strip().lower()
+        missing_remote_ref = (
+            "couldn't find remote ref" in fetch_err or "could not find remote ref" in fetch_err
+        )
+        if missing_remote_ref:
+            return f"origin/{contract.base_branch}", None
+        return (
+            f"origin/{contract.base_branch}",
+            _diagnostic_from_process(
+                phase="branch_start_fetch",
+                command_category="git",
+                command="git fetch",
+                process=fetch,
+                secret=secret,
+            ),
+        )
 
     remote_branch_ref = f"refs/remotes/origin/{contract.branch_name}"
     verify = await _run_exec(
@@ -541,8 +730,8 @@ async def _branch_start_ref(
         env=git_env,
     )
     if verify.returncode == 0:
-        return remote_branch_ref
-    return f"origin/{contract.base_branch}"
+        return remote_branch_ref, None
+    return f"origin/{contract.base_branch}", None
 
 
 async def _run_verification_commands(
@@ -550,7 +739,9 @@ async def _run_verification_commands(
     checkout_dir: Path,
     timeout_seconds: int,
     env: dict[str, str],
-) -> str | None:
+    *,
+    secret: str,
+) -> dict[str, Any] | None:
     # Trust boundary: these shell commands come from the D9-locked default
     # command set or trusted operator runtime config, not user/model-controlled
     # input.
@@ -562,7 +753,16 @@ async def _run_verification_commands(
             env=env,
         )
         if result.returncode != 0:
-            return f"Verification command failed: {command}"
+            return {
+                "summary": f"Verification command failed: {command}",
+                "failure_diagnostic": _diagnostic_from_process(
+                    phase="verification",
+                    command_category="verification",
+                    command=command,
+                    process=result,
+                    secret=secret,
+                ),
+            }
     return None
 
 
@@ -594,9 +794,10 @@ def _build_omp_prompt(contract: AssemblyJobContract) -> str:
 _GITHUB_TOKEN_RE = re.compile(r"gh[opsru]_[A-Za-z0-9_]+")
 
 
-def _sanitize_for_result(value: str, secret: str) -> str:
+def _sanitize_for_result(value: str, secret: str, *, limit: int = 2000) -> str:
     sanitized = value.replace(secret, "[redacted]") if secret else value
-    return _GITHUB_TOKEN_RE.sub("[redacted]", sanitized)
+    sanitized = _GITHUB_TOKEN_RE.sub("[redacted]", sanitized)
+    return sanitize_public_text(sanitized, limit=limit)
 
 
 def _sanitize_details_for_result(value: Any, secret: str) -> Any:
@@ -609,6 +810,143 @@ def _sanitize_details_for_result(value: Any, secret: str) -> Any:
     if isinstance(value, dict):
         return {str(key): _sanitize_details_for_result(item, secret) for key, item in value.items()}
     return value
+
+
+def _bounded_tail(value: str, secret: str, *, limit: int = _FAILURE_TAIL_LIMIT) -> str:
+    tail = str(value or "")
+    if len(tail) > limit:
+        tail = tail[-limit:]
+    return _sanitize_for_result(tail, secret, limit=limit)
+
+
+def _simple_diagnostic(
+    *,
+    phase: str,
+    command_category: str,
+    command: str | None = None,
+    exit_code: int | None = None,
+    timed_out: bool = False,
+    stdout_tail: str = "",
+    stderr_tail: str = "",
+    secret: str = "",
+) -> dict[str, Any]:
+    return {
+        "phase": _sanitize_for_result(phase, secret, limit=120),
+        "command_category": _sanitize_for_result(command_category, secret, limit=120),
+        "command": _sanitize_for_result(command or "", secret, limit=240),
+        "exit_code": exit_code,
+        "timed_out": bool(timed_out),
+        "stdout_tail": _bounded_tail(stdout_tail, secret),
+        "stderr_tail": _bounded_tail(stderr_tail, secret),
+    }
+
+
+def _diagnostic_from_process(
+    *,
+    phase: str,
+    command_category: str,
+    command: str,
+    process: _ProcessResult,
+    secret: str,
+) -> dict[str, Any]:
+    return _simple_diagnostic(
+        phase=phase,
+        command_category=command_category,
+        command=command,
+        exit_code=process.returncode,
+        timed_out=process.timed_out,
+        stdout_tail=process.stdout,
+        stderr_tail=process.stderr,
+        secret=secret,
+    )
+
+
+def _diagnostic_from_publish_result(result: Any, *, secret: str) -> dict[str, Any]:
+    return _simple_diagnostic(
+        phase=str(getattr(result, "phase", None) or "git_push"),
+        command_category="git",
+        command=str(getattr(result, "command", None) or "git push"),
+        exit_code=result.returncode,
+        timed_out=bool(result.timed_out),
+        stdout_tail=str(result.stdout or ""),
+        stderr_tail=str(result.stderr or result.message or ""),
+        secret=secret,
+    )
+
+
+def _failure_run_id(contract: AssemblyJobContract, context: AdapterExecutionContext) -> str:
+    if context.audit_id:
+        return context.audit_id
+    seed = f"{contract.delivery_id}|{context.repository}|{contract.issue_number}".encode()
+    return f"asmb-{hashlib.sha256(seed).hexdigest()[:16]}"
+
+
+def _failure_bundle_path(
+    contract: AssemblyJobContract,
+    context: AdapterExecutionContext,
+) -> Path:
+    owner, _, repo = context.repository.partition("/")
+    if not owner or not repo:
+        owner, repo = "unknown", context.repository or "unknown"
+    return (
+        context.workdir
+        / "failures"
+        / owner
+        / repo
+        / str(contract.issue_number)
+        / _failure_run_id(contract, context)
+    )
+
+
+def _retain_failure_bundle(
+    *,
+    temp_root_path: Path | None,
+    contract: AssemblyJobContract | None,
+    context: AdapterExecutionContext | None,
+    failure_diagnostic: dict[str, Any] | None,
+    details: dict[str, Any],
+    secret: str,
+) -> Path | None:
+    if temp_root_path is None or contract is None or context is None:
+        return None
+    if not temp_root_path.exists():
+        return None
+
+    bundle_path = _failure_bundle_path(contract, context)
+    try:
+        if bundle_path.exists():
+            shutil.rmtree(bundle_path, ignore_errors=True)
+        bundle_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(temp_root_path), str(bundle_path))
+    except (OSError, shutil.Error):
+        return None
+
+    details["failure_debug_bundle_path"] = str(bundle_path)
+    repo_path = bundle_path / "repo"
+    if repo_path.exists():
+        details["checkout_dir"] = str(repo_path)
+
+    try:
+        metadata = {
+            "repository": context.repository,
+            "issue_number": contract.issue_number,
+            "branch_name": contract.branch_name,
+            "delivery_id": contract.delivery_id,
+            "audit_id": context.audit_id,
+            "backend_name": ASSEMBLY_BACKEND_PI_OH_MY_PI_DEEPSEEK,
+            "retained_at": datetime.now(UTC).isoformat(),
+            "failure_diagnostic": failure_diagnostic or {},
+            "details": details,
+        }
+        metadata_path = bundle_path / "assembly-failure.json"
+        metadata_path.write_text(
+            json.dumps(_sanitize_details_for_result(metadata, secret), indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        metadata_path.chmod(0o600)
+    except (OSError, TypeError) as exc:
+        details["failure_bundle_metadata_error"] = _sanitize_for_result(str(exc), secret)
+    return bundle_path
 
 
 def _latest_omp_session_jsonl(checkout_dir: Path) -> str | None:
@@ -637,12 +975,33 @@ def _failed_pi_result(
     summary: str,
     secret: str,
     details: dict[str, Any] | None = None,
+    *,
+    failure_diagnostic: dict[str, Any] | None = None,
+    temp_root_path: Path | None = None,
+    contract: AssemblyJobContract | None = None,
+    context: AdapterExecutionContext | None = None,
 ) -> AdapterResult:
+    safe_details = dict(details or {})
+    if failure_diagnostic:
+        safe_details["failure_diagnostic"] = failure_diagnostic
+    bundle_path = _retain_failure_bundle(
+        temp_root_path=temp_root_path,
+        contract=contract,
+        context=context,
+        failure_diagnostic=failure_diagnostic,
+        details=safe_details,
+        secret=secret,
+    )
+    if bundle_path is not None:
+        safe_details["failure_debug_bundle_path"] = str(bundle_path)
+        repo_path = bundle_path / "repo"
+        if repo_path.exists():
+            safe_details["checkout_dir"] = str(repo_path)
     return AdapterResult(
         status="failed",
         commit_shas=[],
-        summary=_sanitize_for_result(summary, secret),
-        details=_sanitize_details_for_result(details or {}, secret),
+        summary=_sanitize_for_result(summary, secret, limit=240),
+        details=_sanitize_details_for_result(safe_details, secret),
     )
 
 
