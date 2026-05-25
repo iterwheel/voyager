@@ -8,6 +8,8 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+## [0.4.3] — 2026-05-25
+
 ### Added — Assembly backend failure diagnostics ([#93](https://github.com/iterwheel/voyager/issues/93))
 
 - Assembly now records sanitized subprocess backend failure diagnostics for
