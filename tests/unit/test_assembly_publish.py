@@ -22,6 +22,7 @@ from typing import Any
 import pytest
 
 from voyager.bots.assembly.publish import (
+    _append_git_config,
     _git_push_env,
     _github_safe_remote,
     _run_git_push,
@@ -102,6 +103,60 @@ class TestGitPushEnv:
             assert env["ASSEMBLY_GITHUB_TOKEN"] == TEST_TOKEN
         finally:
             os.environ.pop("ASSEMBLY_GITHUB_TOKEN", None)
+
+    def test_disables_host_credential_helpers(self, tmp_path: Path) -> None:
+        askpass = tmp_path / "askpass.sh"
+        askpass.write_text("#!/bin/sh\necho ok\n")
+        env = _git_push_env(token=TEST_TOKEN, askpass=askpass)
+
+        assert env["GIT_CONFIG_COUNT"] == "1"
+        assert env["GIT_CONFIG_KEY_0"] == "credential.helper"
+        assert env["GIT_CONFIG_VALUE_0"] == ""
+
+    def test_preserves_existing_git_config_pairs(self, tmp_path: Path) -> None:
+        os.environ["GIT_CONFIG_COUNT"] = "2"
+        os.environ["GIT_CONFIG_KEY_0"] = "http.proxy"
+        os.environ["GIT_CONFIG_VALUE_0"] = "http://proxy.example"
+        os.environ["GIT_CONFIG_KEY_1"] = "http.sslCAInfo"
+        os.environ["GIT_CONFIG_VALUE_1"] = "/tmp/ca.pem"
+        try:
+            askpass = tmp_path / "askpass.sh"
+            askpass.write_text("#!/bin/sh\necho ok\n")
+            env = _git_push_env(token=TEST_TOKEN, askpass=askpass)
+        finally:
+            for name in [
+                "GIT_CONFIG_COUNT",
+                "GIT_CONFIG_KEY_0",
+                "GIT_CONFIG_VALUE_0",
+                "GIT_CONFIG_KEY_1",
+                "GIT_CONFIG_VALUE_1",
+            ]:
+                os.environ.pop(name, None)
+
+        assert env["GIT_CONFIG_COUNT"] == "3"
+        assert env["GIT_CONFIG_KEY_0"] == "http.proxy"
+        assert env["GIT_CONFIG_VALUE_0"] == "http://proxy.example"
+        assert env["GIT_CONFIG_KEY_1"] == "http.sslCAInfo"
+        assert env["GIT_CONFIG_VALUE_1"] == "/tmp/ca.pem"
+        assert env["GIT_CONFIG_KEY_2"] == "credential.helper"
+        assert env["GIT_CONFIG_VALUE_2"] == ""
+
+
+class TestAppendGitConfig:
+    def test_appends_after_existing_count(self) -> None:
+        env = {
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "http.proxy",
+            "GIT_CONFIG_VALUE_0": "http://proxy.example",
+        }
+
+        _append_git_config(env, key="credential.helper", value="")
+
+        assert env["GIT_CONFIG_COUNT"] == "2"
+        assert env["GIT_CONFIG_KEY_0"] == "http.proxy"
+        assert env["GIT_CONFIG_VALUE_0"] == "http://proxy.example"
+        assert env["GIT_CONFIG_KEY_1"] == "credential.helper"
+        assert env["GIT_CONFIG_VALUE_1"] == ""
 
 
 # ---------------------------------------------------------------------------

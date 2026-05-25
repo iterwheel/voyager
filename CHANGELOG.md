@@ -8,6 +8,12 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+### Fixed — Assembly App-token git publish isolation ([#121](https://github.com/iterwheel/voyager/issues/121))
+
+- Assembly now disables host git credential helpers for App-token branch
+  publish subprocesses, preventing stale local HTTPS credentials from
+  overriding the temporary `GIT_ASKPASS` installation token.
+
 ## [0.4.3] — 2026-05-25
 
 ### Added — Assembly backend failure diagnostics ([#93](https://github.com/iterwheel/voyager/issues/93))

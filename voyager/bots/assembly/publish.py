@@ -117,6 +117,19 @@ def _write_git_askpass(directory: Path) -> Path:
     return askpass
 
 
+def _append_git_config(env: dict[str, str], *, key: str, value: str) -> None:
+    """Append one in-process git config pair to an environment dict."""
+    try:
+        count = int(env.get("GIT_CONFIG_COUNT", "0"))
+    except ValueError:
+        count = 0
+    if count < 0:
+        count = 0
+    env[f"GIT_CONFIG_KEY_{count}"] = key
+    env[f"GIT_CONFIG_VALUE_{count}"] = value
+    env["GIT_CONFIG_COUNT"] = str(count + 1)
+
+
 def _git_push_env(*, token: str, askpass: Path) -> dict[str, str]:
     """Build the environment dict for an authenticated git push.
 
@@ -134,6 +147,10 @@ def _git_push_env(*, token: str, askpass: Path) -> dict[str, str]:
     env["GIT_TERMINAL_PROMPT"] = "0"
     env["GIT_ASKPASS"] = str(askpass)
     env["ASSEMBLY_GITHUB_TOKEN"] = token
+    # Host-level credential helpers such as macOS osxkeychain can satisfy
+    # HTTPS prompts before GIT_ASKPASS runs. Force this subprocess family to
+    # use only the Assembly App token supplied by the temporary askpass script.
+    _append_git_config(env, key="credential.helper", value="")
     return env
 
 
