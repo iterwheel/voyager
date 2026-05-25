@@ -610,3 +610,45 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     And exactly 0 resolveReviewThread mutations were invoked
     And the Stage 1.5 action has a skipped action
     And the Stage 1.5 skipped action reason is "viewerCanResolve is false"
+
+  # ---------------------------------------------------------------------------
+  # Issue #118: visual-unresolved review threads
+  # ---------------------------------------------------------------------------
+
+  Scenario: Issue #118 outdated resolved thread cannot sync GitHub UI but is non-blocking
+    Given the stub PR "iterwheel/sandbox" #49 has 1 outdated Codex thread at path "app.py" line 10
+    And a fake investigator returning verdict "RESOLVED" confidence 0.95 reason "Fix confirmed in diff"
+    And the stub client returns a sample diff for "app.py"
+    And the thread viewerCanResolve is false
+    When compute_clearance_automation runs with investigator and DRY_RUN false
+    Then the automation status is "ready"
+    And the sync actions count is 1
+    And the thread verdict is "RESOLVED"
+    And exactly 0 resolveReviewThread mutations were invoked
+    And the Stage 1.5 action has a skipped action
+    And the Stage 1.5 skipped action reason is "viewerCanResolve is false"
+    And no in-thread reply was posted
+    And the thread GitHub state was not mutated
+
+  Scenario: Issue #118 current actionable thread still blocks when Clearance cannot resolve it
+    Given the stub PR "iterwheel/sandbox" #49 has 1 fresh Codex thread (State A) at path "app.py"
+    And the thread viewerCanResolve is false
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "blocked"
+    And the automation reason mentions "still OPEN"
+    And the sync actions count is 0
+    And exactly 0 resolveReviewThread mutations were invoked
+    And no in-thread reply was posted
+
+  Scenario: Issue #118 outdated resolved thread syncs when Clearance can resolve it
+    Given the stub PR "iterwheel/sandbox" #49 has 1 outdated Codex thread at path "app.py" line 10
+    And a fake investigator returning verdict "RESOLVED" confidence 0.95 reason "Fix confirmed in diff"
+    And the stub client returns a sample diff for "app.py"
+    And the thread viewerCanResolve is true
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "ready"
+    And the sync actions count is 1
+    And the thread verdict is "RESOLVED"
+    And exactly 1 resolveReviewThread mutation was invoked
+    And exactly 1 in-thread reply was posted under the Codex review comment
+    And the in-thread reply body contains "RESOLVED"
