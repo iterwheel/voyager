@@ -376,6 +376,40 @@ def _compute_status(threads: list[Thread]) -> tuple[Status, str]:
     return Status.READY, "all Codex review threads RESOLVED"
 
 
+def _semantic_blocker_count(threads: list[Thread]) -> int:
+    """Count Codex threads that should stop Clearance from advancing."""
+    return sum(
+        1
+        for thread in threads
+        if (
+            thread.verdict == Verdict.OPEN
+            and thread.effective_severity in (Severity.P1, Severity.P2)
+        )
+        or thread.verdict == Verdict.NEEDS_HUMAN_JUDGMENT
+    )
+
+
+def _stage15_resolved_visual_thread_count(sync_actions: list[Stage15Action]) -> int:
+    """Count semantically resolved threads whose GitHub UI may still lag."""
+    return sum(
+        1
+        for action in sync_actions
+        if action.mutation == Stage15Mutation.RESOLVE_REVIEW_THREAD
+        and (action.result or {}).get("applied") is not False
+    )
+
+
+def _stage15_visual_unresolved_skipped_count(sync_actions: list[Stage15Action]) -> int:
+    """Count Stage 1.5 skips caused by GitHub viewerCanResolve=false."""
+    return sum(
+        1
+        for action in sync_actions
+        if action.mutation == Stage15Mutation.RESOLVE_REVIEW_THREAD
+        and (action.result or {}).get("skipped") is True
+        and (action.result or {}).get("skip_reason") == "viewerCanResolve is false"
+    )
+
+
 async def _maybe_sync_stage_15(
     *,
     client: GitHubAppClient,
@@ -843,6 +877,9 @@ async def compute_clearance_automation(
 
     open_count = sum(1 for t in threads if t.verdict != Verdict.RESOLVED)
     resolved_count = sum(1 for t in threads if t.verdict == Verdict.RESOLVED)
+    semantic_blockers = _semantic_blocker_count(threads)
+    visual_unresolved_threads = _stage15_resolved_visual_thread_count(sync_actions)
+    visual_unresolved_skipped_threads = _stage15_visual_unresolved_skipped_count(sync_actions)
 
     # CHG-1813: Aggregate Stage 1.5 writeback failures before persistence so
     # state/history consumers see the same error status as the readiness panel.
@@ -879,6 +916,9 @@ async def compute_clearance_automation(
         "dry_run": dry_run,
         "head_sha": head_sha,
         "unresolved_codex_thread_count": sum(1 for t in threads if t.verdict != Verdict.RESOLVED),
+        "semantic_blocker_count": semantic_blockers,
+        "visual_unresolved_thread_count": visual_unresolved_threads,
+        "visual_unresolved_skipped_thread_count": visual_unresolved_skipped_threads,
     }
     if investigator_failures:
         result_dict["investigator_error_count"] = len(investigator_failures)

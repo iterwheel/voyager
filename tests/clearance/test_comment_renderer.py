@@ -83,6 +83,10 @@ def _automation_with_skipped_stage15_actions() -> dict:
         "sync_actions_count": 2,
         "dry_run": False,
         "head_sha": "sha-abc",
+        "unresolved_codex_thread_count": 0,
+        "semantic_blocker_count": 0,
+        "visual_unresolved_thread_count": 2,
+        "visual_unresolved_skipped_thread_count": 2,
     }
 
 
@@ -231,10 +235,13 @@ def test_issue_118_readiness_comment_names_visual_unresolved_skipped_threads() -
     )
 
     assert "Stage: 3 - Ready for approval" in comment
+    assert "✅ Threads: 0 blocking; 2 visual-unresolved skipped threads" in comment
     assert (
         "✅ Automation: ready; thread sync actions: 2 (applied: 0, skipped: 2, failed: 0)"
         in comment
     )
+    assert "- Semantic blocking threads: 0" in comment
+    assert "- Visual-unresolved skipped threads: 2" in comment
     assert "- Skipped resolveReviewThread: 2 threads, reason: viewerCanResolve is false." in comment
     assert "GitHub conversations may remain visually unresolved/outdated" in comment
     assert "Clearance no longer treats them as blockers" in comment

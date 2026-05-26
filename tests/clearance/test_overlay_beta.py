@@ -301,6 +301,22 @@ def test_plain_ready_status_with_skipped_sync_actions_still_clears_thread_only_b
     assert CLEARANCE_READY_LABEL in result["labels"]["add"]
 
 
+def test_plain_ready_status_uses_visual_unresolved_count_as_thread_allowance() -> None:
+    """New automation contracts must not use unrelated sync actions as thread allowance."""
+    automation = {
+        "enabled": True,
+        "status": "ready",
+        "reason": "all Codex review threads RESOLVED",
+        "sync_actions": [{"mutation": "someFutureAction", "threadId": "thread-1"}],
+        "sync_actions_count": 1,
+        "unresolved_codex_thread_count": 0,
+        "visual_unresolved_thread_count": 0,
+    }
+    ev = _blocked_evaluation()
+    result = apply_swm_overlay(ev, automation)
+    assert result is ev
+
+
 def test_plain_ready_status_preserves_non_thread_blocker() -> None:
     """automation.status='ready' must not clear draft / PR-state blockers."""
     automation = {

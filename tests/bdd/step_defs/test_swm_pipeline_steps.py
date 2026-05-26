@@ -753,6 +753,20 @@ def then_sync_count(ctx, count: int) -> None:
     )
 
 
+@then(parsers.parse("the automation semantic blocker count is {count:d}"))
+def then_semantic_blocker_count(ctx, count: int) -> None:
+    assert ctx["automation"] is not None
+    actual = ctx["automation"].get("semantic_blocker_count")
+    assert actual == count, f"semantic_blocker_count={actual!r}, expected {count}"
+
+
+@then(parsers.parse("the automation visual-unresolved skipped thread count is {count:d}"))
+def then_visual_unresolved_skipped_thread_count(ctx, count: int) -> None:
+    assert ctx["automation"] is not None
+    actual = ctx["automation"].get("visual_unresolved_skipped_thread_count")
+    assert actual == count, f"visual_unresolved_skipped_thread_count={actual!r}, expected {count}"
+
+
 @then(parsers.parse('the planned sync action mutation is "{mutation}"'))
 def then_planned_mutation(ctx, mutation: str) -> None:
     actions = ctx["automation"]["sync_actions"]
