@@ -37,7 +37,11 @@ from voyager.bots.clearance.classify import (
     latest_codex_followup,
 )
 from voyager.bots.clearance.close_reason import build_close_reason_comment
-from voyager.bots.clearance.constants import CLEARANCE_AGENT_SLUG
+from voyager.bots.clearance.constants import (
+    CLEARANCE_AGENT_SLUG,
+    CODEX_REVIEW_RESULT_PREFIX,
+    is_codex_login,
+)
 from voyager.bots.clearance.diff_excerpt import extract_anchor_excerpt
 from voyager.bots.clearance.investigator import (
     InvestigationDecision,
@@ -68,8 +72,73 @@ from voyager.core.writeback import _safe_exception_fields, build_writeback_failu
 _log = logging.getLogger(__name__)
 
 
+_CLEAN_CODEX_REVIEW_VERDICTS = (
+    "didn't find any major issues",
+    "did not find any major issues",
+    "no major issues found",
+    "found no major issues",
+    "no major issues found in this pr",
+)
+
+
 def _now_utc() -> datetime:
     return datetime.now(UTC).replace(microsecond=0)
+
+
+def _normalized_review_body(body: Any) -> str:
+    return " ".join(str(body or "").split()).replace("\u2019", "'").lower()
+
+
+def _clean_codex_review_verdict(body: Any) -> str | None:
+    normalized = _normalized_review_body(body)
+    prefix = CODEX_REVIEW_RESULT_PREFIX.lower()
+    if not normalized.startswith(prefix):
+        return None
+    return normalized[len(prefix) :].strip().rstrip(".!").strip()
+
+
+def _is_current_head_codex_review(review: dict[str, Any], *, head_sha: str) -> bool:
+    """True when a non-dismissed Codex PR review belongs to the current head."""
+    login = (review.get("user") or {}).get("login") or (review.get("author") or {}).get("login")
+    if not is_codex_login(login):
+        return False
+    if str(review.get("state") or "").upper() == "DISMISSED":
+        return False
+    return bool(head_sha and str(review.get("commit_id") or "") == head_sha)
+
+
+def _is_clean_current_codex_review(review: dict[str, Any], *, head_sha: str) -> bool:
+    """True when a Codex PR review reports a clean result on the current head."""
+    if not _is_current_head_codex_review(review, head_sha=head_sha):
+        return False
+    verdict = _clean_codex_review_verdict(review.get("body"))
+    return verdict in _CLEAN_CODEX_REVIEW_VERDICTS
+
+
+def _latest_clean_codex_review_after_thread(
+    reviews: list[dict[str, Any]],
+    *,
+    head_sha: str,
+    thread_dict: dict[str, Any],
+) -> dict[str, Any] | None:
+    comments = _comment_nodes(thread_dict)
+    thread_created_at = (comments[0].get("createdAt") if comments else None) or ""
+    if not thread_created_at:
+        return None
+
+    candidates: list[dict[str, Any]] = []
+    for review in reviews:
+        if not _is_current_head_codex_review(review, head_sha=head_sha):
+            continue
+        if str(review.get("submitted_at") or "") <= thread_created_at:
+            continue
+        candidates.append(review)
+    if not candidates:
+        return None
+    latest = max(candidates, key=lambda review: str(review.get("submitted_at") or ""))
+    if _is_clean_current_codex_review(latest, head_sha=head_sha):
+        return latest
+    return None
 
 
 async def _process_thread(
@@ -83,6 +152,7 @@ async def _process_thread(
     base_branch: str,
     branch_protected_state: bool,
     client: GitHubAppClient,  # noqa: ARG001 — kept for future per-thread API calls
+    pr_reviews: list[dict[str, Any]] | None = None,
     pr_author_login: str | None = None,
     investigator: ThreadInvestigator | None = None,
     get_diff: Callable[[], Awaitable[str]] | None = None,
@@ -154,6 +224,23 @@ async def _process_thread(
         codex_followup_body=followup_body_for_judge,
         github_isResolved=bool(thread_dict.get("isResolved")),
     )
+
+    clean_codex_review = None
+    if state == ThreadState.B and not thread_dict.get("isResolved"):
+        clean_codex_review = _latest_clean_codex_review_after_thread(
+            pr_reviews or [],
+            head_sha=head_sha,
+            thread_dict=thread_dict,
+        )
+        clean_review_ts = str((clean_codex_review or {}).get("submitted_at") or "")
+        if clean_codex_review is not None and (not followup_ts or clean_review_ts > followup_ts):
+            decision = VerdictDecision(
+                Verdict.RESOLVED,
+                "current-head Codex review reported no major issues after this outdated thread",
+                substantive=decision.substantive,
+            )
+        else:
+            clean_codex_review = None
 
     path = thread_dict.get("path") or "unknown"
     line = thread_dict.get("line")
@@ -293,6 +380,7 @@ async def _process_thread(
         llm_verdict=llm_decision.verdict if llm_decision else None,
         llm_confidence=llm_decision.confidence if llm_decision else None,
         llm_reason=llm_decision.reason if llm_decision else None,
+        clean_codex_review_id=clean_codex_review.get("id") if clean_codex_review else None,
     )
 
     snapshot = ThreadSnapshot(
@@ -316,7 +404,14 @@ async def _process_thread(
             author_reply_id=(reply or {}).get("databaseId"),
             author_reply_substantive=decision.substantive,
             code_changed=None,
-            codex_followed_up=bool(followup),
+            codex_followed_up=bool(followup) or bool(clean_codex_review),
+            clean_codex_review_id=clean_codex_review.get("id") if clean_codex_review else None,
+            clean_codex_review_head=(
+                clean_codex_review.get("commit_id") if clean_codex_review else None
+            ),
+            clean_codex_review_submitted_at=(
+                clean_codex_review.get("submitted_at") if clean_codex_review else None
+            ),
             llm_verdict=llm_decision.verdict if llm_decision else None,
             llm_confidence=llm_decision.confidence if llm_decision else None,
             llm_reason=llm_decision.reason if llm_decision else None,
@@ -700,6 +795,20 @@ async def compute_clearance_automation(
             "sync_actions_count": 0,
         }
 
+    try:
+        raw_reviews = await client.pull_request_reviews(CLEARANCE_AGENT_SLUG, repository, pr_number)
+    except Exception as exc:
+        safe = _safe_exception_fields(exc)
+        _log.warning(
+            "pull_request_reviews fetch failed for %s#%s (clean review signal disabled): "
+            "class=%s status=%s",
+            repository,
+            pr_number,
+            safe["error_class"],
+            safe["status"],
+        )
+        raw_reviews = []
+
     head_sha = (pr_data.get("head") or {}).get("sha") or ""
     pr_title = pr_data.get("title")
     pr_author_login: str | None = (pr_data.get("user") or {}).get("login") or None
@@ -762,6 +871,7 @@ async def compute_clearance_automation(
             base_branch=base_branch,
             branch_protected_state=branch_protected_state,
             client=client,
+            pr_reviews=raw_reviews,
             pr_author_login=pr_author_login,
             investigator=investigator,
             get_diff=get_diff,
@@ -886,6 +996,12 @@ async def compute_clearance_automation(
     wb_failures = _stage15_writeback_failures(sync_actions)
     persisted_status = status
     persisted_reason = reason
+    if persisted_status == Status.READY and visual_unresolved_skipped_threads:
+        noun = "thread" if visual_unresolved_skipped_threads == 1 else "threads"
+        persisted_reason = (
+            f"{reason}; {visual_unresolved_skipped_threads} outdated visual-unresolved "
+            f"{noun} still visible (viewerCanResolve=false; not blocking)"
+        )
     if wb_failures:
         persisted_status = Status.ERROR
         persisted_reason = wb_failures["writeback_failure_reason"]

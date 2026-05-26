@@ -52,6 +52,7 @@ class _StubGitHubAppClient:
 
     def __init__(self) -> None:
         self.threads: list[dict[str, Any]] = []
+        self.reviews: list[dict[str, Any]] = []
         self.pr_payload: dict[str, Any] = {
             "head": {
                 "sha": "head-sha-abc1234",
@@ -139,6 +140,9 @@ class _StubGitHubAppClient:
         self, app_slug: str, repo: str, pr: int
     ) -> list[dict[str, Any]]:
         return list(self.threads)
+
+    async def pull_request_reviews(self, app_slug: str, repo: str, pr: int) -> list[dict[str, Any]]:
+        return list(self.reviews)
 
     async def create_issue_comment(
         self, app_slug: str, repository: str, issue_number: int, *, body: str
@@ -369,6 +373,7 @@ def _outdated_codex_thread(
     path: str = "app.py",
     line: int = 10,
     codex_comment_id: int = CODEX_COMMENT_ID,
+    body: str = "**P1** the null dereference on line 10 is not guarded.",
 ) -> dict[str, Any]:
     """A State B (isOutdated=True) Codex thread with no author reply."""
     return {
@@ -383,7 +388,7 @@ def _outdated_codex_thread(
                 {
                     "databaseId": codex_comment_id,
                     "author": {"login": "chatgpt-codex-connector"},
-                    "body": "**P1** the null dereference on line 10 is not guarded.",
+                    "body": body,
                     "url": "https://example/c/1",
                     "createdAt": "2026-05-11T12:00:00Z",
                 }
@@ -745,6 +750,13 @@ def then_reason_mentions(ctx, text: str) -> None:
     assert text in reason, f"reason={reason!r} does not mention {text!r}"
 
 
+@then(parsers.parse('the automation reason does not mention "{text}"'))
+def then_reason_does_not_mention(ctx, text: str) -> None:
+    assert ctx["automation"] is not None
+    reason = ctx["automation"].get("reason") or ""
+    assert text not in reason, f"reason={reason!r} unexpectedly mentions {text!r}"
+
+
 @then(parsers.parse("the sync actions count is {count:d}"))
 def then_sync_count(ctx, count: int) -> None:
     assert ctx["automation"] is not None
@@ -765,6 +777,13 @@ def then_visual_unresolved_skipped_thread_count(ctx, count: int) -> None:
     assert ctx["automation"] is not None
     actual = ctx["automation"].get("visual_unresolved_skipped_thread_count")
     assert actual == count, f"visual_unresolved_skipped_thread_count={actual!r}, expected {count}"
+
+
+@then(parsers.parse("the automation visual-unresolved thread count is {count:d}"))
+def then_visual_unresolved_thread_count(ctx, count: int) -> None:
+    assert ctx["automation"] is not None
+    actual = ctx["automation"].get("visual_unresolved_thread_count")
+    assert actual == count, f"visual_unresolved_thread_count={actual!r}, expected {count}"
 
 
 @then(parsers.parse('the planned sync action mutation is "{mutation}"'))
@@ -915,6 +934,21 @@ def given_outdated_codex_thread(ctx, repo: str, pr: int, path: str, line: int) -
 
 @given(
     parsers.parse(
+        'the stub PR "{repo}" #{pr:d} has 1 outdated P3 Codex thread at path "{path}" line {line:d}'
+    )
+)
+def given_outdated_p3_codex_thread(ctx, repo: str, pr: int, path: str, line: int) -> None:
+    ctx["client"].threads = [
+        _outdated_codex_thread(
+            path=path,
+            line=line,
+            body="**P3** Changelog entry still uses the obsolete `|-` bullet prefix.",
+        )
+    ]
+
+
+@given(
+    parsers.parse(
         'the stub PR "{repo}" #{pr:d} has 1 fresh Codex thread (State A) at path "{path}"'
     )
 )
@@ -994,6 +1028,22 @@ def given_fake_investigator_error(ctx, message: str) -> None:
 @given(parsers.parse('the stub client returns a sample diff for "{path}"'))
 def given_stub_diff(ctx, path: str) -> None:
     ctx["client"].diff_text = _SAMPLE_DIFF_APP_PY
+
+
+@given("the stub PR has a clean Codex review on the current head after the thread")
+def given_clean_codex_review_on_current_head(ctx) -> None:
+    head_sha = ctx["client"].pr_payload["head"]["sha"]
+    ctx["client"].reviews = [
+        {
+            "id": 4353692389,
+            "user": {"login": "chatgpt-codex-connector[bot]"},
+            "body": "Codex Review: Didn't find any major issues.",
+            "submitted_at": "2026-05-11T13:00:00Z",
+            "commit_id": head_sha,
+            "state": "COMMENTED",
+            "html_url": "https://github.com/frankyxhl/trinity/pull/134#pullrequestreview-4353692389",
+        }
+    ]
 
 
 @given("the stub client records pull_request_diff calls")

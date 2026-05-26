@@ -247,6 +247,38 @@ def test_issue_118_readiness_comment_names_visual_unresolved_skipped_threads() -
     assert "Clearance no longer treats them as blockers" in comment
 
 
+def test_issue_124_readiness_comment_does_not_call_visual_unresolved_zero_unresolved() -> None:
+    from voyager.bots.clearance.enrichment import build_clearance_comment
+
+    comment = build_clearance_comment(
+        _evaluation(
+            status="clearance_ready_for_approval",
+            label="clearance-3-ready-for-approval",
+            unresolved_thread_count=1,
+        ),
+        automation={
+            **_automation_with_skipped_stage15_actions(),
+            "sync_actions": [
+                _automation_with_skipped_stage15_actions()["sync_actions"][0],
+            ],
+            "sync_actions_count": 1,
+            "reason": (
+                "all Codex review threads RESOLVED; 1 outdated visual-unresolved "
+                "thread still visible (viewerCanResolve=false; not blocking)"
+            ),
+            "visual_unresolved_thread_count": 1,
+            "visual_unresolved_skipped_thread_count": 1,
+        },
+        provenance={"updated_at": "2026-05-17T00:00:00Z"},
+    )
+
+    assert "✅ Threads: 0 blocking; 1 visual-unresolved skipped thread" in comment
+    assert "✅ Threads: 0 unresolved" not in comment
+    assert "- Unresolved threads: 1" in comment
+    assert "- Visual-unresolved skipped threads: 1" in comment
+    assert "outdated visual-unresolved thread still visible" in comment
+
+
 def test_thread_success_summary_requires_final_ready_status() -> None:
     from voyager.bots.clearance.enrichment import build_clearance_comment
 

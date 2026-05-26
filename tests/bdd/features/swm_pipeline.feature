@@ -656,3 +656,31 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     And exactly 1 resolveReviewThread mutation was invoked
     And exactly 1 in-thread reply was posted under the Codex review comment
     And the in-thread reply body contains "RESOLVED"
+
+  # ---------------------------------------------------------------------------
+  # Issue #124: outdated visual-unresolved thread after clean follow-up review
+  # ---------------------------------------------------------------------------
+
+  Scenario: Issue #124 clean follow-up Codex review makes outdated visual-unresolved thread non-blocking
+    Given the stub PR "iterwheel/sandbox" #49 has 1 outdated P3 Codex thread at path "CHANGELOG.md" line 166
+    And a fake investigator returning verdict "OPEN" confidence 0.95 reason "Stale investigator text claims the obsolete `|-` prefix remains"
+    And the stub client returns a sample diff for "CHANGELOG.md"
+    And the stub PR has a clean Codex review on the current head after the thread
+    And the thread viewerCanResolve is false
+    When compute_clearance_automation runs with investigator and DRY_RUN false
+    Then the automation status is "ready"
+    And the automation reason mentions "outdated visual-unresolved"
+    And the automation reason does not mention "low-priority"
+    And the sync actions count is 1
+    And the thread verdict is "RESOLVED"
+    And the thread llm_verdict is None
+    And the latest poll status is "ready"
+    And the latest snapshot verdict is "RESOLVED"
+    And the automation semantic blocker count is 0
+    And the automation visual-unresolved thread count is 1
+    And the automation visual-unresolved skipped thread count is 1
+    And exactly 0 resolveReviewThread mutations were invoked
+    And the Stage 1.5 action has a skipped action
+    And the Stage 1.5 skipped action reason is "viewerCanResolve is false"
+    And no in-thread reply was posted
+    And the thread GitHub state was not mutated

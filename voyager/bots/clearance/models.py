@@ -83,6 +83,7 @@ class Thread(BaseModel):
     llm_verdict: str | None = None
     llm_confidence: float | None = None
     llm_reason: str | None = None
+    clean_codex_review_id: int | None = None
 
 
 class PollRecord(BaseModel):
@@ -144,6 +145,9 @@ class Evidence(BaseModel):
     llm_reason: str | None = None
     llm_evidence: list[str] | None = None
     llm_error: str | None = None
+    clean_codex_review_id: int | None = None
+    clean_codex_review_head: str | None = None
+    clean_codex_review_submitted_at: str | None = None
     demotion_reason: str | None = None
     synced_via: str | None = None
     synced_at: datetime | None = None
