@@ -8,6 +8,21 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+## [0.4.5] — 2026-05-27
+
+### Fixed — Clearance outdated visual-unresolved review threads ([#119](https://github.com/iterwheel/voyager/issues/119), [#124](https://github.com/iterwheel/voyager/issues/124), [#128](https://github.com/iterwheel/voyager/pull/128))
+
+- Clearance now treats outdated Codex review threads as semantically resolved
+  when a later current-head Codex review reports an exact canonical clean
+  verdict, while rejecting mixed or newer non-clean Codex reviews as stale
+  clean evidence.
+- Persisted thread state now records clean-review evidence instead of keeping
+  stale investigator `OPEN` text for already-fixed outdated review comments.
+- Readiness output separates semantic blockers from GitHub conversations that
+  remain visually unresolved only because `viewerCanResolve=false`, preserving
+  the Stage 1.5 skip rather than forcing an unsupported `resolveReviewThread`
+  mutation.
+
 ## [0.4.4] — 2026-05-25
 
 ### Fixed — Assembly App-token git publish isolation ([#121](https://github.com/iterwheel/voyager/issues/121))
@@ -413,7 +428,10 @@ auth, FastAPI webhook bridge, DeepSeek LLM adapter, rocket-factory
 pipeline state machine, SWM-1101 per-thread verdict pipeline. See
 `b2e4ca1` and prior history.
 
-[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.4.5...HEAD
+[0.4.5]: https://github.com/iterwheel/voyager/compare/v0.4.4...v0.4.5
+[0.4.4]: https://github.com/iterwheel/voyager/compare/v0.4.3...v0.4.4
+[0.4.3]: https://github.com/iterwheel/voyager/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/iterwheel/voyager/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/iterwheel/voyager/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/iterwheel/voyager/compare/v0.3.0...v0.4.0
