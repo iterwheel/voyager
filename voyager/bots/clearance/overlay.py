@@ -44,6 +44,12 @@ def _has_preempting_reason(reasons: list[Any]) -> bool:
     )
 
 
+def _visual_unresolved_allowance(automation: dict[str, Any]) -> int:
+    if "visual_unresolved_thread_count" in automation:
+        return int(automation.get("visual_unresolved_thread_count") or 0)
+    return int(automation.get("sync_actions_count") or 0)
+
+
 def apply_swm_overlay(
     evaluation: ClearanceEvaluation, automation: dict[str, Any] | None
 ) -> ClearanceEvaluation:
@@ -80,8 +86,8 @@ def apply_swm_overlay(
         if "unresolved_codex_thread_count" in automation:
             unresolved_count = review_state.get("unresolved_thread_count", 0)
             unresolved_codex_count = int(automation.get("unresolved_codex_thread_count") or 0)
-            sync_actions_count = int(automation.get("sync_actions_count") or 0)
-            if unresolved_count > unresolved_codex_count + sync_actions_count:
+            visual_allowance = _visual_unresolved_allowance(automation)
+            if unresolved_count > unresolved_codex_count + visual_allowance:
                 return evaluation
         reason = automation.get("reason") or f"Clearance automation status is {swm_status}."
         # Configured-approver gate: if a human approver is required and hasn't approved yet,

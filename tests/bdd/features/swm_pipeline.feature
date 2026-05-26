@@ -624,6 +624,8 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     Then the automation status is "ready"
     And the sync actions count is 1
     And the thread verdict is "RESOLVED"
+    And the automation semantic blocker count is 0
+    And the automation visual-unresolved skipped thread count is 1
     And exactly 0 resolveReviewThread mutations were invoked
     And the Stage 1.5 action has a skipped action
     And the Stage 1.5 skipped action reason is "viewerCanResolve is false"
@@ -636,6 +638,8 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     When compute_clearance_automation runs with DRY_RUN false
     Then the automation status is "blocked"
     And the automation reason mentions "still OPEN"
+    And the automation semantic blocker count is 1
+    And the automation visual-unresolved skipped thread count is 0
     And the sync actions count is 0
     And exactly 0 resolveReviewThread mutations were invoked
     And no in-thread reply was posted

@@ -9,12 +9,14 @@ description = "GitHub bot platform — Iterwheel's rocket factory pipeline"
 requires-python = ">=3.11"
 authors = [{ name = "Iterwheel" }]
 dependencies = [
-    "fastapi>=0.136",
+    "fastapi>=0.136,<0.136.3",
     "httpx>=0.28",
+    "idna>=3.15",
     "openai>=2.36",
     "PyJWT[crypto]>=2.12",
     "python-dotenv>=1.0",
     "rich>=13.9",
+    "starlette>=1.0.1",
     "typer>=0.15",
     "uvicorn[standard]>=0.46",
 ]

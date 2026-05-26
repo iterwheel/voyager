@@ -115,11 +115,39 @@ def _review_status_line(
     return "⏳ Review: no current approval"
 
 
-def _threads_status_line(evaluation: ClearanceEvaluation) -> str:
-    count = int(evaluation["review_state"]["unresolved_thread_count"])
-    if count == 0:
+def _automation_int(automation: dict[str, Any] | None, key: str) -> int | None:
+    if not automation or key not in automation:
+        return None
+    return int(automation.get(key) or 0)
+
+
+def _threads_status_line(evaluation: ClearanceEvaluation, automation: dict[str, Any] | None) -> str:
+    review_count = int(evaluation["review_state"]["unresolved_thread_count"])
+    semantic_blockers = _automation_int(automation, "semantic_blocker_count")
+    visual_skipped = _automation_int(automation, "visual_unresolved_skipped_thread_count") or 0
+    low_priority = _automation_int(automation, "unresolved_codex_thread_count") or 0
+    automation_status = str((automation or {}).get("status") or "")
+
+    if (
+        evaluation["status"] in {"clearance_ready", "clearance_ready_for_approval"}
+        and automation_status in {"ready", "ready_with_low_priority"}
+        and semantic_blockers is not None
+    ):
+        parts = [f"{semantic_blockers} blocking"]
+        if automation_status == "ready_with_low_priority" and low_priority:
+            noun = "thread" if low_priority == 1 else "threads"
+            parts.append(f"{low_priority} low-priority open {noun}")
+        if visual_skipped:
+            noun = "thread" if visual_skipped == 1 else "threads"
+            parts.append(f"{visual_skipped} visual-unresolved skipped {noun}")
+        return f"✅ Threads: {'; '.join(parts)}"
+
+    if review_count == 0:
+        if visual_skipped:
+            noun = "thread" if visual_skipped == 1 else "threads"
+            return f"✅ Threads: 0 unresolved; {visual_skipped} visual-unresolved skipped {noun}"
         return "✅ Threads: 0 unresolved"
-    return f"❌ Threads: {count} unresolved"
+    return f"❌ Threads: {review_count} unresolved"
 
 
 def _approval_status_line(
@@ -503,7 +531,7 @@ def build_clearance_comment(
         "",
         f"🚦 Stage: {stage_number} - {stage_name} (`{selected_label}`)",
         _review_status_line(evaluation, review_request),
-        _threads_status_line(evaluation),
+        _threads_status_line(evaluation, automation),
         _approval_status_line(evaluation, review_request),
         _automation_status_line(automation),
     ]
@@ -526,6 +554,8 @@ def build_clearance_comment(
             f"- Stale approvals: {format_user_list(review_state['stale_approvals'])}",
             f"- Changes requested: {format_user_list(review_state['blocking_reviewers'])}",
             f"- Unresolved threads: {review_state['unresolved_thread_count']}",
+            f"- Semantic blocking threads: {_automation_int(automation, 'semantic_blocker_count') if automation and 'semantic_blocker_count' in automation else 'unknown'}",
+            f"- Visual-unresolved skipped threads: {_automation_int(automation, 'visual_unresolved_skipped_thread_count') if automation and 'visual_unresolved_skipped_thread_count' in automation else 0}",
             f"- Automation: {_automation_details(automation)}",
             *_stage15_skip_detail_lines(automation),
             f"- Last updated: {_last_updated_line(provenance)}",
