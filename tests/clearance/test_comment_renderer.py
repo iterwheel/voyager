@@ -221,6 +221,25 @@ def test_stage15_skipped_actions_are_visible_without_looking_successful() -> Non
     assert "Authorization" not in comment
 
 
+def test_issue_118_readiness_comment_names_visual_unresolved_skipped_threads() -> None:
+    from voyager.bots.clearance.enrichment import build_clearance_comment
+
+    comment = build_clearance_comment(
+        _evaluation(status="clearance_ready_for_approval", label="clearance-3-ready-for-approval"),
+        automation=_automation_with_skipped_stage15_actions(),
+        provenance={"updated_at": "2026-05-17T00:00:00Z"},
+    )
+
+    assert "Stage: 3 - Ready for approval" in comment
+    assert (
+        "✅ Automation: ready; thread sync actions: 2 (applied: 0, skipped: 2, failed: 0)"
+        in comment
+    )
+    assert "- Skipped resolveReviewThread: 2 threads, reason: viewerCanResolve is false." in comment
+    assert "GitHub conversations may remain visually unresolved/outdated" in comment
+    assert "Clearance no longer treats them as blockers" in comment
+
+
 def test_writeback_failure_warning_for_generic_issue_operation() -> None:
     from voyager.bots.clearance.enrichment import build_clearance_comment
 

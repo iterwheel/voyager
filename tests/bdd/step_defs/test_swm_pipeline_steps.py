@@ -1802,6 +1802,14 @@ def given_thread_viewer_cannot_resolve(ctx) -> None:
     threads[0]["viewerCanResolve"] = False
 
 
+@given("the thread viewerCanResolve is true")
+def given_thread_viewer_can_resolve(ctx) -> None:
+    """Modify the first thread to set viewerCanResolve=True explicitly."""
+    threads = ctx["client"].threads
+    assert threads, "no threads configured"
+    threads[0]["viewerCanResolve"] = True
+
+
 @then("exactly 0 resolveReviewThread mutations were invoked")
 def then_zero_resolve_mutations(ctx) -> None:
     count = len(ctx["client"].resolve_calls)
