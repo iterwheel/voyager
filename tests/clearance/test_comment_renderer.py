@@ -90,6 +90,34 @@ def _automation_with_skipped_stage15_actions() -> dict:
     }
 
 
+def _automation_with_fallback_stage15_action() -> dict:
+    return {
+        "enabled": True,
+        "status": "ready",
+        "reason": "all Codex review threads RESOLVED",
+        "sync_actions": [
+            {
+                "mutation": "resolveReviewThread",
+                "threadId": "PRRT_alpha",
+                "result": {
+                    "id": "PRRT_alpha",
+                    "isResolved": True,
+                    "resolver_app": "iterwheel-assembly",
+                    "resolver_login": "iterwheel-assembly[bot]",
+                    "fallback": True,
+                },
+            }
+        ],
+        "sync_actions_count": 1,
+        "dry_run": False,
+        "head_sha": "sha-abc",
+        "unresolved_codex_thread_count": 0,
+        "semantic_blocker_count": 0,
+        "visual_unresolved_thread_count": 1,
+        "visual_unresolved_skipped_thread_count": 0,
+    }
+
+
 # ---------------------------------------------------------------------------
 # CHG-1813: writeback failure warning in comment rendering
 # ---------------------------------------------------------------------------
@@ -223,6 +251,20 @@ def test_stage15_skipped_actions_are_visible_without_looking_successful() -> Non
     assert "ghp_" not in comment
     assert "token=" not in comment
     assert "Authorization" not in comment
+
+
+def test_stage15_assembly_fallback_counts_as_applied_not_skipped() -> None:
+    from voyager.bots.clearance.enrichment import build_clearance_comment
+
+    comment = build_clearance_comment(
+        _evaluation(status="clearance_ready_for_approval", label="clearance-3-ready-for-approval"),
+        automation=_automation_with_fallback_stage15_action(),
+        provenance={"updated_at": "2026-05-17T00:00:00Z"},
+    )
+
+    summary = "thread sync actions: 1 (applied: 1, skipped: 0, failed: 0)"
+    assert f"✅ Automation: ready; {summary}" in comment
+    assert "Skipped resolveReviewThread" not in comment
 
 
 def test_issue_118_readiness_comment_names_visual_unresolved_skipped_threads() -> None:

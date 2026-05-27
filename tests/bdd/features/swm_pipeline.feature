@@ -639,6 +639,76 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     And the in-thread reply body contains "does not allow Clearance"
 
   # ---------------------------------------------------------------------------
+  # Issue #131: Assembly-authored PR resolver fallback
+  # ---------------------------------------------------------------------------
+
+  Scenario: Issue #131 Assembly-authored PR uses Assembly App resolver fallback
+    Given the stub PR "iterwheel/sandbox" #49 author is "iterwheel-assembly[bot]"
+    And the stub PR has 1 Codex thread with a substantive reply from "iterwheel-assembly[bot]" and isResolved false
+    And the thread viewerCanResolve is false
+    And the authorized resolver app "iterwheel-assembly" can resolve the thread
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "ready"
+    And exactly 1 resolveReviewThread mutation was invoked
+    And the resolveReviewThread mutation used app "iterwheel-assembly"
+    And no Stage 1.5 skipped action was recorded
+    And exactly 1 in-thread reply was posted under the Codex review comment
+    And the in-thread reply body contains "Clearance verified"
+    And the in-thread reply body contains "iterwheel-assembly"
+
+  Scenario: Issue #131 non-authorized PR author does not use resolver fallback
+    Given the stub PR "iterwheel/sandbox" #49 author is "random-contributor"
+    And the stub PR has 1 Codex thread with a substantive reply from "random-contributor" and isResolved false
+    And the thread viewerCanResolve is false
+    And the authorized resolver app "iterwheel-assembly" can resolve the thread
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "ready"
+    And exactly 0 resolveReviewThread mutations were invoked
+    And the Stage 1.5 action has a skipped action
+    And exactly 1 in-thread reply was posted under the Codex review comment
+
+  Scenario: Issue #131 Assembly-authored PR without resolver capability uses manual-close path
+    Given the stub PR "iterwheel/sandbox" #49 author is "iterwheel-assembly[bot]"
+    And the stub PR has 1 Codex thread with a substantive reply from "iterwheel-assembly[bot]" and isResolved false
+    And the thread viewerCanResolve is false
+    And the authorized resolver app "iterwheel-assembly" cannot resolve the thread
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "ready"
+    And exactly 0 resolveReviewThread mutations were invoked
+    And the Stage 1.5 action has a skipped action
+    And the Stage 1.5 skipped action reason is "viewerCanResolve is false"
+    And exactly 1 in-thread reply was posted under the Codex review comment
+    And the in-thread reply body contains "does not allow Clearance"
+    And the in-thread reply body contains "resolve it manually"
+
+  Scenario: Issue #131 Assembly fallback does not duplicate an existing current-head close-reason reply
+    Given the stub PR "iterwheel/sandbox" #49 author is "iterwheel-assembly[bot]"
+    And the stub PR has 1 Codex thread with a substantive reply from "iterwheel-assembly[bot]" and isResolved false
+    And the thread viewerCanResolve is false
+    And the thread already has a Clearance close-reason reply for the current head
+    And the authorized resolver app "iterwheel-assembly" can resolve the thread
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "ready"
+    And exactly 1 resolveReviewThread mutation was invoked
+    And the resolveReviewThread mutation used app "iterwheel-assembly"
+    And no in-thread reply was posted
+
+  Scenario: Issue #131 Assembly fallback respects inaccessible fork head repos
+    Given the stub PR "iterwheel/sandbox" #49 author is "iterwheel-assembly[bot]"
+    And the stub PR has 1 Codex thread with a substantive reply from "iterwheel-assembly[bot]" and isResolved false
+    And the stub PR is from fork "ryosaeba1985/voyager"
+    And the fork head repo is not accessible
+    And the thread viewerCanResolve is false
+    And the authorized resolver app "iterwheel-assembly" can resolve the thread
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "ready"
+    And exactly 0 resolveReviewThread mutations were invoked
+    And the Stage 1.5 action has a skipped action
+    And the Stage 1.5 skipped action reason is "viewerCanResolve is false"
+    And exactly 1 in-thread reply was posted under the Codex review comment
+    And the in-thread reply body contains "resolve it manually"
+
+  # ---------------------------------------------------------------------------
   # Issue #118: visual-unresolved review threads
   # ---------------------------------------------------------------------------
 

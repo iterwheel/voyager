@@ -78,9 +78,12 @@ class _StubGitHubAppClient:
         self.fail_resolve_graphql_error: bool = False  # CHG-1813: GitHubGraphQLError
         self.fail_resolve_timeout: bool = False  # CHG-1813: builtin TimeoutError
         self.resolve_calls: list[tuple[str, str]] = []
+        self.resolve_app_calls: list[tuple[str, str, str]] = []
         self.create_comment_calls: list[tuple[str, str, int, str]] = []
         self.review_thread_reply_calls: list[tuple[str, str, int, int, str]] = []
         self.graphql_calls: list[tuple[str, dict[str, Any]]] = []
+        self.resolver_viewer_can_resolve_by_app: dict[str, bool] = {}
+        self.configured_app_slugs: set[str] = {"iterwheel-clearance", "iterwheel-assembly"}
         self.resolve_response: dict[str, Any] = {
             "id": THREAD_ID,
             "isResolved": True,
@@ -139,6 +142,14 @@ class _StubGitHubAppClient:
     async def pull_request_review_threads(
         self, app_slug: str, repo: str, pr: int
     ) -> list[dict[str, Any]]:
+        if app_slug in self.resolver_viewer_can_resolve_by_app:
+            return [
+                {
+                    **thread,
+                    "viewerCanResolve": self.resolver_viewer_can_resolve_by_app[app_slug],
+                }
+                for thread in self.threads
+            ]
         return list(self.threads)
 
     async def pull_request_reviews(self, app_slug: str, repo: str, pr: int) -> list[dict[str, Any]]:
@@ -166,6 +177,7 @@ class _StubGitHubAppClient:
         self, app_slug: str, repository: str, thread_id: str
     ) -> dict[str, Any]:
         self.resolve_calls.append((repository, thread_id))
+        self.resolve_app_calls.append((app_slug, repository, thread_id))
         if self.fail_resolve:
             import httpx
 
@@ -190,7 +202,9 @@ class _StubGitHubAppClient:
             )
         if self.fail_resolve_timeout:
             raise TimeoutError("simulated resolveReviewThread timeout")
-        return self.resolve_response
+        response = dict(self.resolve_response)
+        response["resolvedBy"] = {"login": f"{app_slug}[bot]"}
+        return response
 
     async def graphql(
         self,
@@ -1874,6 +1888,16 @@ def given_thread_viewer_can_resolve(ctx) -> None:
     threads[0]["viewerCanResolve"] = True
 
 
+@given(parsers.parse('the authorized resolver app "{app_slug}" can resolve the thread'))
+def given_authorized_resolver_can_resolve(ctx, app_slug: str) -> None:
+    ctx["client"].resolver_viewer_can_resolve_by_app[app_slug] = True
+
+
+@given(parsers.parse('the authorized resolver app "{app_slug}" cannot resolve the thread'))
+def given_authorized_resolver_cannot_resolve(ctx, app_slug: str) -> None:
+    ctx["client"].resolver_viewer_can_resolve_by_app[app_slug] = False
+
+
 @given("the thread already has a Clearance close-reason reply for the current head")
 def given_thread_existing_close_reason_reply(ctx) -> None:
     threads = ctx["client"].threads
@@ -1941,6 +1965,15 @@ def then_stage15_skipped_action(ctx) -> None:
     assert skipped, f"no skipped actions found in sync_actions: {actions!r}"
 
 
+@then("no Stage 1.5 skipped action was recorded")
+def then_no_stage15_skipped_action(ctx) -> None:
+    auto = ctx["automation"]
+    assert auto is not None, f"raised={ctx.get('raised')}"
+    actions = auto.get("sync_actions") or []
+    skipped = [a for a in actions if (a.get("result") or {}).get("skipped") is True]
+    assert not skipped, f"unexpected skipped actions found in sync_actions: {actions!r}"
+
+
 @then(parsers.parse('the Stage 1.5 skipped action reason is "{reason}"'))
 def then_stage15_skipped_action_reason(ctx, reason: str) -> None:
     auto = ctx["automation"]
@@ -1950,3 +1983,12 @@ def then_stage15_skipped_action_reason(ctx, reason: str) -> None:
     assert skipped, f"no skipped actions found in sync_actions: {actions!r}"
     actual = (skipped[0].get("result") or {}).get("skip_reason")
     assert actual == reason, f"expected skip_reason={reason!r}, got {actual!r}"
+
+
+@then(parsers.parse('the resolveReviewThread mutation used app "{app_slug}"'))
+def then_resolve_mutation_used_app(ctx, app_slug: str) -> None:
+    calls = ctx["client"].resolve_app_calls
+    assert calls, "no resolveReviewThread mutation was invoked"
+    assert any(call[0] == app_slug for call in calls), (
+        f"expected resolveReviewThread app {app_slug!r}, calls={calls!r}"
+    )

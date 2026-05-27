@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from voyager.bots.clearance.close_reason import (
+    build_delegated_close_reason_comment,
     build_manual_close_required_comment,
     build_thread_conclusion_comment,
 )
@@ -111,6 +112,33 @@ def test_manual_close_required_comment_distinguishes_verified_from_closed() -> N
     assert "does not allow Clearance" in body
     assert "resolve it manually" in body
     assert "✅ Action: conversation resolved" not in body
+
+
+def test_delegated_close_reason_comment_names_resolver_identity() -> None:
+    thread = _thread(
+        Verdict.RESOLVED,
+        verdict_reason="author reply cites concrete identifier and addresses the review concern",
+    )
+    snapshot = _snapshot(
+        evidence=Evidence(
+            thread_state="C",
+            author_reply_id=3254250516,
+            author_reply_substantive=True,
+        )
+    )
+
+    body = build_delegated_close_reason_comment(
+        thread,
+        snapshot,
+        head_sha="1716c0062a37abcdef",
+        resolver_login="iterwheel-assembly[bot]",
+    )
+
+    assert body.startswith("<!-- clearance-close-reason:PRRT_compact:1716c0062a37 -->")
+    assert "✅ **Clearance: resolved**" in body
+    assert "Clearance verified the fix" in body
+    assert "`iterwheel-assembly[bot]`" in body
+    assert "does not allow Clearance" not in body
 
 
 def test_investigator_resolved_comment_uses_compact_card() -> None:

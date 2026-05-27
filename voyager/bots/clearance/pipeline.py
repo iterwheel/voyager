@@ -27,6 +27,7 @@ from typing import Any
 
 import httpx
 
+from voyager.bots.assembly.constants import ASSEMBLY_AGENT_SLUG
 from voyager.bots.clearance.classify import (
     ThreadState,
     _comment_nodes,
@@ -38,6 +39,7 @@ from voyager.bots.clearance.classify import (
 )
 from voyager.bots.clearance.close_reason import (
     build_close_reason_comment,
+    build_delegated_close_reason_comment,
     build_manual_close_required_comment,
 )
 from voyager.bots.clearance.constants import (
@@ -74,6 +76,92 @@ from voyager.core.github_app import GitHubAppClient, GitHubGraphQLError
 from voyager.core.writeback import _safe_exception_fields, build_writeback_failure, dry_run_enabled
 
 _log = logging.getLogger(__name__)
+
+
+_AUTHORIZED_RESOLVER_APP_BY_PR_AUTHOR = {
+    "iterwheel-assembly[bot]": ASSEMBLY_AGENT_SLUG,
+    "app/iterwheel-assembly": ASSEMBLY_AGENT_SLUG,
+    "iterwheel-assembly": ASSEMBLY_AGENT_SLUG,
+}
+
+
+def _authorized_resolver_app_for_pr_author(pr_author_login: str | None) -> str | None:
+    """Return the App slug allowed to resolve threads for this PR author.
+
+    Resolver fallback is deliberately narrow: only known Iterwheel App authors
+    may supply an alternate App token. Human or third-party authors must not
+    cause Clearance to resolve conversations through an unrelated identity.
+    """
+    return _AUTHORIZED_RESOLVER_APP_BY_PR_AUTHOR.get(str(pr_author_login or ""))
+
+
+def _bot_login_for_app_slug(app_slug: str) -> str:
+    return f"{app_slug}[bot]"
+
+
+async def _app_can_resolve_thread(
+    *,
+    client: GitHubAppClient,
+    app_slug: str,
+    repository: str,
+    pr: int,
+    thread_id: str,
+    cache: dict[str, list[dict[str, Any]] | None] | None = None,
+) -> bool:
+    """Check whether *app_slug* can resolve *thread_id* without mutating it."""
+    if cache is not None and app_slug in cache:
+        threads = cache[app_slug]
+    else:
+        try:
+            threads = await client.pull_request_review_threads(app_slug, repository, pr)
+        except Exception as exc:
+            safe = _safe_exception_fields(exc)
+            _log.warning(
+                "resolver fallback capability check failed for app=%s thread=%s "
+                "on %s#%s: class=%s status=%s",
+                app_slug,
+                thread_id,
+                repository,
+                pr,
+                safe["error_class"],
+                safe["status"],
+            )
+            threads = None
+        if cache is not None:
+            cache[app_slug] = threads
+
+    if not threads:
+        return False
+
+    for item in threads:
+        if item.get("id") == thread_id:
+            return item.get("viewerCanResolve") is True
+    return False
+
+
+async def _app_head_repo_accessible(
+    *,
+    client: GitHubAppClient,
+    app_slug: str,
+    head_repo: str,
+    cache: dict[tuple[str, str], bool],
+) -> bool:
+    key = (app_slug, head_repo)
+    if key not in cache:
+        try:
+            cache[key] = await client.check_head_repo_accessible(app_slug, head_repo)
+        except Exception as exc:
+            safe = _safe_exception_fields(exc)
+            _log.warning(
+                "resolver fallback head-repo access check failed for app=%s head_repo=%s: "
+                "class=%s status=%s",
+                app_slug,
+                head_repo,
+                safe["error_class"],
+                safe["status"],
+            )
+            cache[key] = False
+    return cache[key]
 
 
 _CLEAN_CODEX_REVIEW_VERDICTS = (
@@ -528,6 +616,7 @@ async def _maybe_sync_stage_15(
     now: datetime,
     head_repo: str | None = None,
     is_fork_pr: bool = False,
+    pr_author_login: str | None = None,
 ) -> list[Stage15Action]:
     """Stage 1.5 — resolve GitHub threads whose verdict is RESOLVED but isResolved=false.
 
@@ -549,6 +638,8 @@ async def _maybe_sync_stage_15(
     # candidates avoid an unnecessary network request (Codex P1, review
     # 4341921018 round 5).
     fork_head_blocked: bool | None = None  # None = unchecked yet
+    resolver_thread_cache: dict[str, list[dict[str, Any]] | None] = {}
+    resolver_head_repo_access_cache: dict[tuple[str, str], bool] = {}
 
     for thread in threads:
         if thread.verdict != Verdict.RESOLVED:
@@ -565,6 +656,162 @@ async def _maybe_sync_stage_15(
         # particular thread. Record the skip as an operator-visible action
         # without triggering a writeback failure.
         if snap.github_state.viewerCanResolve is False:
+            resolver_app_slug = _authorized_resolver_app_for_pr_author(pr_author_login)
+            resolver_can_resolve = False
+            resolver_head_repo_accessible = True
+            if resolver_app_slug:
+                resolver_can_resolve = await _app_can_resolve_thread(
+                    client=client,
+                    app_slug=resolver_app_slug,
+                    repository=repository,
+                    pr=pr,
+                    thread_id=thread.id,
+                    cache=resolver_thread_cache,
+                )
+                if resolver_can_resolve and is_fork_pr and head_repo and head_repo != repository:
+                    resolver_head_repo_accessible = await _app_head_repo_accessible(
+                        client=client,
+                        app_slug=resolver_app_slug,
+                        head_repo=head_repo,
+                        cache=resolver_head_repo_access_cache,
+                    )
+
+            if resolver_can_resolve and resolver_head_repo_accessible:
+                assert resolver_app_slug is not None
+                resolver_login = _bot_login_for_app_slug(resolver_app_slug)
+                comment_body = build_delegated_close_reason_comment(
+                    thread,
+                    snap,
+                    head_sha=head_sha,
+                    resolver_login=resolver_login,
+                )
+
+                if dry_run:
+                    actions.append(
+                        Stage15Action(
+                            mutation=Stage15Mutation.RESOLVE_REVIEW_THREAD,
+                            threadId=thread.id,
+                            result={
+                                "dry_run": True,
+                                "repo": repository,
+                                "pr": pr,
+                                "thread_id": thread.id,
+                                "verifier_app": CLEARANCE_AGENT_SLUG,
+                                "clearance_viewerCanResolve": False,
+                                "resolver_app": resolver_app_slug,
+                                "resolver_login": resolver_login,
+                                "resolver_viewerCanResolve": True,
+                                "fallback": True,
+                            },
+                        )
+                    )
+                    continue
+
+                try:
+                    result = await client.resolve_review_thread(
+                        resolver_app_slug, repository, thread.id
+                    )
+                except (httpx.HTTPError, GitHubGraphQLError, TimeoutError) as exc:
+                    failure = build_writeback_failure(
+                        operation="resolveReviewThread",
+                        exc=exc,
+                        repository=repository,
+                        pr=pr,
+                        thread_id=thread.id,
+                    )
+                    _log.warning(
+                        "resolver fallback resolveReviewThread failed for app=%s "
+                        "thread=%s on %s#%s: %s",
+                        resolver_app_slug,
+                        thread.id,
+                        repository,
+                        pr,
+                        json.dumps(failure),
+                    )
+                    actions.append(
+                        Stage15Action(
+                            mutation=Stage15Mutation.RESOLVE_REVIEW_THREAD,
+                            threadId=thread.id,
+                            result={
+                                "applied": False,
+                                **failure,
+                                "verifier_app": CLEARANCE_AGENT_SLUG,
+                                "clearance_viewerCanResolve": False,
+                                "resolver_app": resolver_app_slug,
+                                "resolver_login": resolver_login,
+                                "resolver_viewerCanResolve": True,
+                                "fallback": True,
+                            },
+                        )
+                    )
+                    continue
+
+                resolved_by = ((result or {}).get("resolvedBy") or {}).get(
+                    "login"
+                ) or resolver_login
+                result_with_meta = {
+                    **dict(result or {}),
+                    "verifier_app": CLEARANCE_AGENT_SLUG,
+                    "clearance_viewerCanResolve": False,
+                    "resolver_app": resolver_app_slug,
+                    "resolver_login": resolved_by,
+                    "resolver_viewerCanResolve": True,
+                    "fallback": True,
+                }
+                snap.github_state = GitHubThreadState(
+                    isResolved=True,
+                    isOutdated=snap.github_state.isOutdated,
+                    viewerCanResolve=snap.github_state.viewerCanResolve,
+                    resolvedBy=resolved_by,
+                    synced_via=f"Stage 1.5 {resolver_app_slug} resolveReviewThread",
+                    synced_at=now,
+                )
+                thread.github_isResolved = True
+                thread.github_resolvedBy = resolved_by
+
+                fallback_reply_result: dict[str, Any] = {"posted": False}
+                if thread.existing_close_reason_marker:
+                    fallback_reply_result = {
+                        "posted": False,
+                        "skipped": "existing close-reason reply for current head",
+                    }
+                else:
+                    try:
+                        reply = await client.create_review_thread_reply(
+                            CLEARANCE_AGENT_SLUG,
+                            repository,
+                            pr,
+                            thread.comment_id,
+                            body=comment_body,
+                        )
+                        fallback_reply_result = {
+                            "posted": True,
+                            "url": (reply or {}).get("html_url"),
+                        }
+                    except (httpx.HTTPError, RuntimeError) as exc:
+                        safe = _safe_exception_fields(exc)
+                        fallback_reply_result = {
+                            "posted": False,
+                            "error_class": safe["error_class"],
+                            "status": safe["status"],
+                        }
+                        _log.warning(
+                            "resolver fallback in-thread reply suppressed for thread %s "
+                            "(mutation already applied): class=%s status=%s",
+                            thread.id,
+                            safe["error_class"],
+                            safe["status"],
+                        )
+                result_with_meta["in_thread_reply"] = fallback_reply_result
+                actions.append(
+                    Stage15Action(
+                        mutation=Stage15Mutation.RESOLVE_REVIEW_THREAD,
+                        threadId=thread.id,
+                        result=result_with_meta,
+                    )
+                )
+                continue
+
             skip_reason = (
                 f"Unsupported capability: Clearance cannot resolve thread "
                 f"{thread.id} because viewerCanResolve is false. "
@@ -619,6 +866,16 @@ async def _maybe_sync_stage_15(
                         "pr": pr,
                         "thread_id": thread.id,
                         "in_thread_reply": reply_result,
+                        "fallback_resolver": (
+                            {
+                                "app_slug": resolver_app_slug,
+                                "login": _bot_login_for_app_slug(resolver_app_slug),
+                                "viewerCanResolve": resolver_can_resolve,
+                                "headRepoAccessible": resolver_head_repo_accessible,
+                            }
+                            if resolver_app_slug
+                            else None
+                        ),
                     },
                 )
             )
@@ -1022,6 +1279,7 @@ async def compute_clearance_automation(
         now=now,
         head_repo=head_repo,
         is_fork_pr=is_fork_pr,
+        pr_author_login=pr_author_login,
     )
 
     investigator_fired = any(t.llm_verdict for t in threads)

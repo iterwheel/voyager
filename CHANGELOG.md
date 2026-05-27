@@ -8,6 +8,13 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+### Added — Assembly resolver fallback for Clearance ([#131](https://github.com/iterwheel/voyager/issues/131))
+
+- Clearance Stage 1.5 can now use the allow-listed Assembly App identity to
+  resolve verified-fixed Codex review threads on Assembly-authored PRs when
+  GitHub reports `viewerCanResolve=false` for the Clearance App, while keeping
+  non-authorized authors on the manual-close path.
+
 ### Fixed — Clearance manual-close verification replies ([#130](https://github.com/iterwheel/voyager/issues/130))
 
 - Clearance now posts an in-thread verification reply when it judges a Codex
