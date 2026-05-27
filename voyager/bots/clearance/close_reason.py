@@ -149,6 +149,7 @@ def build_thread_conclusion_comment(
     *,
     head_sha: str,
     model: str | None = None,
+    action_line: str | None = None,
 ) -> str:
     """Build the public GitHub reply posted under a Codex review thread.
 
@@ -191,7 +192,7 @@ def build_thread_conclusion_comment(
         f"📍 Location: `{_location(thread)}`\n"
         f"🔖 Head: `{head_sha[:12]}`\n"
         f"💡 Why: {_clip(reason)}\n"
-        f"{_action_line(verdict)}\n\n"
+        f"{action_line or _action_line(verdict)}\n\n"
         "<details>\n"
         "<summary>Evidence</summary>\n\n"
         f"{detail_lines}\n\n"
@@ -212,4 +213,24 @@ def build_close_reason_comment(
         snapshot,
         head_sha=head_sha,
         model=model,
+    )
+
+
+def build_manual_close_required_comment(
+    thread: Thread,
+    snapshot: ThreadSnapshot | None,
+    *,
+    head_sha: str,
+    model: str | None = None,
+) -> str:
+    """Build a RESOLVED verification reply when GitHub cannot auto-close it."""
+    return build_thread_conclusion_comment(
+        thread,
+        snapshot,
+        head_sha=head_sha,
+        model=model,
+        action_line=(
+            "⚠️ Action: verified resolved, but GitHub does not allow Clearance "
+            "to close this conversation. A human or permitted actor must resolve it manually."
+        ),
     )

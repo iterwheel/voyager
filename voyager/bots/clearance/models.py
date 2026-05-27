@@ -84,6 +84,7 @@ class Thread(BaseModel):
     llm_confidence: float | None = None
     llm_reason: str | None = None
     clean_codex_review_id: int | None = None
+    existing_close_reason_marker: bool = False
 
 
 class PollRecord(BaseModel):

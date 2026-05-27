@@ -610,6 +610,33 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     And exactly 0 resolveReviewThread mutations were invoked
     And the Stage 1.5 action has a skipped action
     And the Stage 1.5 skipped action reason is "viewerCanResolve is false"
+    And exactly 1 in-thread reply was posted under the Codex review comment
+    And the in-thread reply body contains "RESOLVED"
+    And the in-thread reply body contains "does not allow Clearance"
+    And the in-thread reply body contains "resolve it manually"
+
+  Scenario: Issue #130 viewerCanResolve=false does not duplicate current-head verification reply
+    Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with substantive author reply and isResolved false
+    And the thread viewerCanResolve is false
+    And the thread already has a Clearance close-reason reply for the current head
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "ready"
+    And exactly 0 resolveReviewThread mutations were invoked
+    And the Stage 1.5 action has a skipped action
+    And the Stage 1.5 skipped action reason is "viewerCanResolve is false"
+    And no in-thread reply was posted
+
+  Scenario: Issue #130 copied close-reason marker from non-Clearance author does not suppress verification reply
+    Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with substantive author reply and isResolved false
+    And the thread viewerCanResolve is false
+    And a non-Clearance thread reply contains the current-head close-reason marker
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "ready"
+    And exactly 0 resolveReviewThread mutations were invoked
+    And the Stage 1.5 action has a skipped action
+    And the Stage 1.5 skipped action reason is "viewerCanResolve is false"
+    And exactly 1 in-thread reply was posted under the Codex review comment
+    And the in-thread reply body contains "does not allow Clearance"
 
   # ---------------------------------------------------------------------------
   # Issue #118: visual-unresolved review threads
@@ -629,7 +656,9 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     And exactly 0 resolveReviewThread mutations were invoked
     And the Stage 1.5 action has a skipped action
     And the Stage 1.5 skipped action reason is "viewerCanResolve is false"
-    And no in-thread reply was posted
+    And exactly 1 in-thread reply was posted under the Codex review comment
+    And the in-thread reply body contains "does not allow Clearance"
+    And the in-thread reply body contains "resolve it manually"
     And the thread GitHub state was not mutated
 
   Scenario: Issue #118 current actionable thread still blocks when Clearance cannot resolve it
@@ -682,5 +711,7 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     And exactly 0 resolveReviewThread mutations were invoked
     And the Stage 1.5 action has a skipped action
     And the Stage 1.5 skipped action reason is "viewerCanResolve is false"
-    And no in-thread reply was posted
+    And exactly 1 in-thread reply was posted under the Codex review comment
+    And the in-thread reply body contains "does not allow Clearance"
+    And the in-thread reply body contains "resolve it manually"
     And the thread GitHub state was not mutated

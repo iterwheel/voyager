@@ -36,9 +36,13 @@ from voyager.bots.clearance.classify import (
     latest_author_reply,
     latest_codex_followup,
 )
-from voyager.bots.clearance.close_reason import build_close_reason_comment
+from voyager.bots.clearance.close_reason import (
+    build_close_reason_comment,
+    build_manual_close_required_comment,
+)
 from voyager.bots.clearance.constants import (
     CLEARANCE_AGENT_SLUG,
+    CLEARANCE_BOT_LOGIN,
     CODEX_REVIEW_RESULT_PREFIX,
     is_codex_login,
 )
@@ -244,6 +248,12 @@ async def _process_thread(
 
     path = thread_dict.get("path") or "unknown"
     line = thread_dict.get("line")
+    existing_close_marker = f"clearance-close-reason:{thread_dict['id']}:{head_sha[:12]}"
+    existing_close_reason_marker = any(
+        ((comment.get("author") or {}).get("login") in {CLEARANCE_AGENT_SLUG, CLEARANCE_BOT_LOGIN})
+        and (comment.get("body") or "").startswith(f"<!-- {existing_close_marker} -->")
+        for comment in comments_nodes
+    )
 
     # Issue #63: State A threads where the Codex comment predates the most
     # recent push may have been addressed in a newer commit, even though
@@ -381,6 +391,7 @@ async def _process_thread(
         llm_confidence=llm_decision.confidence if llm_decision else None,
         llm_reason=llm_decision.reason if llm_decision else None,
         clean_codex_review_id=clean_codex_review.get("id") if clean_codex_review else None,
+        existing_close_reason_marker=existing_close_reason_marker,
     )
 
     snapshot = ThreadSnapshot(
@@ -560,6 +571,43 @@ async def _maybe_sync_stage_15(
                 f"The thread verdict is already RESOLVED; no action needed."
             )
             _log.info(skip_reason)
+            reply_result: dict[str, Any] = {"posted": False}
+            if not dry_run:
+                if thread.existing_close_reason_marker:
+                    reply_result = {
+                        "posted": False,
+                        "skipped": "existing close-reason reply for current head",
+                    }
+                else:
+                    comment_body = build_manual_close_required_comment(
+                        thread, snap, head_sha=head_sha
+                    )
+                    try:
+                        reply = await client.create_review_thread_reply(
+                            CLEARANCE_AGENT_SLUG,
+                            repository,
+                            pr,
+                            thread.comment_id,
+                            body=comment_body,
+                        )
+                        reply_result = {
+                            "posted": True,
+                            "url": (reply or {}).get("html_url"),
+                        }
+                    except (httpx.HTTPError, RuntimeError) as exc:
+                        safe = _safe_exception_fields(exc)
+                        reply_result = {
+                            "posted": False,
+                            "error_class": safe["error_class"],
+                            "status": safe["status"],
+                        }
+                        _log.warning(
+                            "manual-close in-thread reply suppressed for thread %s "
+                            "(viewerCanResolve=false): class=%s status=%s",
+                            thread.id,
+                            safe["error_class"],
+                            safe["status"],
+                        )
             actions.append(
                 Stage15Action(
                     mutation=Stage15Mutation.RESOLVE_REVIEW_THREAD,
@@ -570,6 +618,7 @@ async def _maybe_sync_stage_15(
                         "repo": repository,
                         "pr": pr,
                         "thread_id": thread.id,
+                        "in_thread_reply": reply_result,
                     },
                 )
             )
