@@ -1874,6 +1874,40 @@ def given_thread_viewer_can_resolve(ctx) -> None:
     threads[0]["viewerCanResolve"] = True
 
 
+@given("the thread already has a Clearance close-reason reply for the current head")
+def given_thread_existing_close_reason_reply(ctx) -> None:
+    threads = ctx["client"].threads
+    assert threads, "no threads configured"
+    head_sha = ctx["client"].pr_payload["head"]["sha"]
+    marker = f"<!-- clearance-close-reason:{threads[0]['id']}:{head_sha[:12]} -->"
+    threads[0]["comments"]["nodes"].append(
+        {
+            "databaseId": CODEX_COMMENT_ID + 2,
+            "author": {"login": "iterwheel-clearance"},
+            "body": f"{marker}\n✅ **Clearance: resolved**\n\nPrior verification reply.",
+            "url": "https://example/c/3",
+            "createdAt": "2026-05-11T12:45:00Z",
+        }
+    )
+
+
+@given("a non-Clearance thread reply contains the current-head close-reason marker")
+def given_non_clearance_reply_contains_close_reason_marker(ctx) -> None:
+    threads = ctx["client"].threads
+    assert threads, "no threads configured"
+    head_sha = ctx["client"].pr_payload["head"]["sha"]
+    marker = f"<!-- clearance-close-reason:{threads[0]['id']}:{head_sha[:12]} -->"
+    threads[0]["comments"]["nodes"].append(
+        {
+            "databaseId": CODEX_COMMENT_ID + 2,
+            "author": {"login": "some-maintainer"},
+            "body": f"Copied old bot output for discussion:\n\n{marker}\nNot a Clearance reply.",
+            "url": "https://example/c/3",
+            "createdAt": "2026-05-11T12:45:00Z",
+        }
+    )
+
+
 @then("exactly 0 resolveReviewThread mutations were invoked")
 def then_zero_resolve_mutations(ctx) -> None:
     count = len(ctx["client"].resolve_calls)

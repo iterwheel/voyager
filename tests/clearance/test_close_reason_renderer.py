@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from voyager.bots.clearance.close_reason import build_thread_conclusion_comment
+from voyager.bots.clearance.close_reason import (
+    build_manual_close_required_comment,
+    build_thread_conclusion_comment,
+)
 from voyager.bots.clearance.models import (
     Evidence,
     GitHubThreadState,
@@ -85,6 +88,29 @@ def test_deterministic_resolved_comment_uses_compact_card() -> None:
     assert "- Rule: SWM-1101 step 4-5" in body
     assert "- Thread state: `C`" in body
     assert "- Author reply: review comment `3254250516`" in body
+
+
+def test_manual_close_required_comment_distinguishes_verified_from_closed() -> None:
+    thread = _thread(
+        Verdict.RESOLVED,
+        verdict_reason="author reply cites concrete identifier and addresses the review concern",
+    )
+    snapshot = _snapshot(
+        evidence=Evidence(
+            thread_state="C",
+            author_reply_id=3254250516,
+            author_reply_substantive=True,
+        )
+    )
+
+    body = build_manual_close_required_comment(thread, snapshot, head_sha="1716c0062a37abcdef")
+
+    assert body.startswith("<!-- clearance-close-reason:PRRT_compact:1716c0062a37 -->")
+    assert "✅ **Clearance: resolved**" in body
+    assert "⚠️ Action: verified resolved" in body
+    assert "does not allow Clearance" in body
+    assert "resolve it manually" in body
+    assert "✅ Action: conversation resolved" not in body
 
 
 def test_investigator_resolved_comment_uses_compact_card() -> None:

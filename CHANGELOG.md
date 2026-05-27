@@ -8,6 +8,13 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+### Fixed — Clearance manual-close verification replies ([#130](https://github.com/iterwheel/voyager/issues/130))
+
+- Clearance now posts an in-thread verification reply when it judges a Codex
+  review thread `RESOLVED` but skips `resolveReviewThread` because GitHub
+  reports `viewerCanResolve=false`, preserving the safe skip while leaving
+  reviewer-visible evidence and manual-close guidance.
+
 ## [0.4.5] — 2026-05-27
 
 ### Fixed — Clearance outdated visual-unresolved review threads ([#119](https://github.com/iterwheel/voyager/issues/119), [#124](https://github.com/iterwheel/voyager/issues/124), [#128](https://github.com/iterwheel/voyager/pull/128))
