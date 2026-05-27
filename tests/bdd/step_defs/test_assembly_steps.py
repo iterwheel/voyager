@@ -317,6 +317,12 @@ def dispatcher_codex_trigger(dispatch_outcome: dict) -> None:
     assert client.create_issue_comment.await_args.kwargs["body"] == "@codex review"
 
 
+@then("the dispatcher posted a Codex review trigger after TestPilot")
+def dispatcher_codex_trigger_after_testpilot(dispatch_outcome: dict) -> None:
+    dispatcher_codex_trigger(dispatch_outcome)
+    assert dispatch_outcome["result"].get("testpilot_result") is not None
+
+
 @then("the dispatcher upserted progress comments on the issue and pull request")
 def dispatcher_issue_and_pr_progress_comments(dispatch_outcome: dict) -> None:
     client = dispatch_outcome["client"]
@@ -427,6 +433,11 @@ def dispatcher_testpilot_status(dispatch_outcome: dict, status: str) -> None:
 @then("the dispatcher result has no testpilot_result")
 def dispatcher_no_testpilot(dispatch_outcome: dict) -> None:
     assert dispatch_outcome["result"].get("testpilot_result") is None
+
+
+@then("the dispatcher result applied is false")
+def dispatcher_applied_false(dispatch_outcome: dict) -> None:
+    assert dispatch_outcome["result"].get("applied") is False
 
 
 @then(parsers.parse('the latest Assembly progress comment does not include "{text}"'))

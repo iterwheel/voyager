@@ -2,7 +2,7 @@
 
 Implements VOY-1817 Surface 11.  Sequenced per D11:
 
-    branch -> PR -> codex-trigger -> progress-comment
+    branch -> PR -> TestPilot -> codex-trigger -> progress-comment
 
 Each step records its own failure to ``writeback_failures`` (CHG-1813
 schema) and the progress-comment step always runs, including when every
@@ -843,14 +843,12 @@ async def dispatch_assembly_writeback(
             return base_result
 
         # --------------------------------------------------------------
-        # branch -> PR -> codex-trigger -> progress-comment
+        # branch -> PR -> TestPilot -> codex-trigger -> progress-comment
         # --------------------------------------------------------------
         branch_ok = await _ensure_branch(client, repository, contract, commit_shas[-1], base_result)
         pr_ok = False
         if branch_ok:
             pr_ok = await _ensure_pull_request(client, repository, contract, base_result)
-        if pr_ok:
-            await _post_codex_trigger(client, repository, contract, base_result)
 
         # --------------------------------------------------------------
         # TestPilot phase (two-phase mode only)
@@ -901,6 +899,11 @@ async def dispatch_assembly_writeback(
             # Adapters own their push boundary. The dispatcher only records
             # the TestPilot result; the PR already tracks the same branch.
             base_result["testpilot_result"] = tp_adapter_dict
+            if tp_result.status in {"blocked", "failed", "unknown"}:
+                base_result["applied"] = False
+
+        if pr_ok:
+            await _post_codex_trigger(client, repository, contract, base_result)
 
         _persist_session_metadata(
             contract=contract,

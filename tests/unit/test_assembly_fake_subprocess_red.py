@@ -559,3 +559,90 @@ def test_token_requiring_adapter_receives_installation_token_context_without_lea
     assert seen_contexts
     assert seen_contexts[0].installation_token == token
     assert result["adapter_result"]["status"] == "executed"
+
+
+def test_two_phase_codex_trigger_waits_for_testpilot_result(monkeypatch) -> None:
+    import voyager.bots.assembly.writeback as writeback
+    from voyager.bots.assembly.constants import ASSEMBLY_BACKEND_FAKE_SUBPROCESS
+
+    monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setenv(ASSEMBLY_EXECUTION_BACKEND_ENV, ASSEMBLY_BACKEND_FAKE_SUBPROCESS)
+    monkeypatch.setenv("ASSEMBLY_PHASE_MODE", "two-phase")
+    monkeypatch.setenv("ASSEMBLY_TESTPILOT_BACKEND", ASSEMBLY_BACKEND_FAKE_SUBPROCESS)
+    monkeypatch.setenv(FAKE_ALLOW_ENV, "1")
+    _set_fake_output(
+        monkeypatch,
+        {
+            "status": "executed",
+            "commit_shas": [VALID_SHA],
+            "summary": "implementer commit",
+        },
+    )
+    monkeypatch.setenv(
+        "ASSEMBLY_FAKE_SUBPROCESS_OUTPUT_TESTPILOT",
+        json.dumps(
+            {
+                "status": "executed",
+                "commit_shas": [OTHER_VALID_SHA],
+                "summary": "testpilot commit",
+            }
+        ),
+    )
+    observed_testpilot_results: list[dict[str, Any] | None] = []
+
+    async def fake_post_codex_trigger(client, repository, contract, result):
+        _ = (client, repository, contract)
+        observed_testpilot_results.append(result.get("testpilot_result"))
+        result["codex_review_comment_id"] = 4242
+
+    monkeypatch.setattr(writeback, "_post_codex_trigger", fake_post_codex_trigger)
+    result = asyncio.run(
+        writeback.dispatch_assembly_writeback(
+            _mock_client(),
+            _route(),
+            repository="iterwheel/voyager-sandbox",
+        )
+    )
+
+    assert result["testpilot_result"]["status"] == "executed"
+    assert result["codex_review_comment_id"] == 4242
+    assert observed_testpilot_results == [result["testpilot_result"]]
+
+
+def test_two_phase_testpilot_failed_clears_applied(monkeypatch) -> None:
+    from voyager.bots.assembly.constants import ASSEMBLY_BACKEND_FAKE_SUBPROCESS
+
+    monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setenv(ASSEMBLY_EXECUTION_BACKEND_ENV, ASSEMBLY_BACKEND_FAKE_SUBPROCESS)
+    monkeypatch.setenv("ASSEMBLY_PHASE_MODE", "two-phase")
+    monkeypatch.setenv("ASSEMBLY_TESTPILOT_BACKEND", ASSEMBLY_BACKEND_FAKE_SUBPROCESS)
+    monkeypatch.setenv(FAKE_ALLOW_ENV, "1")
+    _set_fake_output(
+        monkeypatch,
+        {
+            "status": "executed",
+            "commit_shas": [VALID_SHA],
+            "summary": "implementer commit",
+        },
+    )
+    monkeypatch.setenv(
+        "ASSEMBLY_FAKE_SUBPROCESS_OUTPUT_TESTPILOT",
+        json.dumps(
+            {
+                "status": "failed",
+                "commit_shas": [],
+                "summary": "testpilot verification failed",
+            }
+        ),
+    )
+
+    result = asyncio.run(
+        dispatch_assembly_writeback(
+            _mock_client(),
+            _route(),
+            repository="iterwheel/voyager-sandbox",
+        )
+    )
+
+    assert result["testpilot_result"]["status"] == "failed"
+    assert result["applied"] is False
