@@ -199,7 +199,7 @@ def build_assembly_comment(
         if imp_status == "executed":
             lines.append("- 🔧 Implementer: completed")
         elif imp_status == "no_changes":
-            lines.append("- - Implementer: no changes needed")
+            lines.append("- ⚪ Implementer: no changes needed")
         elif imp_status in ("failed", "dry_run"):
             lines.append(f"- 🔴 Implementer: `{imp_status}`")
         else:

@@ -161,7 +161,6 @@ Feature: Assembly bot — code implementation routing and writeback
     Then exactly one route is produced
     And the route validation status is "assembly_ready"
     And the route writeback contract is present
-  And the route writeback contract is present
 
   # ---------------------------------------------------------------------------
   # Scenario 9 (Feature #96) — Two-phase mode: implementer succeeds, testpilot passes

@@ -57,7 +57,6 @@ from .phase import (
     select_phase_backend,
 )
 from .preconditions import validate_preconditions
-from .publish import publish_branch
 
 if TYPE_CHECKING:
     from voyager.core.github_app import GitHubAppClient
@@ -899,30 +898,8 @@ async def dispatch_assembly_writeback(
                 else {"status": "failed", "commit_shas": [], "summary": "No result", "details": {}}
             )
 
-            # If testpilot produced commits, push them
-            if tp_result.status == "executed" and tp_result.commit_shas:
-                for _sha in tp_result.commit_shas:
-                    pub_result = await publish_branch(
-                        repository=repository,
-                        branch_name=contract.branch_name,
-                        installation_token=testpilot_context.installation_token or "",
-                        checkout_dir=Path(testpilot_context.workdir),
-                        timeout_seconds=testpilot_context.timeout_seconds,
-                    )
-                    if not pub_result.success:
-                        base_result["writeback_failures"].append(
-                            {
-                                "operation": "testpilotPush",
-                                "error_class": "PublishError",
-                                "status": pub_result.returncode,
-                                "repo": repository,
-                                "pr": base_result.get("pull_request", {}).get("number"),
-                                "issue": contract.issue_number,
-                                "thread_id": None,
-                                "suggested_action": "Check push permissions and retry.",
-                            }
-                        )
-
+            # Adapters own their push boundary. The dispatcher only records
+            # the TestPilot result; the PR already tracks the same branch.
             base_result["testpilot_result"] = tp_adapter_dict
 
         _persist_session_metadata(

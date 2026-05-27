@@ -44,7 +44,7 @@ _FAILURE_TAIL_LIMIT = 600
 class AdapterResult:
     """The structured outcome an adapter must return."""
 
-    status: str  # "dry_run" | "executed" | "no_changes" | "failed"
+    status: str  # "dry_run" | "executed" | "no_changes" | "failed" | "blocked"
     commit_shas: list[str] = field(default_factory=list)
     summary: str = ""
     # Optional extra metadata the adapter wants to surface (e.g., the
