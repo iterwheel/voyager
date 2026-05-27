@@ -216,6 +216,27 @@ def build_close_reason_comment(
     )
 
 
+def build_delegated_close_reason_comment(
+    thread: Thread,
+    snapshot: ThreadSnapshot | None,
+    *,
+    head_sha: str,
+    resolver_login: str,
+    model: str | None = None,
+) -> str:
+    """Build a RESOLVED reply when another authorized App closes the thread."""
+    return build_thread_conclusion_comment(
+        thread,
+        snapshot,
+        head_sha=head_sha,
+        model=model,
+        action_line=(
+            "✅ Action: Clearance verified the fix; GitHub conversation closed by "
+            f"`{_sanitize_markdown(resolver_login)}`."
+        ),
+    )
+
+
 def build_manual_close_required_comment(
     thread: Thread,
     snapshot: ThreadSnapshot | None,
