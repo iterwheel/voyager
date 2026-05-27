@@ -161,3 +161,80 @@ Feature: Assembly bot — code implementation routing and writeback
     Then exactly one route is produced
     And the route validation status is "assembly_ready"
     And the route writeback contract is present
+  And the route writeback contract is present
+
+  # ---------------------------------------------------------------------------
+  # Scenario 9 (Feature #96) — Two-phase mode: implementer succeeds, testpilot passes
+  # ---------------------------------------------------------------------------
+
+  Scenario: Two-phase mode implementer succeeds and testpilot passes
+    Given a webhook payload "assembly_command_ready"
+    And DRY_RUN is "false"
+    And ASSEMBLY_EXECUTION_BACKEND is "fake-subprocess"
+    And ASSEMBLY_PHASE_MODE is "two-phase"
+    And the fake subprocess backend is allowed
+    And the fake subprocess backend will return executed with commit SHA "0123456789abcdef0123456789abcdef01234567"
+    And the fake testpilot backend will return no_changes
+    When Assembly receives the "issue_comment" event
+    And Assembly dispatches the route with a mock GitHub client
+    Then the dispatcher result adapter_result status is "executed"
+    And the dispatcher result testpilot_result status is "no_changes"
+    And the dispatcher created a branch and opened a pull request
+    And the dispatcher upserted at least one progress comment
+    And the latest Assembly progress comment includes "Phase status:"
+    And the latest Assembly progress comment includes "TestPilot: reviewed"
+
+  # ---------------------------------------------------------------------------
+  # Scenario 10 (Feature #96) — Two-phase mode: implementer succeeds, testpilot adds tests
+  # ---------------------------------------------------------------------------
+
+  Scenario: Two-phase mode implementer succeeds and testpilot adds missing tests
+    Given a webhook payload "assembly_command_ready"
+    And DRY_RUN is "false"
+    And ASSEMBLY_EXECUTION_BACKEND is "fake-subprocess"
+    And ASSEMBLY_PHASE_MODE is "two-phase"
+    And the fake subprocess backend is allowed
+    And the fake subprocess backend will return executed with commit SHA "0123456789abcdef0123456789abcdef01234567"
+    And the fake testpilot backend will return executed with commit SHA "89abcdef0123456789abcdef0123456789abcdef"
+    When Assembly receives the "issue_comment" event
+    And Assembly dispatches the route with a mock GitHub client
+    Then the dispatcher result adapter_result status is "executed"
+    And the dispatcher result testpilot_result status is "executed"
+    And the latest Assembly progress comment includes "TestPilot: passed"
+
+  # ---------------------------------------------------------------------------
+  # Scenario 11 (Feature #96) — Two-phase mode: implementer succeeds, testpilot blocks
+  # ---------------------------------------------------------------------------
+
+  Scenario: Two-phase mode implementer succeeds but testpilot blocks due to unmet AC
+    Given a webhook payload "assembly_command_ready"
+    And DRY_RUN is "false"
+    And ASSEMBLY_EXECUTION_BACKEND is "fake-subprocess"
+    And ASSEMBLY_PHASE_MODE is "two-phase"
+    And the fake subprocess backend is allowed
+    And the fake subprocess backend will return executed with commit SHA "0123456789abcdef0123456789abcdef01234567"
+    And the fake testpilot backend will return blocked with summary "AC #3 not met"
+    When Assembly receives the "issue_comment" event
+    And Assembly dispatches the route with a mock GitHub client
+    Then the dispatcher result adapter_result status is "executed"
+    And the dispatcher result testpilot_result status is "blocked"
+    And the latest Assembly progress comment includes "blocked"
+    And the latest Assembly progress comment includes "AC #3 not met"
+    And the latest Assembly progress comment includes "TestPilot: blocked"
+    And the run does not claim success without testpilot verification
+
+  # ---------------------------------------------------------------------------
+  # Scenario 12 (Feature #96) — Single-phase backward compatibility (no phase config)
+  # ---------------------------------------------------------------------------
+
+  Scenario: Single-phase backward compatibility without phase config
+    Given a webhook payload "assembly_command_ready"
+    And DRY_RUN is "false"
+    And ASSEMBLY_EXECUTION_BACKEND is "fake-subprocess"
+    And the fake subprocess backend is allowed
+    And the fake subprocess backend will return executed with commit SHA "0123456789abcdef0123456789abcdef01234567"
+    When Assembly receives the "issue_comment" event
+    And Assembly dispatches the route with a mock GitHub client
+    Then the dispatcher result adapter_result status is "executed"
+    And the dispatcher result has no testpilot_result
+    And the latest Assembly progress comment does not include "Phase status:"

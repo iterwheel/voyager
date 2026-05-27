@@ -70,6 +70,7 @@ class AdapterExecutionContext:
     session_mode: str = "fresh"
     resume_session_id: str | None = None
     audit_id: str | None = None
+    phase: str = "implementer"
 
     def to_safe_dict(self) -> dict[str, Any]:
         return {
@@ -80,6 +81,7 @@ class AdapterExecutionContext:
             "resume_requested": self.resume_requested,
             "session_mode": self.session_mode,
             "audit_id": self.audit_id,
+            "phase": self.phase,
         }
 
 
@@ -1032,7 +1034,11 @@ class FakeSubprocessAdapter:
                 summary=f"{ASSEMBLY_FAKE_SUBPROCESS_ALLOW_ENV} must be truthy to use fake subprocess.",
             )
 
-        raw = os.environ.get(ASSEMBLY_FAKE_SUBPROCESS_OUTPUT_ENV)
+        # Phase-specific output env var takes precedence over the global one.
+        phase = (context.phase if context else None) or "implementer"
+        phase_key = f"{ASSEMBLY_FAKE_SUBPROCESS_OUTPUT_ENV}_{phase.upper()}"
+        raw = os.environ.get(phase_key) or os.environ.get(ASSEMBLY_FAKE_SUBPROCESS_OUTPUT_ENV)
+
         if not raw:
             return AdapterResult(
                 status="failed",
@@ -1069,6 +1075,13 @@ class FakeSubprocessAdapter:
                 status="failed",
                 commit_shas=[],
                 summary=summary or "Fake subprocess reported failure.",
+                details=_fake_details(payload, context),
+            )
+        if status == "blocked":
+            return AdapterResult(
+                status="blocked",
+                commit_shas=[],
+                summary=summary or "Fake subprocess reported blocked.",
                 details=_fake_details(payload, context),
             )
         if status != "executed":

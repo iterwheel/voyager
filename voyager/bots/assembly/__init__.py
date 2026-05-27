@@ -56,6 +56,13 @@ from .constants import (
     VERIFICATION_COMMANDS,
 )
 from .job_contract import AssemblyJobContract, build_job_contract
+from .phase import (
+    PhaseMode,
+    PhaseName,
+    PhaseResult,
+    combine_phase_results,
+    select_phase_backend,
+)
 from .preconditions import PreconditionResult, validate_preconditions
 from .publish import PublishResult, publish_branch
 from .routing import route_assembly_event, should_run_assembly
@@ -86,17 +93,23 @@ __all__ = [
     "AdapterExecutionContext",
     "AdapterResult",
     "AssemblyAuditManifest",
+    "AssemblyAuditManifest",
     "AssemblyCommand",
     "AssemblyJobContract",
     "DryRunAdapter",
     "ExecutionAdapter",
     "FakeSubprocessAdapter",
+    "PhaseMode",
+    "PhaseMode",
+    "PhaseName",
+    "PhaseResult",
     "PiOhMyPiDeepSeekAdapter",
     "PreconditionResult",
     "PublishResult",
     "audit_manifest_path",
     "build_assembly_comment",
     "build_job_contract",
+    "combine_phase_results",
     "evaluate_actor_authorization",
     "find_audit_manifest",
     "generate_audit_id",
@@ -108,6 +121,7 @@ __all__ = [
     "publish_branch",
     "route_assembly_event",
     "select_execution_adapter",
+    "select_phase_backend",
     "should_run_assembly",
     "validate_preconditions",
     "write_audit_manifest",

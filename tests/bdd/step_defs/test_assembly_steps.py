@@ -345,3 +345,91 @@ def dispatcher_not_called(filter_outcome: dict) -> None:
     # No dispatcher invocation in this scenario — the assertion is the
     # absence of a dispatch_outcome fixture. We confirm the precondition.
     assert filter_outcome["allowed"] == []
+
+
+# ---------------------------------------------------------------------------
+# Feature #96 — Two-phase mode Given steps
+# ---------------------------------------------------------------------------
+
+
+@given(parsers.parse('ASSEMBLY_PHASE_MODE is "{value}"'))
+def set_phase_mode(monkeypatch, value: str) -> None:
+    monkeypatch.setenv("ASSEMBLY_PHASE_MODE", value)
+
+
+@given("the fake testpilot backend will return no_changes")
+def fake_testpilot_no_changes(monkeypatch) -> None:
+    """Set the testpilot backend to use fake-subprocess with a no_changes result."""
+    monkeypatch.setenv("ASSEMBLY_TESTPILOT_BACKEND", "fake-subprocess")
+    monkeypatch.setenv(
+        "ASSEMBLY_FAKE_SUBPROCESS_OUTPUT_TESTPILOT",
+        '{"status": "no_changes", "summary": "TestPilot: no issues found"}',
+    )
+
+
+@given(parsers.parse('the fake testpilot backend will return executed with commit SHA "{sha}"'))
+def fake_testpilot_executed(monkeypatch, sha: str) -> None:
+    monkeypatch.setenv("ASSEMBLY_TESTPILOT_BACKEND", "fake-subprocess")
+    monkeypatch.setenv(
+        "ASSEMBLY_FAKE_SUBPROCESS_OUTPUT_TESTPILOT",
+        json.dumps(
+            {
+                "status": "executed",
+                "commit_shas": [sha],
+                "summary": "TestPilot: added test coverage",
+            }
+        ),
+    )
+
+
+@given(parsers.parse('the fake testpilot backend will return blocked with summary "{summary}"'))
+def fake_testpilot_blocked(monkeypatch, summary: str) -> None:
+    monkeypatch.setenv("ASSEMBLY_TESTPILOT_BACKEND", "fake-subprocess")
+    monkeypatch.setenv(
+        "ASSEMBLY_FAKE_SUBPROCESS_OUTPUT_TESTPILOT",
+        json.dumps(
+            {
+                "status": "blocked",
+                "commit_shas": [],
+                "summary": summary,
+            }
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Feature #96 — Two-phase mode Then steps
+# ---------------------------------------------------------------------------
+
+
+@then(parsers.parse('the dispatcher result testpilot_result status is "{status}"'))
+def dispatcher_testpilot_status(dispatch_outcome: dict, status: str) -> None:
+    tp = dispatch_outcome["result"].get("testpilot_result")
+    assert tp is not None, "expected testpilot_result to be present"
+    assert tp["status"] == status, f"expected testpilot status {status!r}, got {tp['status']!r}"
+
+
+@then("the dispatcher result has no testpilot_result")
+def dispatcher_no_testpilot(dispatch_outcome: dict) -> None:
+    assert dispatch_outcome["result"].get("testpilot_result") is None
+
+
+@then(parsers.parse('the latest Assembly progress comment does not include "{text}"'))
+def latest_progress_comment_excludes(dispatch_outcome: dict, text: str) -> None:
+    client = dispatch_outcome["client"]
+    assert client.upsert_issue_comment.await_count >= 1, "no progress comment was upserted"
+    body = client.upsert_issue_comment.call_args_list[-1].kwargs["body"]
+    assert text not in body, f"expected {text!r} NOT in comment body, but it was found"
+
+
+@then("the run does not claim success without testpilot verification")
+def run_not_claim_success(dispatch_outcome: dict) -> None:
+    """Verify that a blocked testpilot prevents the overall 'applied' status."""
+    result = dispatch_outcome["result"]
+    # The overall comment status should be "blocked", not "applied"
+    body = dispatch_outcome["client"].upsert_issue_comment.call_args_list[-1].kwargs["body"]
+    assert "blocked" in body, f"expected 'blocked' in comment body, got: {body[:200]}"
+    # testpilot must be present and blocked
+    tp = result.get("testpilot_result")
+    assert tp is not None
+    assert tp["status"] == "blocked"

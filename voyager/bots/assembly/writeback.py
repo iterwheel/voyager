@@ -51,7 +51,13 @@ from .constants import (
     CODEX_REVIEW_TRIGGER_BODY,
 )
 from .job_contract import AssemblyJobContract, build_job_contract
+from .phase import (
+    PhaseMode,
+    PhaseName,
+    select_phase_backend,
+)
 from .preconditions import validate_preconditions
+from .publish import publish_branch
 
 if TYPE_CHECKING:
     from voyager.core.github_app import GitHubAppClient
@@ -134,6 +140,7 @@ async def _build_adapter_context(
     is_dry_run: bool,
     session: dict[str, Any] | None = None,
     audit_id: str | None = None,
+    phase: str = "implementer",
 ) -> AdapterExecutionContext:
     installation_token: str | None = None
     if getattr(adapter, "requires_installation_token", False) is True and not is_dry_run:
@@ -157,6 +164,7 @@ async def _build_adapter_context(
         session_mode=str(session.get("mode") or "fresh"),
         resume_session_id=session.get("session_id"),
         audit_id=audit_id,
+        phase=phase,
     )
 
 
@@ -597,7 +605,10 @@ async def dispatch_assembly_writeback(
     # Backend selection is env-only (`ASSEMBLY_EXECUTION_BACKEND`) per VOY-1817 D3.
     # `command_flags` carries `dry_run` / `allow_missing_stack` / `resume`; there is
     # no `--backend` command flag (closed by CHG-1819 F2; see VOY-1819).
-    adapter = select_execution_adapter()
+    phase_mode = PhaseMode.from_env()
+    global_backend = os.environ.get(ASSEMBLY_EXECUTION_BACKEND_ENV)
+    implementer_backend = select_phase_backend(global_backend, PhaseName.IMPLEMENTER)
+    adapter = select_execution_adapter(implementer_backend)
     backend_name = adapter.name
 
     is_dry_run = _is_dry_run(command_flags)
@@ -614,6 +625,8 @@ async def dispatch_assembly_writeback(
         "pull_request": None,
         "codex_review_comment_id": None,
         "assembly_comment_id": None,
+        "phase_mode": phase_mode.value,
+        "testpilot_result": None,
         "session": _fresh_session(requested=bool(command_flags.get("resume"))),
         "writeback_failures": [],
     }
@@ -839,6 +852,78 @@ async def dispatch_assembly_writeback(
             pr_ok = await _ensure_pull_request(client, repository, contract, base_result)
         if pr_ok:
             await _post_codex_trigger(client, repository, contract, base_result)
+
+        # --------------------------------------------------------------
+        # TestPilot phase (two-phase mode only)
+        # --------------------------------------------------------------
+        if phase_mode == PhaseMode.TWO_PHASE and pr_ok:
+            testpilot_backend = select_phase_backend(global_backend, PhaseName.TESTPILOT)
+            testpilot_adapter = select_execution_adapter(testpilot_backend)
+            testpilot_context = await _build_adapter_context(
+                client,
+                testpilot_adapter,
+                repository,
+                is_dry_run=is_dry_run,
+                session=base_result.get("session"),
+                audit_id=base_result.get("audit_id"),
+                phase="testpilot",
+            )
+            try:
+                tp_result = await _execute_adapter(testpilot_adapter, contract, testpilot_context)
+            except Exception as exc:
+                tp_result = AdapterResult(
+                    status="failed",
+                    summary=f"TestPilot adapter raised: {type(exc).__name__}",
+                )
+                base_result["writeback_failures"].append(
+                    {
+                        "operation": "testpilot.execute",
+                        "error_class": type(exc).__name__,
+                        "status": None,
+                        "repo": repository,
+                        "pr": base_result.get("pull_request", {}).get("number"),
+                        "issue": contract.issue_number,
+                        "thread_id": None,
+                        "suggested_action": "Inspect adapter logs; the Assembly progress comment surfaces the failure.",
+                    }
+                )
+
+            tp_adapter_dict = (
+                {
+                    "status": tp_result.status,
+                    "commit_shas": list(tp_result.commit_shas),
+                    "summary": tp_result.summary,
+                    "details": tp_result.details,
+                }
+                if tp_result
+                else {"status": "failed", "commit_shas": [], "summary": "No result", "details": {}}
+            )
+
+            # If testpilot produced commits, push them
+            if tp_result.status == "executed" and tp_result.commit_shas:
+                for _sha in tp_result.commit_shas:
+                    pub_result = await publish_branch(
+                        repository=repository,
+                        branch_name=contract.branch_name,
+                        installation_token=testpilot_context.installation_token or "",
+                        checkout_dir=Path(testpilot_context.workdir),
+                        timeout_seconds=testpilot_context.timeout_seconds,
+                    )
+                    if not pub_result.success:
+                        base_result["writeback_failures"].append(
+                            {
+                                "operation": "testpilotPush",
+                                "error_class": "PublishError",
+                                "status": pub_result.returncode,
+                                "repo": repository,
+                                "pr": base_result.get("pull_request", {}).get("number"),
+                                "issue": contract.issue_number,
+                                "thread_id": None,
+                                "suggested_action": "Check push permissions and retry.",
+                            }
+                        )
+
+            base_result["testpilot_result"] = tp_adapter_dict
 
         _persist_session_metadata(
             contract=contract,
@@ -1217,10 +1302,15 @@ async def _upsert_progress_comments(
     pull_request = result.get("pull_request") or {}
     adapter_result = result.get("adapter_result") or {}
     failures = list(result.get("writeback_failures") or [])
-
     adapter_status = adapter_result.get("status")
+    phase_mode = result.get("phase_mode")
+    testpilot_result = result.get("testpilot_result")
+    tp_status = (testpilot_result or {}).get("status") if testpilot_result else None
+
     status = "applied"
-    if adapter_status == "failed" or (failures and not pull_request.get("number")):
+    if phase_mode == "two-phase" and tp_status == "blocked":
+        status = "blocked"
+    elif adapter_status == "failed" or (failures and not pull_request.get("number")):
         status = "failed"
     elif failures:
         status = "partial"
@@ -1228,6 +1318,8 @@ async def _upsert_progress_comments(
         status = "dry_run"
     elif adapter_status == "no_changes" and not pull_request.get("number"):
         status = "no_changes"
+
+    phase_mode_str = phase_mode if phase_mode and phase_mode != "single" else None
 
     issue_body = build_assembly_comment(
         status=status,
@@ -1240,6 +1332,8 @@ async def _upsert_progress_comments(
         session=result.get("session"),
         dry_run=result.get("dry_run", False),
         surface="issue",
+        phase_mode=phase_mode_str,
+        testpilot_result=testpilot_result,
     )
 
     try:
@@ -1276,6 +1370,8 @@ async def _upsert_progress_comments(
         session=result.get("session"),
         dry_run=result.get("dry_run", False),
         surface="pr",
+        phase_mode=phase_mode_str,
+        testpilot_result=testpilot_result,
     )
     try:
         await client.upsert_issue_comment(
