@@ -94,6 +94,108 @@ Before triggering Assembly, verify every precondition in this section.
 For non-Voyager repositories, do not rely on Voyager default verification
 commands. Configure repository-specific commands before a real backend run.
 
+
+ej---
+
+## Execution Phase Modes (Feature #96)
+
+Assembly supports two execution phase modes controlled by the
+`ASSEMBLY_PHASE_MODE` environment variable.
+
+### Single-Phase Mode (Default)
+
+In single-phase mode (`ASSEMBLY_PHASE_MODE=single` or unset), Assembly runs a
+single adapter execution pass:
+
+1. The **implementer** reads the issue, changes code, runs baseline verification,
+   opens/updates the PR, and triggers Codex review.
+2. Progress shows the implementer's status only.
+3. This is the backward-compatible default and matches pre-#96 behavior.
+
+Use single-phase mode for:
+- Low-risk, well-understood changes where the implementer's own verification is
+  sufficient.
+- MVP / exploratory runs where fast iteration matters more than independence.
+- Operator-supervised runs where a human will review the output before proceeding.
+
+### Two-Phase Mode
+
+In two-phase mode (`ASSEMBLY_PHASE_MODE=two-phase`), Assembly runs two
+sequential adapter executions with an independence boundary between them:
+
+1. **Implementer phase** — same as single-phase mode: reads the issue, changes
+   code, runs verification, opens/updates the PR, triggers Codex.
+2. **TestPilot phase** — evaluates the issue acceptance criteria and PR diff
+   independently from the implementer. TestPilot may:
+   - Add or update tests when it finds missing coverage, then push to the same
+     PR branch.
+   - Report a **blocked** result if it finds a gap it cannot safely fix, causing
+     the overall run to report `blocked` instead of `applied`.
+   - Report **passed** (no changes needed) or **executed** (with test additions).
+
+Use two-phase mode for:
+- Higher-confidence coding tasks where independent test validation is desired.
+- Production repositories with strict quality gates.
+- Changes where test coverage is as important as the implementation itself.
+
+### Per-Phase Backend Configuration
+
+Each phase can use a different execution backend, allowing the implementer and
+testpilot to use different models, providers, or profiles:
+
+| Phase | Env Var | Example |
+|-------|---------|---------|
+| Global default | `ASSEMBLY_EXECUTION_BACKEND` | `pi-oh-my-pi-deepseek` |
+| Implementer override | `ASSEMBLY_IMPLEMENTER_BACKEND` | `fake-subprocess` |
+| TestPilot override | `ASSEMBLY_TESTPILOT_BACKEND` | `dry-run` |
+
+When a per-phase env var is set, it takes precedence over the global
+`ASSEMBLY_EXECUTION_BACKEND`. When neither is set, the phase falls back to
+`dry-run`.
+
+### Progress Comment Statuses
+
+Single-phase mode shows one status line:
+
+| Status | Meaning | Next action |
+|--------|---------|-------------|
+| `applied` | Implementer completed | Move to PR verification |
+| `blocked` | TestPilot found unfixable gaps (two-phase only) | Fix AC or implementation, retry |
+| `failed` | Adapter or writeback failed | Inspect diagnostics |
+
+Two-phase mode shows a compact **Phase status** section with both implementer
+and TestPilot status lines:
+
+```
+**Phase status:**
+- 🔧 Implementer: completed
+- ✅ TestPilot: reviewed (no issues found)
+```
+
+Or when TestPilot blocks:
+
+```
+**Phase status:**
+- 🔧 Implementer: completed
+- 🔴 TestPilot: blocked — gaps found
+  > AC #3 not satisfied
+```
+
+### Future Audit Support
+
+When audit manifests (from #92) record separate audit IDs, the two-phase mode
+will store distinct `audit_id` values for the implementer and testpilot phases.
+The current implementation shares a single audit ID across both phases; the
+separation will be added as a follow-up when the manifest schema is updated.
+
+### Failure Diagnostics
+
+When failure diagnostics (#93) identify the source of a failure, the phase
+name (`"implementer"` or `"testpilot"`) is recorded in the
+`AdapterExecutionContext.phase` field. Backend failures from the implementer
+phase report `"phase": "git_push"` with the context set to implementer;
+testpilot failures report the same diagnostic structure with context set to
+testpilot.
 ---
 
 ## Steps

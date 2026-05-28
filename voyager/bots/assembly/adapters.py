@@ -44,7 +44,7 @@ _FAILURE_TAIL_LIMIT = 600
 class AdapterResult:
     """The structured outcome an adapter must return."""
 
-    status: str  # "dry_run" | "executed" | "no_changes" | "failed"
+    status: str  # "dry_run" | "executed" | "no_changes" | "failed" | "blocked"
     commit_shas: list[str] = field(default_factory=list)
     summary: str = ""
     # Optional extra metadata the adapter wants to surface (e.g., the
@@ -70,6 +70,7 @@ class AdapterExecutionContext:
     session_mode: str = "fresh"
     resume_session_id: str | None = None
     audit_id: str | None = None
+    phase: str = "implementer"
 
     def to_safe_dict(self) -> dict[str, Any]:
         return {
@@ -80,6 +81,7 @@ class AdapterExecutionContext:
             "resume_requested": self.resume_requested,
             "session_mode": self.session_mode,
             "audit_id": self.audit_id,
+            "phase": self.phase,
         }
 
 
@@ -334,7 +336,7 @@ class PiOhMyPiDeepSeekAdapter:
                     context=context,
                 )
 
-            prompt = _build_omp_prompt(contract)
+            prompt = _build_omp_prompt(contract, phase=context.phase)
             omp_argv = [command_path, "-p", prompt]
             if context.session_mode == "resumed" and context.resume_session_id:
                 omp_argv = [command_path, "-p", f"--resume={context.resume_session_id}", prompt]
@@ -345,6 +347,22 @@ class PiOhMyPiDeepSeekAdapter:
                 env=_omp_env(),
             )
             details["omp_session_jsonl_path"] = _latest_omp_session_jsonl(checkout_dir)
+            if omp.returncode == 0:
+                testpilot_signal = _parse_testpilot_signal(
+                    stdout=omp.stdout,
+                    stderr=omp.stderr,
+                    secret=token,
+                )
+                if context.phase == "testpilot" and testpilot_signal is not None:
+                    details["testpilot_signal"] = testpilot_signal
+                    status_name = str(testpilot_signal["status"])
+                    reason = str(testpilot_signal.get("reason") or "acceptance gap reported")
+                    return AdapterResult(
+                        status=status_name,
+                        commit_shas=[],
+                        summary=f"TestPilot reported {status_name}: {reason}",
+                        details=details,
+                    )
             if omp.returncode != 0:
                 return _failed_pi_result(
                     f"OMP subprocess failed with exit code {omp.returncode}.",
@@ -766,12 +784,11 @@ async def _run_verification_commands(
     return None
 
 
-def _build_omp_prompt(contract: AssemblyJobContract) -> str:
+def _build_omp_prompt(contract: AssemblyJobContract, *, phase: str = "implementer") -> str:
     acceptance = "\n".join(f"- {item}" for item in contract.acceptance_criteria) or "- None"
     forbidden = "\n".join(f"- {item}" for item in contract.forbidden_operations) or "- None"
     verification = "\n".join(f"- {item}" for item in contract.verification_commands) or "- None"
-    return (
-        "You are Assembly implementing a GitHub issue in the current checkout.\n"
+    common = (
         f"Repository: {contract.repository}\n"
         f"Issue: #{contract.issue_number} {contract.issue_title}\n"
         f"Issue URL: {contract.issue_url}\n"
@@ -784,6 +801,24 @@ def _build_omp_prompt(contract: AssemblyJobContract) -> str:
         f"{forbidden}\n\n"
         "Verification commands:\n"
         f"{verification}\n\n"
+    )
+    if phase == "testpilot":
+        return (
+            "You are Assembly TestPilot independently verifying the current PR branch.\n"
+            f"{common}"
+            "Inspect the current branch against the acceptance criteria and existing diff. "
+            "Do not re-run the implementation phase. Add or tighten tests, fixtures, or "
+            "small verification-only fixes when they are clearly needed to prove the PR. "
+            "If the acceptance criteria are not met and a safe test/verification fix is not "
+            "practical, leave the checkout unchanged and print exactly these machine-readable "
+            "lines before your final explanation: `ASSEMBLY_TESTPILOT_STATUS=blocked` and "
+            "`ASSEMBLY_TESTPILOT_REASON=<short reason>`. Run the verification commands when "
+            "practical, commit any TestPilot changes on the current branch, and do not push. "
+            "The Assembly adapter will push after validation."
+        )
+    return (
+        "You are Assembly implementing a GitHub issue in the current checkout.\n"
+        f"{common}"
         "Work only in this checkout on the current branch. Make the smallest production "
         "changes needed, run the verification commands when practical, commit changes "
         "on the current branch, and do not push. The Assembly adapter will push after "
@@ -792,6 +827,21 @@ def _build_omp_prompt(contract: AssemblyJobContract) -> str:
 
 
 _GITHUB_TOKEN_RE = re.compile(r"gh[opsru]_[A-Za-z0-9_]+")
+_TESTPILOT_STATUS_RE = re.compile(r"(?m)^ASSEMBLY_TESTPILOT_STATUS=(blocked|failed)\s*$")
+_TESTPILOT_REASON_RE = re.compile(r"(?m)^ASSEMBLY_TESTPILOT_REASON=(.+)$")
+
+
+def _parse_testpilot_signal(*, stdout: str, stderr: str, secret: str) -> dict[str, str] | None:
+    combined = f"{stdout or ''}\n{stderr or ''}"
+    status_match = _TESTPILOT_STATUS_RE.search(combined)
+    if status_match is None:
+        return None
+    reason_match = _TESTPILOT_REASON_RE.search(combined)
+    reason = reason_match.group(1).strip() if reason_match else "acceptance gap reported"
+    return {
+        "status": status_match.group(1),
+        "reason": _sanitize_for_result(reason, secret, limit=500),
+    }
 
 
 def _sanitize_for_result(value: str, secret: str, *, limit: int = 2000) -> str:
@@ -1032,7 +1082,11 @@ class FakeSubprocessAdapter:
                 summary=f"{ASSEMBLY_FAKE_SUBPROCESS_ALLOW_ENV} must be truthy to use fake subprocess.",
             )
 
-        raw = os.environ.get(ASSEMBLY_FAKE_SUBPROCESS_OUTPUT_ENV)
+        # Phase-specific output env var takes precedence over the global one.
+        phase = (context.phase if context else None) or "implementer"
+        phase_key = f"{ASSEMBLY_FAKE_SUBPROCESS_OUTPUT_ENV}_{phase.upper()}"
+        raw = os.environ.get(phase_key) or os.environ.get(ASSEMBLY_FAKE_SUBPROCESS_OUTPUT_ENV)
+
         if not raw:
             return AdapterResult(
                 status="failed",
@@ -1069,6 +1123,13 @@ class FakeSubprocessAdapter:
                 status="failed",
                 commit_shas=[],
                 summary=summary or "Fake subprocess reported failure.",
+                details=_fake_details(payload, context),
+            )
+        if status == "blocked":
+            return AdapterResult(
+                status="blocked",
+                commit_shas=[],
+                summary=summary or "Fake subprocess reported blocked.",
                 details=_fake_details(payload, context),
             )
         if status != "executed":

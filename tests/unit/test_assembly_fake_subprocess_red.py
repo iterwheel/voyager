@@ -482,6 +482,38 @@ async def test_concurrent_fake_subprocess_dispatches_serialize_without_duplicate
     assert client.update_pull_request.await_count == 1
 
 
+def test_blocked_implementer_result_is_not_applied(monkeypatch) -> None:
+    from voyager.bots.assembly.constants import ASSEMBLY_BACKEND_FAKE_SUBPROCESS
+
+    monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setenv(ASSEMBLY_EXECUTION_BACKEND_ENV, ASSEMBLY_BACKEND_FAKE_SUBPROCESS)
+    monkeypatch.setenv(FAKE_ALLOW_ENV, "1")
+    _set_fake_output(
+        monkeypatch,
+        {
+            "status": "blocked",
+            "commit_shas": [],
+            "summary": "AC not met",
+        },
+    )
+
+    client = _mock_client()
+    result = asyncio.run(
+        dispatch_assembly_writeback(
+            client,
+            _route(),
+            repository="iterwheel/voyager-sandbox",
+        )
+    )
+
+    assert result["adapter_result"]["status"] == "blocked"
+    assert result["applied"] is False
+    assert result["pull_request"]["action"] == "skipped_no_changes"
+    assert client.create_issue_comment.await_count == 0
+    progress_body = client.upsert_issue_comment.await_args_list[-1].kwargs["body"]
+    assert "status: `blocked`" in progress_body
+
+
 def test_invalid_fake_sha_dispatcher_fails_without_branch_pr_or_raw_sha_leak(
     monkeypatch,
 ) -> None:
@@ -559,3 +591,339 @@ def test_token_requiring_adapter_receives_installation_token_context_without_lea
     assert seen_contexts
     assert seen_contexts[0].installation_token == token
     assert result["adapter_result"]["status"] == "executed"
+
+
+def test_two_phase_codex_trigger_waits_for_testpilot_result(monkeypatch) -> None:
+    import voyager.bots.assembly.writeback as writeback
+    from voyager.bots.assembly.constants import ASSEMBLY_BACKEND_FAKE_SUBPROCESS
+
+    monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setenv(ASSEMBLY_EXECUTION_BACKEND_ENV, ASSEMBLY_BACKEND_FAKE_SUBPROCESS)
+    monkeypatch.setenv("ASSEMBLY_PHASE_MODE", "two-phase")
+    monkeypatch.setenv("ASSEMBLY_TESTPILOT_BACKEND", ASSEMBLY_BACKEND_FAKE_SUBPROCESS)
+    monkeypatch.setenv(FAKE_ALLOW_ENV, "1")
+    _set_fake_output(
+        monkeypatch,
+        {
+            "status": "executed",
+            "commit_shas": [VALID_SHA],
+            "summary": "implementer commit",
+        },
+    )
+    monkeypatch.setenv(
+        "ASSEMBLY_FAKE_SUBPROCESS_OUTPUT_TESTPILOT",
+        json.dumps(
+            {
+                "status": "executed",
+                "commit_shas": [OTHER_VALID_SHA],
+                "summary": "testpilot commit",
+            }
+        ),
+    )
+    observed_testpilot_results: list[dict[str, Any] | None] = []
+
+    async def fake_post_codex_trigger(client, repository, contract, result):
+        _ = (client, repository, contract)
+        observed_testpilot_results.append(result.get("testpilot_result"))
+        result["codex_review_comment_id"] = 4242
+
+    monkeypatch.setattr(writeback, "_post_codex_trigger", fake_post_codex_trigger)
+    result = asyncio.run(
+        writeback.dispatch_assembly_writeback(
+            _mock_client(),
+            _route(),
+            repository="iterwheel/voyager-sandbox",
+        )
+    )
+
+    assert result["testpilot_result"]["status"] == "executed"
+    assert result["branch"]["sha"] == OTHER_VALID_SHA
+    assert result["codex_review_comment_id"] == 4242
+    assert observed_testpilot_results == [result["testpilot_result"]]
+
+
+def test_two_phase_testpilot_starts_with_fresh_session_when_implementer_resumed(
+    monkeypatch,
+) -> None:
+    import voyager.bots.assembly.writeback as writeback
+
+    seen_contexts: list[Any] = []
+
+    class _ResumeAwareAdapter:
+        name = "resume-aware"
+        supports_resume = True
+
+        async def execute(self, contract, context=None):
+            seen_contexts.append(context)
+            if context.phase == "testpilot":
+                return AdapterResult(status="no_changes", summary="testpilot reviewed")
+            return AdapterResult(
+                status="executed",
+                commit_shas=[VALID_SHA],
+                summary="implementer committed",
+            )
+
+    async def fake_resolve_session(**kwargs):
+        return {
+            "requested": True,
+            "mode": "resumed",
+            "expected_head_sha": VALID_SHA,
+            "session_id": "/private/implementer-session.jsonl",
+            "fallback_reason": None,
+        }
+
+    monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setenv("ASSEMBLY_PHASE_MODE", "two-phase")
+    monkeypatch.setattr(writeback, "_resolve_session", fake_resolve_session)
+    monkeypatch.setattr(
+        writeback,
+        "select_execution_adapter",
+        lambda backend=None: _ResumeAwareAdapter(),
+    )
+
+    result = asyncio.run(
+        writeback.dispatch_assembly_writeback(
+            _mock_client(),
+            _route(),
+            repository="iterwheel/voyager-sandbox",
+        )
+    )
+
+    assert result["session"]["mode"] == "resumed"
+    assert len(seen_contexts) == 2
+    assert seen_contexts[0].phase == "implementer"
+    assert seen_contexts[0].session_mode == "resumed"
+    assert seen_contexts[0].resume_session_id == "/private/implementer-session.jsonl"
+    assert seen_contexts[1].phase == "testpilot"
+    assert seen_contexts[1].session_mode == "fresh"
+    assert seen_contexts[1].resume_requested is False
+    assert seen_contexts[1].resume_session_id is None
+
+
+def test_two_phase_testpilot_blocked_skips_codex_trigger(monkeypatch) -> None:
+    import voyager.bots.assembly.writeback as writeback
+    from voyager.bots.assembly.constants import ASSEMBLY_BACKEND_FAKE_SUBPROCESS
+
+    monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setenv(ASSEMBLY_EXECUTION_BACKEND_ENV, ASSEMBLY_BACKEND_FAKE_SUBPROCESS)
+    monkeypatch.setenv("ASSEMBLY_PHASE_MODE", "two-phase")
+    monkeypatch.setenv("ASSEMBLY_TESTPILOT_BACKEND", ASSEMBLY_BACKEND_FAKE_SUBPROCESS)
+    monkeypatch.setenv(FAKE_ALLOW_ENV, "1")
+    _set_fake_output(
+        monkeypatch,
+        {
+            "status": "executed",
+            "commit_shas": [VALID_SHA],
+            "summary": "implementer commit",
+        },
+    )
+    monkeypatch.setenv(
+        "ASSEMBLY_FAKE_SUBPROCESS_OUTPUT_TESTPILOT",
+        json.dumps(
+            {
+                "status": "blocked",
+                "commit_shas": [],
+                "summary": "testpilot found unmet AC",
+            }
+        ),
+    )
+    observed_triggers: list[object] = []
+
+    async def fake_post_codex_trigger(client, repository, contract, result):
+        observed_triggers.append((client, repository, contract, result))
+
+    monkeypatch.setattr(writeback, "_post_codex_trigger", fake_post_codex_trigger)
+    result = asyncio.run(
+        writeback.dispatch_assembly_writeback(
+            _mock_client(),
+            _route(),
+            repository="iterwheel/voyager-sandbox",
+        )
+    )
+
+    assert result["testpilot_result"]["status"] == "blocked"
+    assert result["applied"] is False
+    assert observed_triggers == []
+
+
+def test_two_phase_testpilot_dry_run_is_not_applied(monkeypatch) -> None:
+    import voyager.bots.assembly.writeback as writeback
+    from voyager.bots.assembly.constants import (
+        ASSEMBLY_BACKEND_DRY_RUN,
+        ASSEMBLY_BACKEND_FAKE_SUBPROCESS,
+    )
+
+    monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setenv(ASSEMBLY_EXECUTION_BACKEND_ENV, ASSEMBLY_BACKEND_FAKE_SUBPROCESS)
+    monkeypatch.setenv("ASSEMBLY_PHASE_MODE", "two-phase")
+    monkeypatch.setenv("ASSEMBLY_TESTPILOT_BACKEND", ASSEMBLY_BACKEND_DRY_RUN)
+    monkeypatch.setenv(FAKE_ALLOW_ENV, "1")
+    _set_fake_output(
+        monkeypatch,
+        {
+            "status": "executed",
+            "commit_shas": [VALID_SHA],
+            "summary": "implementer commit",
+        },
+    )
+    observed_triggers: list[object] = []
+
+    async def fake_post_codex_trigger(client, repository, contract, result):
+        observed_triggers.append((client, repository, contract, result))
+
+    monkeypatch.setattr(writeback, "_post_codex_trigger", fake_post_codex_trigger)
+    client = _mock_client()
+    result = asyncio.run(
+        writeback.dispatch_assembly_writeback(
+            client,
+            _route(),
+            repository="iterwheel/voyager-sandbox",
+        )
+    )
+
+    assert result["testpilot_result"]["status"] == "dry_run"
+    assert result["applied"] is False
+    assert observed_triggers == []
+    progress_body = client.upsert_issue_comment.await_args_list[-1].kwargs["body"]
+    assert "status: `failed`" in progress_body
+    assert "TestPilot: `dry_run`" in progress_body
+
+
+def test_two_phase_testpilot_failed_clears_applied(monkeypatch) -> None:
+    from voyager.bots.assembly.constants import ASSEMBLY_BACKEND_FAKE_SUBPROCESS
+
+    monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setenv(ASSEMBLY_EXECUTION_BACKEND_ENV, ASSEMBLY_BACKEND_FAKE_SUBPROCESS)
+    monkeypatch.setenv("ASSEMBLY_PHASE_MODE", "two-phase")
+    monkeypatch.setenv("ASSEMBLY_TESTPILOT_BACKEND", ASSEMBLY_BACKEND_FAKE_SUBPROCESS)
+    monkeypatch.setenv(FAKE_ALLOW_ENV, "1")
+    _set_fake_output(
+        monkeypatch,
+        {
+            "status": "executed",
+            "commit_shas": [VALID_SHA],
+            "summary": "implementer commit",
+        },
+    )
+    monkeypatch.setenv(
+        "ASSEMBLY_FAKE_SUBPROCESS_OUTPUT_TESTPILOT",
+        json.dumps(
+            {
+                "status": "failed",
+                "commit_shas": [],
+                "summary": "testpilot verification failed",
+            }
+        ),
+    )
+
+    result = asyncio.run(
+        dispatch_assembly_writeback(
+            _mock_client(),
+            _route(),
+            repository="iterwheel/voyager-sandbox",
+        )
+    )
+
+    assert result["testpilot_result"]["status"] == "failed"
+    assert result["applied"] is False
+
+
+def test_two_phase_testpilot_result_redacts_installation_token(monkeypatch) -> None:
+    token = "ghs_testpilot_secret_token_red_456"
+
+    class _PhaseAwareTokenAdapter:
+        name = "phase-aware-token"
+        requires_installation_token = True
+
+        async def execute(self, contract, context=None):
+            if context is None or context.installation_token != token:
+                raise AssertionError("missing installation token context")
+            if context.phase == "testpilot":
+                return AdapterResult(
+                    status="failed",
+                    commit_shas=[],
+                    summary=f"testpilot saw {token}",
+                    details={"stderr_tail": f"secret={token}"},
+                )
+            return AdapterResult(
+                status="executed",
+                commit_shas=[VALID_SHA],
+                summary="implementer committed",
+            )
+
+    monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setenv("ASSEMBLY_PHASE_MODE", "two-phase")
+    client = _mock_client(token=token)
+
+    with patch(
+        "voyager.bots.assembly.writeback.select_execution_adapter",
+        return_value=_PhaseAwareTokenAdapter(),
+    ):
+        result = asyncio.run(
+            dispatch_assembly_writeback(
+                client,
+                _route(),
+                repository="iterwheel/voyager-sandbox",
+            )
+        )
+
+    assert result["testpilot_result"]["status"] == "failed"
+    _assert_not_contains(result, token)
+    for call in client.upsert_issue_comment.await_args_list:
+        assert token not in call.kwargs["body"]
+    for call in client.create_issue_comment.await_args_list:
+        assert token not in call.kwargs["body"]
+
+
+def test_two_phase_testpilot_context_failure_records_progress(monkeypatch) -> None:
+    token = "ghs_implementer_only_token_123"
+
+    class _TokenAdapter:
+        name = "token-adapter"
+        requires_installation_token = True
+
+        async def execute(self, contract, context=None):
+            if context is None or context.installation_token != token:
+                raise AssertionError("missing implementer token context")
+            return AdapterResult(
+                status="executed",
+                commit_shas=[VALID_SHA],
+                summary="implementer committed",
+            )
+
+    monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setenv("ASSEMBLY_PHASE_MODE", "two-phase")
+    client = _mock_client(token=token)
+    client.installation_token.side_effect = [token, RuntimeError("token service unavailable")]
+
+    with patch(
+        "voyager.bots.assembly.writeback.select_execution_adapter",
+        return_value=_TokenAdapter(),
+    ):
+        result = asyncio.run(
+            dispatch_assembly_writeback(
+                client,
+                _route(),
+                repository="iterwheel/voyager-sandbox",
+            )
+        )
+
+    assert result["testpilot_result"]["status"] == "failed"
+    assert result["applied"] is False
+    assert any(f["operation"] == "testpilot.execute" for f in result["writeback_failures"])
+    assert client.upsert_issue_comment.await_count >= 1
+    progress_body = client.upsert_issue_comment.await_args_list[-1].kwargs["body"]
+    assert "TestPilot: `failed`" in progress_body
+    assert "TestPilot adapter raised: RuntimeError" in progress_body
+
+
+def test_omp_prompt_uses_testpilot_specific_instructions() -> None:
+    from voyager.bots.assembly.adapters import _build_omp_prompt
+
+    prompt = _build_omp_prompt(_contract(), phase="testpilot")
+
+    assert "Assembly TestPilot independently verifying" in prompt
+    assert "Do not re-run the implementation phase" in prompt
+    assert "ASSEMBLY_TESTPILOT_STATUS=blocked" in prompt
+    assert "ASSEMBLY_TESTPILOT_REASON=<short reason>" in prompt
+    assert "implementing a GitHub issue" not in prompt

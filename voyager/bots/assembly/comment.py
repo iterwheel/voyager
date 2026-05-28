@@ -137,6 +137,8 @@ def build_assembly_comment(
     session: dict[str, Any] | None = None,
     dry_run: bool = False,
     surface: str = "issue",
+    phase_mode: str | None = None,
+    testpilot_result: dict[str, Any] | None = None,
 ) -> str:
     """Return the body of the upserted Assembly progress comment.
 
@@ -148,6 +150,12 @@ def build_assembly_comment(
         ``"issue"`` or ``"pr"``.  The two surfaces share the marker but
         carry slightly different per-surface text per VOY-1817 Open
         Question 2.
+    phase_mode:
+        ``"single"`` (default) or ``"two-phase"``. When ``"two-phase"``,
+        a compact phase-status section is rendered.
+    testpilot_result:
+        Optional adapter-result dict for the testpilot phase. Rendered
+        only when ``phase_mode`` is ``"two-phase"``.
     """
     if refusal:
         return _format_refusal(refusal)
@@ -179,6 +187,38 @@ def build_assembly_comment(
     lines.append(f"- Adapter: `{backend}`")
     if summary:
         lines.append(f"  > {summary}")
+
+    # Phase status section (two-phase mode)
+    if phase_mode == "two-phase":
+        lines.append("")
+        lines.append("**Phase status:**")
+        tp = testpilot_result or {}
+        tp_status = (tp.get("status") or "pending").lower()
+        tp_summary = tp.get("summary") or ""
+        imp_status = (adapter_result.get("status") or "unknown").lower()
+        if imp_status == "executed":
+            lines.append("- 🔧 Implementer: completed")
+        elif imp_status == "no_changes":
+            lines.append("- ⚪ Implementer: no changes needed")
+        elif imp_status in ("failed", "dry_run"):
+            lines.append(f"- 🔴 Implementer: `{imp_status}`")
+        else:
+            lines.append(f"- ⚪ Implementer: `{imp_status}`")
+
+        if tp_status == "blocked":
+            lines.append("- 🔴 TestPilot: blocked — gaps found")
+        elif tp_status == "executed":
+            lines.append("- ✅ TestPilot: passed")
+        elif tp_status == "no_changes":
+            lines.append("- ✅ TestPilot: reviewed (no issues found)")
+        elif tp_status == "failed":
+            lines.append(f"- 🔴 TestPilot: `{tp_status}`")
+        elif tp_status == "pending":
+            lines.append("- ⚪ TestPilot: pending")
+        else:
+            lines.append(f"- ⚪ TestPilot: `{tp_status}`")
+        if tp_summary:
+            lines.append(f"  > {tp_summary}")
 
     session_mode = session.get("mode")
     if session_mode:

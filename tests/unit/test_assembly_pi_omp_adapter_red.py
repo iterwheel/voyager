@@ -57,6 +57,7 @@ def _context(
     session_mode: str = "fresh",
     resume_session_id: str | None = None,
     audit_id: str = "asmb-0123456789abcdef",
+    phase: str = "implementer",
 ) -> AdapterExecutionContext:
     return AdapterExecutionContext(
         repository="iterwheel/voyager-sandbox",
@@ -68,6 +69,7 @@ def _context(
         session_mode=session_mode,
         resume_session_id=resume_session_id,
         audit_id=audit_id,
+        phase=phase,
     )
 
 
@@ -363,6 +365,36 @@ async def test_pi_adapter_executes_omp_in_clone_pushes_branch_and_returns_sha(
             assert INSTALLATION_TOKEN in env_json
         else:
             assert INSTALLATION_TOKEN not in env_json
+
+
+@pytest.mark.asyncio
+async def test_pi_testpilot_blocked_signal_returns_blocked_without_passing_no_changes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    recorder = _CommandRecorder(
+        status_porcelain="",
+        omp_stdout=(
+            "TestPilot found a gap.\n"
+            "ASSEMBLY_TESTPILOT_STATUS=blocked\n"
+            f"ASSEMBLY_TESTPILOT_REASON=AC #2 unmet; token {INSTALLATION_TOKEN}\n"
+        ),
+    )
+    _install_command_fakes(monkeypatch, recorder)
+    adapter = PiOhMyPiDeepSeekAdapter()
+
+    result = await adapter.execute(_contract(), _context(tmp_path, phase="testpilot"))
+
+    assert result.status == "blocked"
+    assert result.commit_shas == []
+    assert "AC #2 unmet" in result.summary
+    assert INSTALLATION_TOKEN not in result.summary
+    assert result.details["testpilot_signal"] == {
+        "status": "blocked",
+        "reason": "AC #2 unmet; token [redacted]",
+    }
+    assert not recorder.git_calls("commit")
+    assert not recorder.git_calls("push")
 
 
 @pytest.mark.asyncio

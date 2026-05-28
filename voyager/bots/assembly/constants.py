@@ -90,3 +90,16 @@ FORBIDDEN_OPERATIONS: tuple[str, ...] = (
 # Maximum slug length per D8 — keeps branch names readable, mirrors the
 # convention from PRs #70 / #71 / #72.
 MAX_SLUG_LENGTH = 50
+
+# Phase mode — controls whether Assembly runs in single-phase (implementer only)
+# or two-phase (implementer + testpilot) mode. Default is single-phase for
+# backward compatibility.
+ASSEMBLY_PHASE_MODE_ENV = "ASSEMBLY_PHASE_MODE"
+ASSEMBLY_PHASE_MODE_SINGLE = "single"
+ASSEMBLY_PHASE_MODE_TWO_PHASE = "two-phase"
+ASSEMBLY_PHASE_MODE_DEFAULT = ASSEMBLY_PHASE_MODE_SINGLE
+
+# Per-phase backend selection env vars. When set, these override the
+# global ASSEMBLY_EXECUTION_BACKEND for the specific phase.
+ASSEMBLY_IMPLEMENTER_BACKEND_ENV = "ASSEMBLY_IMPLEMENTER_BACKEND"
+ASSEMBLY_TESTPILOT_BACKEND_ENV = "ASSEMBLY_TESTPILOT_BACKEND"
