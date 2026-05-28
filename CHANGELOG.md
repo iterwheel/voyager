@@ -8,6 +8,25 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+## [0.4.7] — 2026-05-28
+
+### Added — Assembly two-phase implementer/TestPilot mode ([#96](https://github.com/iterwheel/voyager/issues/96), [#136](https://github.com/iterwheel/voyager/pull/136))
+
+- Assembly can now opt into a two-phase execution mode that separates the
+  implementer phase from an independent TestPilot phase, while preserving the
+  existing single-phase behavior as the default when `ASSEMBLY_PHASE_MODE` is
+  unset.
+- Added phase-aware backend selection via `ASSEMBLY_IMPLEMENTER_BACKEND` and
+  `ASSEMBLY_TESTPILOT_BACKEND`, plus phase metadata in adapter execution
+  contexts so operators can route implementation and validation to different
+  backends.
+- TestPilot can run after a successful implementer pass, add follow-up commits
+  to the same Assembly PR branch, and block the run when it finds unresolved
+  acceptance-criteria gaps or incomplete dry-run phase results.
+- Progress comments now show compact per-phase status for implementer,
+  TestPilot, verification, and next action, and the Assembly SOP documents when
+  to use two-phase mode versus the single-phase compatibility path.
+
 ## [0.4.6] — 2026-05-27
 
 ### Added — Assembly resolver fallback for Clearance ([#131](https://github.com/iterwheel/voyager/issues/131))
@@ -444,7 +463,8 @@ auth, FastAPI webhook bridge, DeepSeek LLM adapter, rocket-factory
 pipeline state machine, SWM-1101 per-thread verdict pipeline. See
 `b2e4ca1` and prior history.
 
-[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.4.6...HEAD
+[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.4.7...HEAD
+[0.4.7]: https://github.com/iterwheel/voyager/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/iterwheel/voyager/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/iterwheel/voyager/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/iterwheel/voyager/compare/v0.4.3...v0.4.4
