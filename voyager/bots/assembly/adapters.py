@@ -347,6 +347,22 @@ class PiOhMyPiDeepSeekAdapter:
                 env=_omp_env(),
             )
             details["omp_session_jsonl_path"] = _latest_omp_session_jsonl(checkout_dir)
+            if omp.returncode == 0:
+                testpilot_signal = _parse_testpilot_signal(
+                    stdout=omp.stdout,
+                    stderr=omp.stderr,
+                    secret=token,
+                )
+                if context.phase == "testpilot" and testpilot_signal is not None:
+                    details["testpilot_signal"] = testpilot_signal
+                    status_name = str(testpilot_signal["status"])
+                    reason = str(testpilot_signal.get("reason") or "acceptance gap reported")
+                    return AdapterResult(
+                        status=status_name,
+                        commit_shas=[],
+                        summary=f"TestPilot reported {status_name}: {reason}",
+                        details=details,
+                    )
             if omp.returncode != 0:
                 return _failed_pi_result(
                     f"OMP subprocess failed with exit code {omp.returncode}.",
@@ -794,9 +810,11 @@ def _build_omp_prompt(contract: AssemblyJobContract, *, phase: str = "implemente
             "Do not re-run the implementation phase. Add or tighten tests, fixtures, or "
             "small verification-only fixes when they are clearly needed to prove the PR. "
             "If the acceptance criteria are not met and a safe test/verification fix is not "
-            "practical, leave the checkout unchanged and report the gap. Run the verification "
-            "commands when practical, commit any TestPilot changes on the current branch, and "
-            "do not push. The Assembly adapter will push after validation."
+            "practical, leave the checkout unchanged and print exactly these machine-readable "
+            "lines before your final explanation: `ASSEMBLY_TESTPILOT_STATUS=blocked` and "
+            "`ASSEMBLY_TESTPILOT_REASON=<short reason>`. Run the verification commands when "
+            "practical, commit any TestPilot changes on the current branch, and do not push. "
+            "The Assembly adapter will push after validation."
         )
     return (
         "You are Assembly implementing a GitHub issue in the current checkout.\n"
@@ -809,6 +827,21 @@ def _build_omp_prompt(contract: AssemblyJobContract, *, phase: str = "implemente
 
 
 _GITHUB_TOKEN_RE = re.compile(r"gh[opsru]_[A-Za-z0-9_]+")
+_TESTPILOT_STATUS_RE = re.compile(r"(?m)^ASSEMBLY_TESTPILOT_STATUS=(blocked|failed)\s*$")
+_TESTPILOT_REASON_RE = re.compile(r"(?m)^ASSEMBLY_TESTPILOT_REASON=(.+)$")
+
+
+def _parse_testpilot_signal(*, stdout: str, stderr: str, secret: str) -> dict[str, str] | None:
+    combined = f"{stdout or ''}\n{stderr or ''}"
+    status_match = _TESTPILOT_STATUS_RE.search(combined)
+    if status_match is None:
+        return None
+    reason_match = _TESTPILOT_REASON_RE.search(combined)
+    reason = reason_match.group(1).strip() if reason_match else "acceptance gap reported"
+    return {
+        "status": status_match.group(1),
+        "reason": _sanitize_for_result(reason, secret, limit=500),
+    }
 
 
 def _sanitize_for_result(value: str, secret: str, *, limit: int = 2000) -> str:

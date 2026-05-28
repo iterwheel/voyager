@@ -803,4 +803,6 @@ def test_omp_prompt_uses_testpilot_specific_instructions() -> None:
 
     assert "Assembly TestPilot independently verifying" in prompt
     assert "Do not re-run the implementation phase" in prompt
+    assert "ASSEMBLY_TESTPILOT_STATUS=blocked" in prompt
+    assert "ASSEMBLY_TESTPILOT_REASON=<short reason>" in prompt
     assert "implementing a GitHub issue" not in prompt
