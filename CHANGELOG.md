@@ -8,6 +8,30 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+## [0.4.8] — 2026-05-28
+
+### Added — Bridge runtime TOML fallback ([#89](https://github.com/iterwheel/voyager/issues/89), [#138](https://github.com/iterwheel/voyager/pull/138))
+
+- Added `[bridge]` and `[assembly]` runtime sections in
+  `~/.voyager/config.toml` for non-secret bridge and Assembly knobs, while
+  preserving env-over-TOML precedence for backward-compatible emergency
+  overrides.
+- Bridge dry-run state, per-agent repository allow-lists, Assembly backend
+  selection, phase mode, OMP command/workdir/timeout, and Assembly actor
+  authorization can now fall back to TOML when the matching env var is unset.
+- Webhook secrets remain env-only. Operators can move non-secret runtime
+  settings from `~/.voyager/bridge.env` into `config.toml`, then restart the
+  bridge after deploying this wheel.
+
+### Fixed — Wukong production wheel install SOP ([#81](https://github.com/iterwheel/voyager/issues/81), [#139](https://github.com/iterwheel/voyager/pull/139))
+
+- Updated the Wukong deployment SOP to install release wheels with
+  `uv pip install --python <versioned-venv>/bin/python <wheel>` so it no
+  longer assumes `uv venv` created a `<versioned-venv>/bin/pip` executable.
+- Preserved the versioned-venv plus atomic `mv -hf` symlink-swap deployment
+  flow and documented why `uv pip install --python ...` is the reliable
+  install command on Wukong.
+
 ## [0.4.7] — 2026-05-28
 
 ### Added — Assembly two-phase implementer/TestPilot mode ([#96](https://github.com/iterwheel/voyager/issues/96), [#136](https://github.com/iterwheel/voyager/pull/136))
@@ -463,7 +487,8 @@ auth, FastAPI webhook bridge, DeepSeek LLM adapter, rocket-factory
 pipeline state machine, SWM-1101 per-thread verdict pipeline. See
 `b2e4ca1` and prior history.
 
-[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.4.7...HEAD
+[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.4.8...HEAD
+[0.4.8]: https://github.com/iterwheel/voyager/compare/v0.4.7...v0.4.8
 [0.4.7]: https://github.com/iterwheel/voyager/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/iterwheel/voyager/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/iterwheel/voyager/compare/v0.4.4...v0.4.5
