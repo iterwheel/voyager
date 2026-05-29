@@ -785,3 +785,36 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     And the in-thread reply body contains "does not allow Clearance"
     And the in-thread reply body contains "resolve it manually"
     And the thread GitHub state was not mutated
+
+  # ---------------------------------------------------------------------------
+  # Issue #141: Assembly-authored evidence attribution
+  # ---------------------------------------------------------------------------
+
+  Scenario: Issue #141 Assembly App GraphQL reply matches REST PR author login
+    Given the stub PR "iterwheel/sandbox" #49 author is "iterwheel-assembly[bot]"
+    And the stub PR has 1 Codex thread with a substantive reply from "iterwheel-assembly" and isResolved false
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "ready"
+    And the thread verdict is "RESOLVED"
+    And the thread author reply id is 100002
+    And exactly 1 resolveReviewThread mutation was invoked
+
+  Scenario: Issue #141 current-head Codex issue comment resolves a fresh thread
+    Given the stub PR "iterwheel/sandbox" #49 has 1 fresh Codex thread (State A) at path "app.py"
+    And the stub PR has a clean Codex issue comment on the current head after the thread
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "ready"
+    And the thread verdict is "RESOLVED"
+    And the thread llm_verdict is None
+    And exactly 1 resolveReviewThread mutation was invoked
+
+  Scenario: Issue #141 clean issue comment overrides cross-file anchor uncertainty before investigator
+    Given the stub PR "iterwheel/sandbox" #49 has 1 outdated Codex thread at path "scripts/pr-update.sh" line 12
+    And a fake investigator returning verdict "OPEN" confidence 0.95 reason "Anchor excerpt does not include the Makefile fix"
+    And the stub client returns a sample diff for "Makefile"
+    And the stub PR has a clean Codex issue comment on the current head after the thread
+    When compute_clearance_automation runs with investigator and DRY_RUN false
+    Then the automation status is "ready"
+    And the thread verdict is "RESOLVED"
+    And the thread llm_verdict is None
+    And exactly 1 resolveReviewThread mutation was invoked

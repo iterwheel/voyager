@@ -809,6 +809,62 @@ class GitHubAppClient:
         items = list(payload or [])
         return dict(items[0]) if items else None
 
+    async def pull_request_head_updated_at(
+        self, app_slug: str, repo: str, pull_number: int
+    ) -> str | None:
+        """Return the best PR-specific timestamp for when the current head was observed.
+
+        Prefer a matching ``HeadRefForcePushedEvent.createdAt``. For non-force
+        updates, use the head repository's push time as a conservative freshness
+        bound; it can produce false negatives after unrelated branch pushes, but
+        it avoids accepting a clean comment that predates the current PR head.
+        Include PR creation time for the initial head.
+        """
+        owner, name = repo.split("/", 1)
+        query = """
+        query($owner: String!, $name: String!, $number: Int!) {
+          repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+              createdAt
+              headRefOid
+              headRepository {
+                pushedAt
+              }
+              timelineItems(last: 100, itemTypes: [HEAD_REF_FORCE_PUSHED_EVENT]) {
+                nodes {
+                  __typename
+                  ... on HeadRefForcePushedEvent {
+                    createdAt
+                    afterCommit {
+                      oid
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """
+        data = await self.graphql(
+            app_slug,
+            repo,
+            query=query,
+            variables={"owner": owner, "name": name, "number": pull_number},
+        )
+        pr = (((data or {}).get("repository") or {}).get("pullRequest")) or {}
+        head_sha = pr.get("headRefOid") or ""
+        timestamps = [str(pr.get("createdAt"))] if pr.get("createdAt") else []
+        head_repo_pushed_at = ((pr.get("headRepository") or {}).get("pushedAt")) or None
+        if head_repo_pushed_at:
+            timestamps.append(str(head_repo_pushed_at))
+        events = ((pr.get("timelineItems") or {}).get("nodes")) or []
+        timestamps.extend(
+            str(item.get("createdAt"))
+            for item in events
+            if (((item.get("afterCommit") or {}).get("oid")) == head_sha) and item.get("createdAt")
+        )
+        return max(timestamps) if timestamps else None
+
     async def create_pull_request(
         self,
         app_slug: str,

@@ -84,6 +84,7 @@ class Thread(BaseModel):
     llm_confidence: float | None = None
     llm_reason: str | None = None
     clean_codex_review_id: int | None = None
+    clean_codex_signal_source: str | None = None
     existing_close_reason_marker: bool = False
 
 
@@ -149,6 +150,7 @@ class Evidence(BaseModel):
     clean_codex_review_id: int | None = None
     clean_codex_review_head: str | None = None
     clean_codex_review_submitted_at: str | None = None
+    clean_codex_signal_source: str | None = None
     demotion_reason: str | None = None
     synced_via: str | None = None
     synced_at: datetime | None = None
