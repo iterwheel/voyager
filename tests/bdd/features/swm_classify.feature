@@ -83,6 +83,11 @@ Feature: SWM classify — Codex thread state classification
     When latest_author_reply is called
     Then the latest author reply is None
 
+  Scenario: latest_author_reply matches GitHub App REST and GraphQL login forms
+    Given a thread with a reply from "iterwheel-assembly"
+    When latest_author_reply is called for author "iterwheel-assembly[bot]"
+    Then the latest reply databaseId is 10
+
   # ---------------------------------------------------------------------------
   # latest_codex_followup
   # ---------------------------------------------------------------------------

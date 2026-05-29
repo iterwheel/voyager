@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from .constants import is_codex_login
+from .constants import is_codex_login, logins_equivalent
 
 # Kept as module-level aliases so existing import sites continue to resolve.
 # The shared identity helper lives in constants.py — see is_codex_login.
@@ -121,7 +121,7 @@ def latest_author_reply(thread: dict, *, author_login: str | None = None) -> dic
         if not is_codex_login(_login(c)) and not _is_bot_conclusion_comment(c.get("body"))
     ]
     if author_login is not None:
-        replies = [c for c in replies if _login(c) == author_login]
+        replies = [c for c in replies if logins_equivalent(_login(c), author_login)]
     return replies[-1] if replies else None
 
 

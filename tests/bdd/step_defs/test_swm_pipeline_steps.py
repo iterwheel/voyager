@@ -53,10 +53,13 @@ class _StubGitHubAppClient:
     def __init__(self) -> None:
         self.threads: list[dict[str, Any]] = []
         self.reviews: list[dict[str, Any]] = []
+        self.issue_comment_payloads: list[dict[str, Any]] = []
         self.pr_payload: dict[str, Any] = {
             "head": {
                 "sha": "head-sha-abc1234",
-                "repo": {"full_name": "iterwheel/sandbox"},
+                "repo": {
+                    "full_name": "iterwheel/sandbox",
+                },
             },
             "base": {
                 "ref": "main",
@@ -69,6 +72,7 @@ class _StubGitHubAppClient:
             # unless a scenario explicitly sets it.
         }
         self.pr_payload_second_fetch: dict[str, Any] | None = None  # R5-P2: second-call head SHA
+        self.head_updated_at: str | None = "2026-05-11T12:45:00Z"
         self.fail_pull_request: bool = False
         self.fail_pull_request_httpx: bool = False  # Wave 7C-6: raises httpx.HTTPError
         self.pull_request_call_count: int = 0  # Wave 7C-6: tracks guard fetch calls
@@ -154,6 +158,16 @@ class _StubGitHubAppClient:
 
     async def pull_request_reviews(self, app_slug: str, repo: str, pr: int) -> list[dict[str, Any]]:
         return list(self.reviews)
+
+    async def pull_request_head_updated_at(
+        self, app_slug: str, repo: str, pull_number: int
+    ) -> str | None:
+        return self.head_updated_at
+
+    async def issue_comments(
+        self, app_slug: str, repo: str, issue_number: int
+    ) -> list[dict[str, Any]]:
+        return list(self.issue_comment_payloads)
 
     async def create_issue_comment(
         self, app_slug: str, repository: str, issue_number: int, *, body: str
@@ -1060,6 +1074,23 @@ def given_clean_codex_review_on_current_head(ctx) -> None:
     ]
 
 
+@given("the stub PR has a clean Codex issue comment on the current head after the thread")
+def given_clean_codex_issue_comment_on_current_head(ctx) -> None:
+    ctx["client"].head_updated_at = "2026-05-11T12:45:00Z"
+    ctx["client"].issue_comment_payloads = [
+        {
+            "id": 4570341046,
+            "user": {"login": "chatgpt-codex-connector[bot]"},
+            "body": (
+                "Codex Review: Didn't find any major issues. Nice work!\n\n"
+                "<details><summary>About Codex</summary>Boilerplate.</details>"
+            ),
+            "created_at": "2026-05-11T13:00:00Z",
+            "html_url": "https://example/pr/49#issuecomment-4570341046",
+        }
+    ]
+
+
 @given("the stub client records pull_request_diff calls")
 def given_stub_records_diff_calls(ctx) -> None:
     ctx["client"].diff_text = _SAMPLE_DIFF_APP_PY
@@ -1150,6 +1181,14 @@ def _first_thread(ctx) -> Any:
 def then_thread_verdict(ctx, verdict: str) -> None:
     t = _first_thread(ctx)
     assert t.verdict.value == verdict, f"thread.verdict={t.verdict!r}, expected {verdict!r}"
+
+
+@then(parsers.parse("the thread author reply id is {expected:d}"))
+def then_thread_author_reply_id(ctx, expected: int) -> None:
+    t = _first_thread(ctx)
+    assert t.author_reply_id == expected, (
+        f"thread.author_reply_id={t.author_reply_id!r}, expected {expected!r}"
+    )
 
 
 @then("the thread llm_verdict is None")

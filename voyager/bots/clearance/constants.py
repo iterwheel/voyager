@@ -61,6 +61,26 @@ def _expand_login_forms(login: str) -> tuple[str, str]:
     return login, f"{login}{_BOT_SUFFIX}"
 
 
+def equivalent_login_forms(login: str | None) -> frozenset[str]:
+    """Return GitHub REST/GraphQL-equivalent login spellings for *login*.
+
+    GitHub Apps commonly appear as ``app-slug[bot]`` in REST payloads and
+    ``app-slug`` in GraphQL review-thread payloads. Clearance compares both
+    surfaces in the same decision, so callers should compare against this
+    expanded set instead of doing raw string equality.
+    """
+    if not login:
+        return frozenset()
+    return frozenset(_expand_login_forms(login))
+
+
+def logins_equivalent(left: str | None, right: str | None) -> bool:
+    """True when two GitHub logins differ only by the App ``[bot]`` suffix."""
+    if not left or not right:
+        return False
+    return bool(equivalent_login_forms(left) & equivalent_login_forms(right))
+
+
 @functools.cache
 def _extra_codex_logins() -> frozenset[str]:
     """Extra logins treated as Codex bot, from ``VOYAGER_TEST_BOT_LOGINS``.

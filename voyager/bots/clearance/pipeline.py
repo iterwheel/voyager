@@ -171,6 +171,11 @@ _CLEAN_CODEX_REVIEW_VERDICTS = (
     "found no major issues",
     "no major issues found in this pr",
 )
+_CLEAN_CODEX_REVIEW_SUFFIXES = (
+    "",
+    ". nice work",
+    "! nice work",
+)
 
 
 def _now_utc() -> datetime:
@@ -178,7 +183,8 @@ def _now_utc() -> datetime:
 
 
 def _normalized_review_body(body: Any) -> str:
-    return " ".join(str(body or "").split()).replace("\u2019", "'").lower()
+    text = str(body or "").split("<details", 1)[0]
+    return " ".join(text.split()).replace("\u2019", "'").lower()
 
 
 def _clean_codex_review_verdict(body: Any) -> str | None:
@@ -186,7 +192,12 @@ def _clean_codex_review_verdict(body: Any) -> str | None:
     prefix = CODEX_REVIEW_RESULT_PREFIX.lower()
     if not normalized.startswith(prefix):
         return None
-    return normalized[len(prefix) :].strip().rstrip(".!").strip()
+    verdict = normalized[len(prefix) :].strip().rstrip(".!").strip()
+    for clean in _CLEAN_CODEX_REVIEW_VERDICTS:
+        for suffix in _CLEAN_CODEX_REVIEW_SUFFIXES:
+            if verdict == f"{clean}{suffix}":
+                return clean
+    return verdict
 
 
 def _is_current_head_codex_review(review: dict[str, Any], *, head_sha: str) -> bool:
@@ -205,6 +216,46 @@ def _is_clean_current_codex_review(review: dict[str, Any], *, head_sha: str) -> 
         return False
     verdict = _clean_codex_review_verdict(review.get("body"))
     return verdict in _CLEAN_CODEX_REVIEW_VERDICTS
+
+
+def _issue_comment_login(comment: dict[str, Any]) -> str | None:
+    return ((comment.get("user") or {}).get("login")) or (
+        (comment.get("author") or {}).get("login")
+    )
+
+
+def _issue_comment_created_at(comment: dict[str, Any]) -> str:
+    return str(comment.get("created_at") or comment.get("createdAt") or "")
+
+
+def _is_clean_current_codex_issue_comment(
+    comment: dict[str, Any],
+    *,
+    current_head_updated_at: str | None,
+) -> bool:
+    """True when a Codex PR issue comment is a clean signal for the current head."""
+    if not current_head_updated_at:
+        return False
+    if not is_codex_login(_issue_comment_login(comment)):
+        return False
+    created_at = _issue_comment_created_at(comment)
+    if not created_at or created_at <= current_head_updated_at:
+        return False
+    verdict = _clean_codex_review_verdict(comment.get("body"))
+    return verdict in _CLEAN_CODEX_REVIEW_VERDICTS
+
+
+def _is_current_head_codex_issue_comment(
+    comment: dict[str, Any],
+    *,
+    current_head_updated_at: str | None,
+) -> bool:
+    if not current_head_updated_at:
+        return False
+    if not is_codex_login(_issue_comment_login(comment)):
+        return False
+    created_at = _issue_comment_created_at(comment)
+    return bool(created_at and created_at > current_head_updated_at)
 
 
 def _latest_clean_codex_review_after_thread(
@@ -233,6 +284,79 @@ def _latest_clean_codex_review_after_thread(
     return None
 
 
+def _latest_clean_codex_issue_comment_after_thread(
+    comments: list[dict[str, Any]],
+    *,
+    current_head_updated_at: str | None,
+    thread_dict: dict[str, Any],
+) -> dict[str, Any] | None:
+    comments_nodes = _comment_nodes(thread_dict)
+    thread_created_at = (comments_nodes[0].get("createdAt") if comments_nodes else None) or ""
+    if not thread_created_at:
+        return None
+
+    candidates: list[dict[str, Any]] = []
+    for comment in comments:
+        if not _is_current_head_codex_issue_comment(
+            comment, current_head_updated_at=current_head_updated_at
+        ):
+            continue
+        created_at = _issue_comment_created_at(comment)
+        if created_at <= thread_created_at:
+            continue
+        candidates.append(comment)
+    if not candidates:
+        return None
+    latest = max(candidates, key=_issue_comment_created_at)
+    if _is_clean_current_codex_issue_comment(
+        latest, current_head_updated_at=current_head_updated_at
+    ):
+        return latest
+    return None
+
+
+def _latest_clean_codex_signal_after_thread(
+    *,
+    reviews: list[dict[str, Any]],
+    issue_comments: list[dict[str, Any]],
+    head_sha: str,
+    current_head_updated_at: str | None,
+    thread_dict: dict[str, Any],
+) -> tuple[str, dict[str, Any], str] | None:
+    comments_nodes = _comment_nodes(thread_dict)
+    thread_created_at = (comments_nodes[0].get("createdAt") if comments_nodes else None) or ""
+    if not thread_created_at:
+        return None
+
+    candidates: list[tuple[str, dict[str, Any], str, bool]] = []
+    for review in reviews:
+        if not _is_current_head_codex_review(review, head_sha=head_sha):
+            continue
+        submitted_at = str(review.get("submitted_at") or "")
+        if submitted_at <= thread_created_at:
+            continue
+        clean = _clean_codex_review_verdict(review.get("body")) in _CLEAN_CODEX_REVIEW_VERDICTS
+        candidates.append(("pull_request_review", review, submitted_at, clean))
+
+    for comment in issue_comments:
+        if not _is_current_head_codex_issue_comment(
+            comment, current_head_updated_at=current_head_updated_at
+        ):
+            continue
+        created_at = _issue_comment_created_at(comment)
+        if created_at <= thread_created_at:
+            continue
+        clean = _clean_codex_review_verdict(comment.get("body")) in _CLEAN_CODEX_REVIEW_VERDICTS
+        candidates.append(("issue_comment", comment, created_at, clean))
+
+    if not candidates:
+        return None
+    source, item, ts, clean = max(candidates, key=lambda candidate: candidate[2])
+    if clean:
+        return source, item, ts
+    return None
+
+
 async def _process_thread(
     thread_dict: dict[str, Any],
     *,
@@ -245,12 +369,14 @@ async def _process_thread(
     branch_protected_state: bool,
     client: GitHubAppClient,  # noqa: ARG001 — kept for future per-thread API calls
     pr_reviews: list[dict[str, Any]] | None = None,
+    pr_issue_comments: list[dict[str, Any]] | None = None,
     pr_author_login: str | None = None,
     investigator: ThreadInvestigator | None = None,
     get_diff: Callable[[], Awaitable[str]] | None = None,
     failures: list[tuple[str, str]] | None = None,
     profile_name: str | None = None,
     pr_pushed_at: str | None = None,
+    current_head_updated_at: str | None = None,
 ) -> tuple[Thread, ThreadSnapshot] | None:
     """Classify, judge, and build Thread + ThreadSnapshot for one Codex thread.
 
@@ -318,21 +444,41 @@ async def _process_thread(
     )
 
     clean_codex_review = None
-    if state == ThreadState.B and not thread_dict.get("isResolved"):
-        clean_codex_review = _latest_clean_codex_review_after_thread(
-            pr_reviews or [],
+    clean_codex_issue_comment = None
+    clean_codex_evidence: dict[str, Any] | None = None
+    clean_codex_evidence_source: str | None = None
+    clean_codex_evidence_ts: str = ""
+    if not thread_dict.get("isResolved"):
+        clean_signal = _latest_clean_codex_signal_after_thread(
+            reviews=pr_reviews or [],
+            issue_comments=pr_issue_comments or [],
             head_sha=head_sha,
+            current_head_updated_at=current_head_updated_at,
             thread_dict=thread_dict,
         )
-        clean_review_ts = str((clean_codex_review or {}).get("submitted_at") or "")
-        if clean_codex_review is not None and (not followup_ts or clean_review_ts > followup_ts):
+        if clean_signal is not None:
+            clean_codex_evidence_source, clean_codex_evidence, clean_codex_evidence_ts = (
+                clean_signal
+            )
+            if clean_codex_evidence_source == "pull_request_review":
+                clean_codex_review = clean_codex_evidence
+            elif clean_codex_evidence_source == "issue_comment":
+                clean_codex_issue_comment = clean_codex_evidence
+
+        if clean_codex_evidence is not None and (
+            not followup_ts or clean_codex_evidence_ts > followup_ts
+        ):
             decision = VerdictDecision(
                 Verdict.RESOLVED,
-                "current-head Codex review reported no major issues after this outdated thread",
+                ("current-head Codex clean signal reported no major issues after this thread"),
                 substantive=decision.substantive,
             )
         else:
             clean_codex_review = None
+            clean_codex_issue_comment = None
+            clean_codex_evidence = None
+            clean_codex_evidence_source = None
+            clean_codex_evidence_ts = ""
 
     path = thread_dict.get("path") or "unknown"
     line = thread_dict.get("line")
@@ -478,7 +624,8 @@ async def _process_thread(
         llm_verdict=llm_decision.verdict if llm_decision else None,
         llm_confidence=llm_decision.confidence if llm_decision else None,
         llm_reason=llm_decision.reason if llm_decision else None,
-        clean_codex_review_id=clean_codex_review.get("id") if clean_codex_review else None,
+        clean_codex_review_id=(clean_codex_evidence.get("id") if clean_codex_evidence else None),
+        clean_codex_signal_source=clean_codex_evidence_source,
         existing_close_reason_marker=existing_close_reason_marker,
     )
 
@@ -503,14 +650,17 @@ async def _process_thread(
             author_reply_id=(reply or {}).get("databaseId"),
             author_reply_substantive=decision.substantive,
             code_changed=None,
-            codex_followed_up=bool(followup) or bool(clean_codex_review),
-            clean_codex_review_id=clean_codex_review.get("id") if clean_codex_review else None,
+            codex_followed_up=bool(followup) or bool(clean_codex_evidence),
+            clean_codex_review_id=(
+                clean_codex_evidence.get("id") if clean_codex_evidence else None
+            ),
             clean_codex_review_head=(
-                clean_codex_review.get("commit_id") if clean_codex_review else None
+                clean_codex_review.get("commit_id")
+                if clean_codex_review
+                else (head_sha if clean_codex_issue_comment else None)
             ),
-            clean_codex_review_submitted_at=(
-                clean_codex_review.get("submitted_at") if clean_codex_review else None
-            ),
+            clean_codex_review_submitted_at=clean_codex_evidence_ts or None,
+            clean_codex_signal_source=clean_codex_evidence_source,
             llm_verdict=llm_decision.verdict if llm_decision else None,
             llm_confidence=llm_decision.confidence if llm_decision else None,
             llm_reason=llm_decision.reason if llm_decision else None,
@@ -1115,6 +1265,22 @@ async def compute_clearance_automation(
         )
         raw_reviews = []
 
+    try:
+        raw_issue_comments = await client.issue_comments(
+            CLEARANCE_AGENT_SLUG, repository, pr_number
+        )
+    except Exception as exc:
+        safe = _safe_exception_fields(exc)
+        _log.warning(
+            "issue_comments fetch failed for %s#%s (clean issue-comment signal disabled): "
+            "class=%s status=%s",
+            repository,
+            pr_number,
+            safe["error_class"],
+            safe["status"],
+        )
+        raw_issue_comments = []
+
     head_sha = (pr_data.get("head") or {}).get("sha") or ""
     pr_title = pr_data.get("title")
     pr_author_login: str | None = (pr_data.get("user") or {}).get("login") or None
@@ -1123,6 +1289,24 @@ async def compute_clearance_automation(
     # A Codex thread whose first comment predates the most recent push may have
     # been addressed in a newer commit even though GitHub didn't mark it outdated.
     pr_pushed_at: str | None = pr_data.get("pushed_at") or None
+    try:
+        current_head_updated_at = (
+            await client.pull_request_head_updated_at(CLEARANCE_AGENT_SLUG, repository, pr_number)
+            if head_sha
+            else None
+        )
+    except Exception as exc:
+        safe = _safe_exception_fields(exc)
+        _log.warning(
+            "head update timestamp fetch failed for %s#%s head=%s "
+            "(clean issue-comment signal disabled): class=%s status=%s",
+            repository,
+            pr_number,
+            head_sha,
+            safe["error_class"],
+            safe["status"],
+        )
+        current_head_updated_at = None
     # Issue #62: detect fork PRs. The REST API always includes head.repo.full_name
     # and base.repo.full_name; when they differ the PR is from a fork.
     head_repo: str | None = (pr_data.get("head") or {}).get("repo", {}).get("full_name") or None
@@ -1178,12 +1362,14 @@ async def compute_clearance_automation(
             branch_protected_state=branch_protected_state,
             client=client,
             pr_reviews=raw_reviews,
+            pr_issue_comments=raw_issue_comments,
             pr_author_login=pr_author_login,
             investigator=investigator,
             get_diff=get_diff,
             failures=investigator_failures,
             profile_name=default_profile_name,
             pr_pushed_at=pr_pushed_at,
+            current_head_updated_at=current_head_updated_at,
         )
         if result is None:
             continue

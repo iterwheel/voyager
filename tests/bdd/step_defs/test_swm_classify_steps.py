@@ -191,11 +191,31 @@ def thread_only_clearance_marker() -> dict:
     )
 
 
+@given(parsers.parse('a thread with a reply from "{login}"'), target_fixture="thread")
+def thread_with_reply_from(login: str) -> dict:
+    return _thread(
+        comments=[
+            _comment(CODEX_LOGIN, "P1: serious issue", db_id=1),
+            _comment(login, "Fixed in `pipeline.py` by applying the requested guard.", db_id=10),
+        ]
+    )
+
+
 @when("latest_author_reply is called", target_fixture="latest_reply")
 def call_latest_author_reply(thread: dict):
     from voyager.bots.clearance.classify import latest_author_reply
 
     return latest_author_reply(thread)
+
+
+@when(
+    parsers.parse('latest_author_reply is called for author "{author_login}"'),
+    target_fixture="latest_reply",
+)
+def call_latest_author_reply_for_author(thread: dict, author_login: str):
+    from voyager.bots.clearance.classify import latest_author_reply
+
+    return latest_author_reply(thread, author_login=author_login)
 
 
 @then(parsers.parse("the latest reply databaseId is {db_id:d}"))
