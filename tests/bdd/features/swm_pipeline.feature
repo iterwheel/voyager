@@ -871,3 +871,28 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     Then the automation status is "blocked"
     And exactly 1 in-thread reply was posted under the Codex review comment
     And the automation thread verdict comment posted count is 1
+  # ---------------------------------------------------------------------------
+  # Issue #146: freshness-aware per-thread verdict deduplication
+  # ---------------------------------------------------------------------------
+
+  Scenario: Issue #146 freshness allows verdict transition after newer evidence
+    Given the stub PR has 1 Codex thread with a substantive reply from "ryosaeba1985" and isResolved false
+    And the thread already has an early Clearance conclusion reply for the current head with verdict "OPEN" placed at "2026-05-11T12:15:00Z"
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "ready"
+    And the thread verdict is "RESOLVED"
+    And exactly 1 resolveReviewThread mutation was invoked
+    And exactly 1 in-thread reply was posted under the Codex review comment
+    And the in-thread reply body contains "RESOLVED"
+    And the in-thread reply body contains "clearance-close-reason"
+
+  Scenario: Issue #146 resolver fallback suppresses conflicting manual-close-required
+    Given the stub PR "iterwheel/sandbox" #49 author is "iterwheel-assembly[bot]"
+    And the stub PR has 1 Codex thread with a substantive reply from "iterwheel-assembly[bot]" and isResolved false
+    And the thread viewerCanResolve is false
+    And the thread already has a Clearance close-reason reply for the current head
+    And the authorized resolver app "iterwheel-assembly" can resolve the thread
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "ready"
+    And exactly 1 resolveReviewThread mutation was invoked
+    And no in-thread reply was posted

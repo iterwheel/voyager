@@ -112,7 +112,16 @@ def _has_current_head_verdict_comment(
     head_sha: str,
     verdict: Verdict,
 ) -> bool:
-    """Return true when Clearance already posted this head's verdict comment."""
+    """Return true when Clearance already posted this head's verdict comment.
+
+    A verdict comment is considered "active" only when no newer non-Clearance
+    thread comment exists after the Clearance marker.  If the PR author or
+    Codex has replied since the last Clearance verdict, the marker is stale
+    and a new verdict for this (thread_id, head_sha) is allowed.  This
+    prevents duplicate *conflicting* final-verdict comments while still
+    permitting legitimate verdict transitions when new evidence arrives on
+    the same head SHA.
+    """
     head_prefix = head_sha[:12]
     if verdict == Verdict.RESOLVED:
         marker_prefix = f"<!-- clearance-close-reason:{thread_id}:{head_prefix}"
@@ -121,6 +130,9 @@ def _has_current_head_verdict_comment(
         marker_prefix = f"<!-- clearance-thread-conclusion:{thread_id}:{head_prefix}"
         verdict_token = f"Verdict: `{verdict.value}`"
 
+    found = False
+    latest_clearance_ts: str = ""
+
     for comment in comments:
         if not _is_clearance_comment(comment):
             continue
@@ -128,8 +140,24 @@ def _has_current_head_verdict_comment(
         if not body.startswith(marker_prefix):
             continue
         if verdict_token is None or verdict_token in body:
-            return True
-    return False
+            found = True
+            ts = str(comment.get("createdAt") or "")
+            if ts > latest_clearance_ts:
+                latest_clearance_ts = ts
+
+    if not found:
+        return False
+
+    # If any non-Clearance comment in the thread is newer than the latest
+    # Clearance marker, the marker is stale and a new verdict is permitted.
+    for comment in comments:
+        if _is_clearance_comment(comment):
+            continue
+        ts = str(comment.get("createdAt") or "")
+        if ts and ts > latest_clearance_ts:
+            return False  # newer evidence exists; allow fresh verdict
+
+    return True
 
 
 async def _app_can_resolve_thread(

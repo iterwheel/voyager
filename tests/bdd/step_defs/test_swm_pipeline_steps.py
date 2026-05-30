@@ -2123,3 +2123,32 @@ def then_resolve_mutation_used_app(ctx, app_slug: str) -> None:
     assert any(call[0] == app_slug for call in calls), (
         f"expected resolveReviewThread app {app_slug!r}, calls={calls!r}"
     )
+
+
+@given(
+    parsers.parse(
+        "the thread already has an early Clearance conclusion reply for the current head "
+        'with verdict "{verdict}" placed at "{timestamp}"'
+    )
+)
+def given_thread_early_clearance_conclusion_reply(
+    ctx: dict[str, Any], verdict: str, timestamp: str
+) -> None:
+    """Add a Clearance conclusion reply at a specific timestamp.
+
+    Used to test freshness-aware deduplication: if a Clearance conclusion
+    was posted before a newer non-Clearance reply, the marker is stale.
+    """
+    threads = ctx["client"].threads
+    assert threads, "no threads configured"
+    head_sha = ctx["client"].pr_payload["head"]["sha"]
+    marker = f"<!-- clearance-thread-conclusion:{threads[0]['id']}:{head_sha[:12]} -->"
+    threads[0]["comments"]["nodes"].append(
+        {
+            "databaseId": CODEX_COMMENT_ID + 3,
+            "author": {"login": "iterwheel-clearance"},
+            "body": f"{marker}\n- Verdict: `{verdict}`",
+            "url": "https://example/c/4",
+            "createdAt": timestamp,
+        }
+    )

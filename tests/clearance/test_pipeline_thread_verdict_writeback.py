@@ -61,7 +61,12 @@ class _WritebackClient:
         }
 
 
-def _thread(verdict: Verdict, *, existing_marker: bool = False) -> Thread:
+def _thread(
+    verdict: Verdict,
+    *,
+    existing_marker: bool = False,
+    existing_close_reason_marker: bool = False,
+) -> Thread:
     return Thread(
         id="PRRT_alpha",
         comment_id=100001,
@@ -73,6 +78,7 @@ def _thread(verdict: Verdict, *, existing_marker: bool = False) -> Thread:
         verdict_reason="unit-test verdict",
         github_isResolved=False,
         existing_thread_conclusion_marker=existing_marker,
+        existing_close_reason_marker=existing_close_reason_marker,
     )
 
 
@@ -209,3 +215,108 @@ async def test_assembly_author_resolver_fallback_closes_resolved_thread() -> Non
     assert actions[0].result["fallback"] is True
     assert actions[0].result["resolver_app"] == "iterwheel-assembly"
     assert thread.github_isResolved is True
+
+
+def test_freshness_allows_verdict_transition_with_newer_evidence() -> None:
+    """PR author reply after Clearance OPEN verdict → marker is stale."""
+    comments = [
+        {
+            "author": {"login": "iterwheel-clearance"},
+            "createdAt": "2026-05-30T10:00:00Z",
+            "body": (
+                "<!-- clearance-thread-conclusion:PRRT_alpha:head-sha-abc -->\n- Verdict: `OPEN`"
+            ),
+        },
+        {
+            "author": {"login": "ryosaeba1985"},
+            "createdAt": "2026-05-30T10:05:00Z",
+            "body": "I've addressed this feedback in the latest commit.",
+        },
+    ]
+
+    # Same verdict (OPEN) with newer non-Clearance evidence → stale, allow new
+    assert not _has_current_head_verdict_comment(
+        comments,
+        thread_id="PRRT_alpha",
+        head_sha="head-sha-abc1234",
+        verdict=Verdict.OPEN,
+    )
+
+
+def test_freshness_blocks_duplicate_without_newer_evidence() -> None:
+    """Clearance OPEN verdict with no newer thread comments → marker is active."""
+    comments = [
+        {
+            "author": {"login": "iterwheel-clearance"},
+            "createdAt": "2026-05-30T10:00:00Z",
+            "body": (
+                "<!-- clearance-thread-conclusion:PRRT_alpha:head-sha-abc -->\n- Verdict: `OPEN`"
+            ),
+        },
+    ]
+
+    assert _has_current_head_verdict_comment(
+        comments,
+        thread_id="PRRT_alpha",
+        head_sha="head-sha-abc1234",
+        verdict=Verdict.OPEN,
+    )
+
+    # Codex re-review (Clearance) at same time → still active (Clearance isn't "newer evidence")
+    comments_with_same_clearance = [
+        {
+            "author": {"login": "iterwheel-clearance"},
+            "createdAt": "2026-05-30T10:00:00Z",
+            "body": (
+                "<!-- clearance-thread-conclusion:PRRT_alpha:head-sha-abc -->\n- Verdict: `OPEN`"
+            ),
+        },
+        {
+            "author": {"login": "chatgpt-codex-connector"},
+            "createdAt": "2026-05-30T10:00:00Z",
+            "body": "Codex Review: clean",
+        },
+    ]
+
+    assert _has_current_head_verdict_comment(
+        comments_with_same_clearance,
+        thread_id="PRRT_alpha",
+        head_sha="head-sha-abc1234",
+        verdict=Verdict.OPEN,
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolver_fallback_success_suppresses_manual_close_required() -> None:
+    """Resolver fallback success → existing close-reason marker suppresses
+    manual-close-required output for the same thread/head."""
+    client = _WritebackClient()
+    # Thread has verdict=RESOLVED, viewerCanResolve=False, no resolver.
+    # But existing_close_reason_marker=True (delegated close-reason already posted
+    # by a previous run's resolver fallback).
+    thread = _thread(
+        Verdict.RESOLVED,
+        existing_close_reason_marker=True,
+    )
+    snapshot = _snapshot(viewer_can_resolve=False)
+
+    # No resolver available (no pr_author_login or no matching resolver)
+    actions = await _maybe_sync_stage_15(
+        client=client,  # type: ignore[arg-type]
+        repository="iterwheel/sandbox",
+        threads=[thread],
+        snapshots=[snapshot],
+        pr=49,
+        head_sha="head-sha-abc1234",
+        dry_run=False,
+        now=datetime.now(UTC).replace(microsecond=0),
+    )
+
+    # No in-thread reply should be posted because existing_close_reason_marker
+    # suppresses it in the manual-close-required path.
+    assert client.reply_calls == []
+    # The action records the skip with the existing-marker reason.
+    assert len(actions) == 1
+    in_thread_reply = actions[0].result.get("in_thread_reply", {})
+    assert in_thread_reply.get("posted") is False
+    assert "existing close-reason reply" in (in_thread_reply.get("skipped") or "")
