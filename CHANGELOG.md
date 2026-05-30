@@ -8,6 +8,8 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+## [0.4.10] — 2026-05-30
+
 ### Fixed — Clearance per-thread verdict comment dedupe ([#146](https://github.com/iterwheel/voyager/issues/146))
 
 - Clearance now treats a `(review_thread_id, head_sha)` pair as having one
@@ -523,7 +525,8 @@ auth, FastAPI webhook bridge, DeepSeek LLM adapter, rocket-factory
 pipeline state machine, SWM-1101 per-thread verdict pipeline. See
 `b2e4ca1` and prior history.
 
-[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.4.9...HEAD
+[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.4.10...HEAD
+[0.4.10]: https://github.com/iterwheel/voyager/compare/v0.4.9...v0.4.10
 [0.4.9]: https://github.com/iterwheel/voyager/compare/v0.4.8...v0.4.9
 [0.4.8]: https://github.com/iterwheel/voyager/compare/v0.4.7...v0.4.8
 [0.4.7]: https://github.com/iterwheel/voyager/compare/v0.4.6...v0.4.7
