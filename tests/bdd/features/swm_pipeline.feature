@@ -871,3 +871,40 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     Then the automation status is "blocked"
     And exactly 1 in-thread reply was posted under the Codex review comment
     And the automation thread verdict comment posted count is 1
+
+  # ---------------------------------------------------------------------------
+  # Issue #146: one final per-thread verdict comment per head
+  # ---------------------------------------------------------------------------
+
+  Scenario: Issue #146 existing resolved conclusion suppresses conflicting OPEN verdict output
+    Given the stub PR "iterwheel/sandbox" #49 has 1 fresh Codex thread (State A) at path "app.py"
+    And the thread already has a Clearance close-reason reply for the current head
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "blocked"
+    And no in-thread reply was posted
+    And the automation thread verdict comment posted count is 0
+    And the automation thread verdict comment skipped count is 1
+
+  Scenario: Issue #146 existing resolved conclusion suppresses manual-close-required output
+    Given the stub PR "iterwheel/sandbox" #49 author is "iterwheel-assembly[bot]"
+    And the stub PR has 1 Codex thread with a substantive reply from "iterwheel-assembly[bot]" and isResolved false
+    And the thread viewerCanResolve is false
+    And the thread already has a Clearance close-reason reply for the current head
+    And the authorized resolver app "iterwheel-assembly" cannot resolve the thread
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "ready"
+    And exactly 0 resolveReviewThread mutations were invoked
+    And the Stage 1.5 action has a skipped action
+    And the Stage 1.5 skipped action reason is "viewerCanResolve is false"
+    And no in-thread reply was posted
+
+  Scenario: Issue #146 same-head OPEN verdict can progress to RESOLVED after author reply
+    Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with substantive author reply and isResolved false
+    And the thread already has a Clearance conclusion reply for the current head with verdict "OPEN"
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "ready"
+    And the thread verdict is "RESOLVED"
+    And exactly 1 resolveReviewThread mutation was invoked
+    And exactly 1 in-thread reply was posted under the Codex review comment
+    And the in-thread reply body contains "RESOLVED"
+    And the in-thread reply body contains "Clearance: resolved"

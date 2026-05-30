@@ -86,6 +86,7 @@ class Thread(BaseModel):
     llm_reason: str | None = None
     clean_codex_review_id: int | None = None
     clean_codex_signal_source: str | None = None
+    existing_head_verdict_marker: bool = False
     existing_close_reason_marker: bool = False
     existing_thread_conclusion_marker: bool = False
 

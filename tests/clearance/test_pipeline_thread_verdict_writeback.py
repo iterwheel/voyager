@@ -14,6 +14,7 @@ from voyager.bots.clearance.models import (
     Verdict,
 )
 from voyager.bots.clearance.pipeline import (
+    _has_current_head_final_verdict_comment,
     _has_current_head_verdict_comment,
     _maybe_post_thread_verdict_comments,
     _maybe_sync_stage_15,
@@ -24,6 +25,10 @@ class _WritebackClient:
     def __init__(self) -> None:
         self.reply_calls: list[tuple[str, str, int, int, str]] = []
         self.resolve_calls: list[tuple[str, str, str]] = []
+        self.thread_comments: list[dict[str, Any]] = []
+        self.resolver_viewer_can_resolve_by_app: dict[str, bool] = {
+            "iterwheel-assembly": True,
+        }
 
     async def create_review_thread_reply(
         self,
@@ -35,6 +40,12 @@ class _WritebackClient:
         body: str,
     ) -> dict[str, Any]:
         self.reply_calls.append((app_slug, repository, pull_number, comment_id, body))
+        self.thread_comments.append(
+            {
+                "author": {"login": "iterwheel-clearance"},
+                "body": body,
+            }
+        )
         return {"html_url": "https://example/reply"}
 
     async def pull_request_review_threads(
@@ -43,7 +54,11 @@ class _WritebackClient:
         return [
             {
                 "id": "PRRT_alpha",
-                "viewerCanResolve": app_slug == "iterwheel-assembly",
+                "viewerCanResolve": self.resolver_viewer_can_resolve_by_app.get(
+                    app_slug,
+                    app_slug == "iterwheel-assembly",
+                ),
+                "comments": {"nodes": list(self.thread_comments)},
             }
         ]
 
@@ -73,6 +88,7 @@ def _thread(verdict: Verdict, *, existing_marker: bool = False) -> Thread:
         verdict_reason="unit-test verdict",
         github_isResolved=False,
         existing_thread_conclusion_marker=existing_marker,
+        existing_head_verdict_marker=existing_marker,
     )
 
 
@@ -126,6 +142,11 @@ def test_current_head_verdict_comment_dedupe_is_verdict_specific() -> None:
         head_sha="head-sha-abc1234",
         verdict=Verdict.NEEDS_HUMAN_JUDGMENT,
     )
+    assert _has_current_head_final_verdict_comment(
+        comments,
+        thread_id="PRRT_alpha",
+        head_sha="head-sha-abc1234",
+    )
     assert not _has_current_head_verdict_comment(
         comments,
         thread_id="PRRT_alpha",
@@ -150,7 +171,36 @@ async def test_thread_verdict_comment_skips_existing_current_head_verdict() -> N
 
     assert client.reply_calls == []
     assert actions[0]["skipped"] is True
-    assert actions[0]["skip_reason"] == "existing verdict reply for current head and verdict"
+    assert actions[0]["skip_reason"] == "existing final verdict reply for current head"
+
+
+@pytest.mark.asyncio
+async def test_thread_verdict_comment_skips_conflicting_head_after_refresh() -> None:
+    client = _WritebackClient()
+    client.thread_comments.append(
+        {
+            "author": {"login": "iterwheel-clearance"},
+            "body": (
+                "<!-- clearance-thread-conclusion:PRRT_alpha:head-sha-abc -->\n- Verdict: `OPEN`"
+            ),
+        }
+    )
+
+    actions = await _maybe_post_thread_verdict_comments(
+        client=client,  # type: ignore[arg-type]
+        repository="iterwheel/sandbox",
+        threads=[_thread(Verdict.NEEDS_HUMAN_JUDGMENT)],
+        snapshots=[_snapshot(verdict=Verdict.NEEDS_HUMAN_JUDGMENT)],
+        pr=49,
+        head_sha="head-sha-abc1234",
+        dry_run=False,
+    )
+
+    assert client.reply_calls == []
+    assert actions[0]["skipped"] is True
+    assert actions[0]["skip_reason"] == (
+        "existing final verdict reply for current head after refresh"
+    )
 
 
 @pytest.mark.asyncio
@@ -209,3 +259,69 @@ async def test_assembly_author_resolver_fallback_closes_resolved_thread() -> Non
     assert actions[0].result["fallback"] is True
     assert actions[0].result["resolver_app"] == "iterwheel-assembly"
     assert thread.github_isResolved is True
+
+
+@pytest.mark.asyncio
+async def test_resolved_verdict_can_supersede_existing_open_same_head_reply() -> None:
+    client = _WritebackClient()
+    client.thread_comments.append(
+        {
+            "author": {"login": "iterwheel-clearance"},
+            "body": (
+                "<!-- clearance-thread-conclusion:PRRT_alpha:head-sha-abc -->\n- Verdict: `OPEN`"
+            ),
+        }
+    )
+
+    actions = await _maybe_sync_stage_15(
+        client=client,  # type: ignore[arg-type]
+        repository="iterwheel/sandbox",
+        threads=[_thread(Verdict.RESOLVED)],
+        snapshots=[_snapshot(viewer_can_resolve=True, verdict=Verdict.RESOLVED)],
+        pr=49,
+        head_sha="head-sha-abc1234",
+        dry_run=False,
+        now=datetime.now(UTC).replace(microsecond=0),
+    )
+
+    assert client.resolve_calls == [("iterwheel-clearance", "iterwheel/sandbox", "PRRT_alpha")]
+    assert len(client.reply_calls) == 1
+    assert "Clearance: resolved" in client.reply_calls[0][4]
+    assert actions[0].result["in_thread_reply"]["posted"] is True
+
+
+@pytest.mark.asyncio
+async def test_assembly_fallback_success_suppresses_later_manual_close_reply() -> None:
+    client = _WritebackClient()
+
+    await _maybe_sync_stage_15(
+        client=client,  # type: ignore[arg-type]
+        repository="iterwheel/sandbox",
+        threads=[_thread(Verdict.RESOLVED)],
+        snapshots=[_snapshot(viewer_can_resolve=False)],
+        pr=49,
+        head_sha="head-sha-abc1234",
+        dry_run=False,
+        now=datetime.now(UTC).replace(microsecond=0),
+        pr_author_login="iterwheel-assembly[bot]",
+    )
+
+    client.resolver_viewer_can_resolve_by_app["iterwheel-assembly"] = False
+    second_actions = await _maybe_sync_stage_15(
+        client=client,  # type: ignore[arg-type]
+        repository="iterwheel/sandbox",
+        threads=[_thread(Verdict.RESOLVED)],
+        snapshots=[_snapshot(viewer_can_resolve=False)],
+        pr=49,
+        head_sha="head-sha-abc1234",
+        dry_run=False,
+        now=datetime.now(UTC).replace(microsecond=0),
+        pr_author_login="iterwheel-assembly[bot]",
+    )
+
+    assert len(client.reply_calls) == 1
+    assert "GitHub conversation closed by `iterwheel-assembly[bot]`" in client.reply_calls[0][4]
+    assert "does not allow Clearance" not in client.reply_calls[0][4]
+    assert second_actions[0].result["in_thread_reply"]["skipped"] == (
+        "existing resolved verdict reply for current head after refresh"
+    )

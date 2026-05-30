@@ -8,6 +8,19 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+### Fixed — Clearance per-thread verdict comment dedupe ([#146](https://github.com/iterwheel/voyager/issues/146))
+
+- Clearance now treats a `(review_thread_id, head_sha)` pair as having one
+  final public verdict comment, preventing later webhook runs from posting
+  contradictory `RESOLVED`, `OPEN`, or `NEEDS_HUMAN_JUDGMENT` conclusions for
+  the same head.
+- Before posting a review-thread reply, Clearance re-fetches the current thread
+  comments once per run and suppresses duplicate output when a prior same-head
+  verdict comment already exists, including the Assembly resolver fallback case.
+- Same-head progress from an earlier `OPEN`/`NEEDS_HUMAN_JUDGMENT` comment to a
+  later `RESOLVED` verdict remains allowed, so a substantive author reply can
+  still trigger resolution and a close-reason comment.
+
 ## [0.4.9] — 2026-05-30
 
 ### Fixed — Clearance Assembly evidence and per-thread verdicts ([#141](https://github.com/iterwheel/voyager/issues/141), [#143](https://github.com/iterwheel/voyager/pull/143), [#142](https://github.com/iterwheel/voyager/issues/142), [#144](https://github.com/iterwheel/voyager/pull/144))
