@@ -132,6 +132,172 @@ def _has_current_head_verdict_comment(
     return False
 
 
+def _has_current_head_final_verdict_comment(
+    comments: list[dict[str, Any]],
+    *,
+    thread_id: str,
+    head_sha: str,
+) -> bool:
+    """Return true when Clearance already posted any final verdict for this head."""
+    head_prefix = head_sha[:12]
+    marker_prefixes = (
+        f"<!-- clearance-close-reason:{thread_id}:{head_prefix}",
+        f"<!-- clearance-thread-conclusion:{thread_id}:{head_prefix}",
+    )
+
+    for comment in comments:
+        if not _is_clearance_comment(comment):
+            continue
+        body = str(comment.get("body") or "")
+        if body.startswith(marker_prefixes):
+            return True
+    return False
+
+
+async def _has_fresh_current_head_final_verdict_comment(
+    *,
+    client: GitHubAppClient,
+    repository: str,
+    pr: int,
+    thread_id: str,
+    head_sha: str,
+    cache: dict[str, Any],
+) -> bool:
+    """Re-fetch thread comments before writeback to suppress stale-snapshot duplicates."""
+    key = f"{thread_id}:{head_sha[:12]}"
+    marker_cache = cache.setdefault("markers", {})
+    if key in marker_cache:
+        return bool(marker_cache[key])
+
+    found = False
+    if "fresh_threads" not in cache:
+        try:
+            cache["fresh_threads"] = await client.pull_request_review_threads(
+                CLEARANCE_AGENT_SLUG, repository, pr
+            )
+        except Exception as exc:
+            safe = _safe_exception_fields(exc)
+            _log.warning(
+                "fresh verdict-comment dedupe check failed for thread %s on %s#%s: "
+                "class=%s status=%s",
+                thread_id,
+                repository,
+                pr,
+                safe["error_class"],
+                safe["status"],
+            )
+            marker_cache[key] = False
+            return False
+
+    for item in cache["fresh_threads"]:
+        if item.get("id") != thread_id:
+            continue
+        comments = (item.get("comments") or {}).get("nodes") or []
+        found = _has_current_head_final_verdict_comment(
+            comments,
+            thread_id=thread_id,
+            head_sha=head_sha,
+        )
+        break
+
+    marker_cache[key] = found
+    return found
+
+
+async def _has_fresh_current_head_resolved_comment(
+    *,
+    client: GitHubAppClient,
+    repository: str,
+    pr: int,
+    thread_id: str,
+    head_sha: str,
+    cache: dict[str, Any],
+) -> bool:
+    """Re-fetch thread comments before writeback to suppress duplicate RESOLVED replies."""
+    key = f"resolved:{thread_id}:{head_sha[:12]}"
+    marker_cache = cache.setdefault("markers", {})
+    if key in marker_cache:
+        return bool(marker_cache[key])
+
+    found = False
+    if "fresh_threads" not in cache:
+        try:
+            cache["fresh_threads"] = await client.pull_request_review_threads(
+                CLEARANCE_AGENT_SLUG, repository, pr
+            )
+        except Exception as exc:
+            safe = _safe_exception_fields(exc)
+            _log.warning(
+                "fresh resolved-comment dedupe check failed for thread %s on %s#%s: "
+                "class=%s status=%s",
+                thread_id,
+                repository,
+                pr,
+                safe["error_class"],
+                safe["status"],
+            )
+            marker_cache[key] = False
+            return False
+
+    for item in cache["fresh_threads"]:
+        if item.get("id") != thread_id:
+            continue
+        comments = (item.get("comments") or {}).get("nodes") or []
+        found = _has_current_head_verdict_comment(
+            comments,
+            thread_id=thread_id,
+            head_sha=head_sha,
+            verdict=Verdict.RESOLVED,
+        )
+        break
+
+    marker_cache[key] = found
+    return found
+
+
+async def _current_head_verdict_reply_skip_reason(
+    *,
+    client: GitHubAppClient,
+    repository: str,
+    pr: int,
+    thread: Thread,
+    head_sha: str,
+    cache: dict[str, Any],
+) -> str | None:
+    if thread.verdict == Verdict.RESOLVED:
+        if thread.existing_close_reason_marker:
+            return "existing resolved verdict reply for current head"
+        if await _has_fresh_current_head_resolved_comment(
+            client=client,
+            repository=repository,
+            pr=pr,
+            thread_id=thread.id,
+            head_sha=head_sha,
+            cache=cache,
+        ):
+            return "existing resolved verdict reply for current head after refresh"
+        return None
+
+    if (
+        thread.existing_head_verdict_marker
+        or thread.existing_close_reason_marker
+        or thread.existing_thread_conclusion_marker
+    ):
+        return "existing final verdict reply for current head"
+
+    if await _has_fresh_current_head_final_verdict_comment(
+        client=client,
+        repository=repository,
+        pr=pr,
+        thread_id=thread.id,
+        head_sha=head_sha,
+        cache=cache,
+    ):
+        return "existing final verdict reply for current head after refresh"
+
+    return None
+
+
 async def _app_can_resolve_thread(
     *,
     client: GitHubAppClient,
@@ -649,6 +815,11 @@ async def _process_thread(
         head_sha=head_sha,
         verdict=decision.verdict,
     )
+    existing_head_verdict_marker = _has_current_head_final_verdict_comment(
+        comments_nodes,
+        thread_id=thread_dict["id"],
+        head_sha=head_sha,
+    )
 
     thread_model = Thread(
         id=thread_dict["id"],
@@ -670,6 +841,7 @@ async def _process_thread(
         llm_reason=llm_decision.reason if llm_decision else None,
         clean_codex_review_id=(clean_codex_evidence.get("id") if clean_codex_evidence else None),
         clean_codex_signal_source=clean_codex_evidence_source,
+        existing_head_verdict_marker=existing_head_verdict_marker,
         existing_close_reason_marker=existing_close_reason_marker,
         existing_thread_conclusion_marker=existing_thread_conclusion_marker,
     )
@@ -820,6 +992,7 @@ async def _maybe_post_thread_verdict_comments(
     """
     actions: list[dict[str, Any]] = []
     snap_by_id = {s.thread_id: s for s in snapshots}
+    verdict_reply_dedupe_cache: dict[str, Any] = {}
 
     for thread in threads:
         if thread.verdict == Verdict.RESOLVED:
@@ -838,12 +1011,20 @@ async def _maybe_post_thread_verdict_comments(
             "verdict": thread.verdict.value,
         }
 
-        if thread.existing_thread_conclusion_marker:
+        skip_reason = await _current_head_verdict_reply_skip_reason(
+            client=client,
+            repository=repository,
+            pr=pr,
+            thread=thread,
+            head_sha=head_sha,
+            cache=verdict_reply_dedupe_cache,
+        )
+        if skip_reason:
             actions.append(
                 {
                     **base_result,
                     "skipped": True,
-                    "skip_reason": "existing verdict reply for current head and verdict",
+                    "skip_reason": skip_reason,
                 }
             )
             continue
@@ -931,6 +1112,7 @@ async def _maybe_sync_stage_15(
     fork_head_blocked: bool | None = None  # None = unchecked yet
     resolver_thread_cache: dict[str, list[dict[str, Any]] | None] = {}
     resolver_head_repo_access_cache: dict[tuple[str, str], bool] = {}
+    verdict_reply_dedupe_cache: dict[str, Any] = {}
 
     for thread in threads:
         if thread.verdict != Verdict.RESOLVED:
@@ -1061,10 +1243,18 @@ async def _maybe_sync_stage_15(
                 thread.github_resolvedBy = resolved_by
 
                 fallback_reply_result: dict[str, Any] = {"posted": False}
-                if thread.existing_close_reason_marker:
+                skip_reason = await _current_head_verdict_reply_skip_reason(
+                    client=client,
+                    repository=repository,
+                    pr=pr,
+                    thread=thread,
+                    head_sha=head_sha,
+                    cache=verdict_reply_dedupe_cache,
+                )
+                if skip_reason:
                     fallback_reply_result = {
                         "posted": False,
-                        "skipped": "existing close-reason reply for current head",
+                        "skipped": skip_reason,
                     }
                 else:
                     try:
@@ -1111,10 +1301,18 @@ async def _maybe_sync_stage_15(
             _log.info(skip_reason)
             reply_result: dict[str, Any] = {"posted": False}
             if not dry_run:
-                if thread.existing_close_reason_marker:
+                skip_reason = await _current_head_verdict_reply_skip_reason(
+                    client=client,
+                    repository=repository,
+                    pr=pr,
+                    thread=thread,
+                    head_sha=head_sha,
+                    cache=verdict_reply_dedupe_cache,
+                )
+                if skip_reason:
                     reply_result = {
                         "posted": False,
-                        "skipped": "existing close-reason reply for current head",
+                        "skipped": skip_reason,
                     }
                 else:
                     comment_body = build_manual_close_required_comment(
@@ -1261,14 +1459,6 @@ async def _maybe_sync_stage_15(
             )
             continue
 
-        actions.append(
-            Stage15Action(
-                mutation=Stage15Mutation.RESOLVE_REVIEW_THREAD,
-                threadId=thread.id,
-                result=result,
-            )
-        )
-
         snap.github_state = GitHubThreadState(
             isResolved=True,
             isOutdated=snap.github_state.isOutdated,
@@ -1285,17 +1475,40 @@ async def _maybe_sync_stage_15(
         # isn't actually resolved (Codex PR #9 P2): if the mutation fails, this
         # block never runs, and the next webhook re-enters the same branch with
         # a fresh snapshot — no spurious comment lingers from a partial attempt.
-        if not thread.existing_close_reason_marker:
+        close_reply_result: dict[str, Any] = {"posted": False}
+        skip_reason = await _current_head_verdict_reply_skip_reason(
+            client=client,
+            repository=repository,
+            pr=pr,
+            thread=thread,
+            head_sha=head_sha,
+            cache=verdict_reply_dedupe_cache,
+        )
+        if skip_reason:
+            close_reply_result = {
+                "posted": False,
+                "skipped": skip_reason,
+            }
+        else:
             try:
-                await client.create_review_thread_reply(
+                reply = await client.create_review_thread_reply(
                     CLEARANCE_AGENT_SLUG,
                     repository,
                     pr,
                     thread.comment_id,
                     body=comment_body,
                 )
+                close_reply_result = {
+                    "posted": True,
+                    "url": (reply or {}).get("html_url"),
+                }
             except (httpx.HTTPError, RuntimeError) as exc:
                 safe = _safe_exception_fields(exc)
+                close_reply_result = {
+                    "posted": False,
+                    "error_class": safe["error_class"],
+                    "status": safe["status"],
+                }
                 _log.warning(
                     "in-thread reply suppressed for thread %s "
                     "(Stage 1.5 mutation already applied): class=%s status=%s",
@@ -1303,6 +1516,14 @@ async def _maybe_sync_stage_15(
                     safe["error_class"],
                     safe["status"],
                 )
+
+        actions.append(
+            Stage15Action(
+                mutation=Stage15Mutation.RESOLVE_REVIEW_THREAD,
+                threadId=thread.id,
+                result={**dict(result or {}), "in_thread_reply": close_reply_result},
+            )
+        )
 
     return actions
 
