@@ -25,7 +25,9 @@ from typing import Any, Protocol
 
 from voyager.core.redaction import sanitize_public_text
 
+from .ac_spotcheck import AcceptanceSpotCheckResult, check_acceptance_exact_tokens
 from .constants import (
+    ASSEMBLY_AC_SPOTCHECK_ENV,
     ASSEMBLY_BACKEND_DRY_RUN,
     ASSEMBLY_BACKEND_FAKE_SUBPROCESS,
     ASSEMBLY_BACKEND_PI_OH_MY_PI_DEEPSEEK,
@@ -405,6 +407,7 @@ class PiOhMyPiDeepSeekAdapter:
 
             dirty_tree = bool(status.stdout.strip())
             if dirty_tree:
+                details["patch_left_behind"] = True
                 staged = await _run_exec(
                     ["git", "add", "-A"],
                     cwd=checkout_dir,
@@ -493,6 +496,8 @@ class PiOhMyPiDeepSeekAdapter:
                     details=details,
                 )
 
+            details["patch_left_behind"] = True
+
             verification = await _run_verification_commands(
                 contract,
                 checkout_dir,
@@ -510,6 +515,34 @@ class PiOhMyPiDeepSeekAdapter:
                     contract=contract,
                     context=context,
                 )
+
+            if _ac_spotcheck_enabled():
+                ac_spotcheck = await _run_acceptance_spotcheck(
+                    contract,
+                    checkout_dir,
+                    f"origin/{contract.base_branch}",
+                    timeout_seconds,
+                    git_env,
+                    secret=token,
+                )
+                if not ac_spotcheck.ok:
+                    details["ac_spotcheck"] = ac_spotcheck.to_dict()
+                    return _failed_pi_result(
+                        ac_spotcheck.summary(),
+                        token,
+                        details,
+                        failure_diagnostic=_simple_diagnostic(
+                            phase="acceptance_spotcheck",
+                            command_category="acceptance_criteria",
+                            command="exact-token spot-check",
+                            stdout_tail=_spotcheck_excerpt(ac_spotcheck),
+                            secret=token,
+                        ),
+                        temp_root_path=temp_root_path,
+                        contract=contract,
+                        context=context,
+                        status="blocked",
+                    )
 
             publish_result = await publish_branch(
                 repository=repository,
@@ -784,6 +817,88 @@ async def _run_verification_commands(
     return None
 
 
+async def _changed_text_since_base(
+    checkout_dir: Path,
+    base_ref: str,
+    timeout_seconds: int,
+    env: dict[str, str],
+) -> str | None:
+    diff = await _run_exec(
+        [
+            "git",
+            "diff",
+            "--name-only",
+            "--diff-filter=ACMRT",
+            f"{base_ref}...HEAD",
+        ],
+        cwd=checkout_dir,
+        timeout_seconds=timeout_seconds,
+        env=env,
+    )
+    if diff.returncode != 0:
+        return None
+
+    checkout_root = checkout_dir.resolve()
+    chunks: list[str] = []
+    for raw_name in diff.stdout.splitlines():
+        rel_name = raw_name.strip()
+        if not rel_name:
+            continue
+        path = (checkout_dir / rel_name).resolve()
+        try:
+            path.relative_to(checkout_root)
+        except ValueError:
+            continue
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        chunks.append(f"\n--- {rel_name} ---\n{text}")
+    return "\n".join(chunks) if chunks else None
+
+
+async def _run_acceptance_spotcheck(
+    contract: AssemblyJobContract,
+    checkout_dir: Path,
+    base_ref: str,
+    timeout_seconds: int,
+    env: dict[str, str],
+    *,
+    secret: str,
+) -> AcceptanceSpotCheckResult:
+    changed_text = await _changed_text_since_base(
+        checkout_dir,
+        base_ref,
+        timeout_seconds,
+        env,
+    )
+    if not changed_text:
+        return AcceptanceSpotCheckResult()
+    changed_text = _sanitize_for_matching(changed_text, secret)
+    return check_acceptance_exact_tokens(
+        issue_body=contract.issue_body,
+        acceptance_criteria=contract.acceptance_criteria,
+        changed_text=changed_text,
+    )
+
+
+def _spotcheck_excerpt(result: AcceptanceSpotCheckResult) -> str:
+    lines: list[str] = []
+    for finding in result.findings[:5]:
+        missing = ", ".join(finding.missing_tokens)
+        lines.append(f"{finding.source}: missing {missing}")
+    return "\n".join(lines)
+
+
+def _ac_spotcheck_enabled() -> bool:
+    raw = os.environ.get(ASSEMBLY_AC_SPOTCHECK_ENV)
+    if raw is None:
+        return True
+    return raw.strip().lower() not in {"", "0", "false", "no", "off"}
+
+
 def _build_omp_prompt(contract: AssemblyJobContract, *, phase: str = "implementer") -> str:
     acceptance = "\n".join(f"- {item}" for item in contract.acceptance_criteria) or "- None"
     forbidden = "\n".join(f"- {item}" for item in contract.forbidden_operations) or "- None"
@@ -827,6 +942,14 @@ def _build_omp_prompt(contract: AssemblyJobContract, *, phase: str = "implemente
 
 
 _GITHUB_TOKEN_RE = re.compile(r"gh[opsru]_[A-Za-z0-9_]+")
+_TOKEN_QUERY_RE = re.compile(r"(?i)(token=)[^\s&]+")
+_BEARER_RE = re.compile(r"(?i)(Bearer\s+)\S+")
+_URL_USERINFO_RE = re.compile(r"(?i)(https?://)[^/\s:@]+:[^@\s/]+@")
+_SECRET_ASSIGNMENT_FOR_MATCHING_RE = re.compile(
+    r"(?i)\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API[_-]?KEY|PRIVATE[_-]?KEY|CREDENTIAL)"
+    r"[A-Z0-9_]*)\s*=\s*[^\s&]+"
+)
+_API_KEY_SHAPED_RE = re.compile(r"(?<![A-Za-z0-9_-])sk-[A-Za-z0-9_-]{6,}(?![A-Za-z0-9_-])")
 _TESTPILOT_STATUS_RE = re.compile(r"(?m)^ASSEMBLY_TESTPILOT_STATUS=(blocked|failed)\s*$")
 _TESTPILOT_REASON_RE = re.compile(r"(?m)^ASSEMBLY_TESTPILOT_REASON=(.+)$")
 
@@ -848,6 +971,17 @@ def _sanitize_for_result(value: str, secret: str, *, limit: int = 2000) -> str:
     sanitized = value.replace(secret, "[redacted]") if secret else value
     sanitized = _GITHUB_TOKEN_RE.sub("[redacted]", sanitized)
     return sanitize_public_text(sanitized, limit=limit)
+
+
+def _sanitize_for_matching(value: str, secret: str) -> str:
+    sanitized = value.replace(secret, "[redacted]") if secret else value
+    sanitized = " ".join(str(sanitized or "").split())
+    sanitized = _URL_USERINFO_RE.sub(r"\1[redacted]@", sanitized)
+    sanitized = _SECRET_ASSIGNMENT_FOR_MATCHING_RE.sub(r"\1=[redacted]", sanitized)
+    sanitized = _TOKEN_QUERY_RE.sub(r"\1[redacted]", sanitized)
+    sanitized = _GITHUB_TOKEN_RE.sub("[redacted]", sanitized)
+    sanitized = _API_KEY_SHAPED_RE.sub("[redacted]", sanitized)
+    return _BEARER_RE.sub(r"\1[redacted]", sanitized)
 
 
 def _sanitize_details_for_result(value: Any, secret: str) -> Any:
@@ -972,6 +1106,7 @@ def _retain_failure_bundle(
         return None
 
     details["failure_debug_bundle_path"] = str(bundle_path)
+    details.setdefault("patch_left_behind", False)
     repo_path = bundle_path / "repo"
     if repo_path.exists():
         details["checkout_dir"] = str(repo_path)
@@ -1030,6 +1165,7 @@ def _failed_pi_result(
     temp_root_path: Path | None = None,
     contract: AssemblyJobContract | None = None,
     context: AdapterExecutionContext | None = None,
+    status: str = "failed",
 ) -> AdapterResult:
     safe_details = dict(details or {})
     if failure_diagnostic:
@@ -1048,7 +1184,7 @@ def _failed_pi_result(
         if repo_path.exists():
             safe_details["checkout_dir"] = str(repo_path)
     return AdapterResult(
-        status="failed",
+        status=status,
         commit_shas=[],
         summary=_sanitize_for_result(summary, secret, limit=240),
         details=_sanitize_details_for_result(safe_details, secret),

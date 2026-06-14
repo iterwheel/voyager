@@ -25,7 +25,10 @@ from voyager.bots.assembly.adapters import (
     PiOhMyPiDeepSeekAdapter,
     select_execution_adapter,
 )
-from voyager.bots.assembly.constants import ASSEMBLY_BACKEND_PI_OH_MY_PI_DEEPSEEK
+from voyager.bots.assembly.constants import (
+    ASSEMBLY_AC_SPOTCHECK_ENV,
+    ASSEMBLY_BACKEND_PI_OH_MY_PI_DEEPSEEK,
+)
 from voyager.bots.assembly.job_contract import build_job_contract
 from voyager.bots.assembly.publish import PublishResult
 
@@ -594,6 +597,287 @@ async def test_pi_adapter_verification_failure_records_sanitized_diagnostic(
     assert token not in serialized
     assert "sk-proj-secret" not in serialized
     assert "ASSEMBLY_GITHUB_TOKEN=" not in serialized
+    bundle_path = Path(result.details["failure_debug_bundle_path"])
+    metadata_path = bundle_path / "assembly-failure.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert metadata["failure_diagnostic"]["phase"] == "verification"
+    assert metadata["details"]["patch_left_behind"] is True
+    assert token not in json.dumps(metadata, sort_keys=True)
+
+
+@pytest.mark.asyncio
+async def test_pi_adapter_ac_spotcheck_blocks_publish_and_retains_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    issue_body = """## Expected Outcome
+
+- **COR-side field** `**Disposition:**` registered in COR-0002, with three values and concrete per-value criteria:
+  - `mandatory-bind` — required localization.
+  - `optional-overlay` — optional overlay.
+  - `inherit-only` — use as-is.
+
+## Acceptance Criteria
+
+- [ ] COR-0002 registers `**Disposition:**` with values `mandatory-bind`, `optional-overlay`, and `inherit-only`
+"""
+    contract = build_job_contract(
+        issue={
+            "number": 204,
+            "title": "[Task]: Add Disposition fields",
+            "body": issue_body,
+            "html_url": "https://example/issues/204",
+        },
+        repository="frankyxhl/alfred",
+        branch_name="204-add-disposition-fields",
+        delivery_id="delivery-ac-spotcheck",
+    )
+
+    recorder = _CommandRecorder(status_porcelain="M src/fx_alfred/core/schema.py\n")
+    _install_command_fakes(monkeypatch, recorder)
+
+    async def fake_changed_text(*args: Any, **kwargs: Any) -> str:
+        _ = (args, kwargs)
+        return (
+            'DISPOSITION_CORE = "core"\n'
+            'DISPOSITION_OPTIONAL_OVERLAY = "optional-overlay"\n'
+            'DISPOSITION_LOCALIZATION_REQUIRED = "localization-required"\n'
+            "The `**Disposition:**` field is registered.\n"
+        )
+
+    async def fail_if_published(**kwargs: Any) -> PublishResult:
+        _ = kwargs
+        raise AssertionError("publish_branch must not run after AC spot-check failure")
+
+    monkeypatch.setattr(adapters_module, "_changed_text_since_base", fake_changed_text)
+    monkeypatch.setattr(adapters_module, "publish_branch", fail_if_published)
+    adapter = PiOhMyPiDeepSeekAdapter()
+
+    result = await adapter.execute(
+        contract,
+        _context(
+            tmp_path,
+            token="ghs_stage2_ac_secret",
+            audit_id="asmb-acacacacacacacac",
+        ),
+    )
+
+    assert result.status == "blocked"
+    assert result.commit_shas == []
+    assert "Acceptance spot-check failed" in result.summary
+    assert result.details["failure_diagnostic"]["phase"] == "acceptance_spotcheck"
+    spotcheck = result.details["ac_spotcheck"]
+    assert spotcheck["ok"] is False
+    assert spotcheck["findings"][0]["missing_tokens"] == [
+        "mandatory-bind",
+        "inherit-only",
+    ]
+    bundle_path = Path(result.details["failure_debug_bundle_path"])
+    assert (bundle_path / "repo").exists()
+    metadata = json.loads((bundle_path / "assembly-failure.json").read_text(encoding="utf-8"))
+    assert metadata["failure_diagnostic"]["phase"] == "acceptance_spotcheck"
+    assert metadata["details"]["ac_spotcheck"]["ok"] is False
+    assert metadata["details"]["patch_left_behind"] is True
+
+
+@pytest.mark.asyncio
+async def test_pi_adapter_ac_spotcheck_matches_tokens_after_large_changed_text(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    contract = build_job_contract(
+        issue={
+            "number": 204,
+            "title": "[Task]: Add late token",
+            "body": "## Acceptance Criteria\n\n- [ ] Add support for `late-token`\n",
+            "html_url": "https://example/issues/204",
+        },
+        repository="frankyxhl/alfred",
+        branch_name="204-add-late-token",
+        delivery_id="delivery-ac-spotcheck-large",
+    )
+
+    async def fake_changed_text(*args: Any, **kwargs: Any) -> str:
+        _ = (args, kwargs)
+        return f"{'x' * 210_000}\nLATE_VALUE = 'late-token'\n"
+
+    monkeypatch.setattr(adapters_module, "_changed_text_since_base", fake_changed_text)
+
+    result = await adapters_module._run_acceptance_spotcheck(
+        contract,
+        tmp_path,
+        VALID_SHA,
+        DEFAULT_TIMEOUT_SECONDS,
+        {},
+        secret="ghs_stage2_ac_secret",
+    )
+
+    assert result.ok
+
+
+@pytest.mark.asyncio
+async def test_pi_adapter_ac_spotcheck_preserves_secret_shaped_keys_for_matching(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    contract = build_job_contract(
+        issue={
+            "number": 204,
+            "title": "[Task]: Add API key config",
+            "body": "## Acceptance Criteria\n\n- [ ] Add config key `OPENAI_API_KEY`\n",
+            "html_url": "https://example/issues/204",
+        },
+        repository="frankyxhl/alfred",
+        branch_name="204-add-api-key-config",
+        delivery_id="delivery-ac-spotcheck-secret-key",
+    )
+
+    async def fake_changed_text(*args: Any, **kwargs: Any) -> str:
+        _ = (args, kwargs)
+        return 'OPENAI_API_KEY="sk-proj-secret-value"\n'
+
+    monkeypatch.setattr(adapters_module, "_changed_text_since_base", fake_changed_text)
+
+    result = await adapters_module._run_acceptance_spotcheck(
+        contract,
+        tmp_path,
+        VALID_SHA,
+        DEFAULT_TIMEOUT_SECONDS,
+        {},
+        secret="ghs_stage2_ac_secret",
+    )
+
+    assert result.ok
+    sanitized = adapters_module._sanitize_for_matching(
+        'OPENAI_API_KEY="sk-proj-secret-value"\n',
+        secret="ghs_stage2_ac_secret",
+    )
+    assert "OPENAI_API_KEY" in sanitized
+    assert "sk-proj-secret-value" not in sanitized
+
+
+@pytest.mark.asyncio
+async def test_pi_adapter_ac_spotcheck_uses_repository_base_ref_for_existing_branch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    contract = build_job_contract(
+        issue={
+            "number": 204,
+            "title": "[Task]: Add token",
+            "body": "## Acceptance Criteria\n\n- [ ] Add support for `required-token`\n",
+            "html_url": "https://example/issues/204",
+        },
+        repository="frankyxhl/alfred",
+        branch_name="204-add-token",
+        delivery_id="delivery-ac-spotcheck-existing-branch",
+    )
+    recorder = _CommandRecorder(
+        status_porcelain="M src/fx_alfred/core/schema.py\n",
+        remote_branch_exists=True,
+    )
+    _install_command_fakes(monkeypatch, recorder)
+    seen_refs: list[str] = []
+
+    async def fake_changed_text(
+        checkout_dir: Path,
+        base_ref: str,
+        timeout_seconds: int,
+        env: dict[str, str],
+    ) -> str:
+        _ = (checkout_dir, timeout_seconds, env)
+        seen_refs.append(base_ref)
+        return "REQUIRED_VALUE = 'required-token'\n"
+
+    async def fake_publish_branch(**kwargs: Any) -> PublishResult:
+        _ = kwargs
+        return PublishResult(success=True, message="pushed")
+
+    monkeypatch.setattr(adapters_module, "_changed_text_since_base", fake_changed_text)
+    monkeypatch.setattr(adapters_module, "publish_branch", fake_publish_branch)
+    adapter = PiOhMyPiDeepSeekAdapter()
+
+    result = await adapter.execute(contract, _context(tmp_path))
+
+    assert result.status == "executed"
+    assert seen_refs == ["origin/main"]
+
+
+@pytest.mark.asyncio
+async def test_pi_adapter_skips_ac_spotcheck_when_changed_text_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    contract = build_job_contract(
+        issue={
+            "number": 204,
+            "title": "[Task]: Add Disposition fields",
+            "body": "## Acceptance Criteria\n\n"
+            "- [ ] Use values `mandatory-bind`, `optional-overlay`, and `inherit-only`\n",
+            "html_url": "https://example/issues/204",
+        },
+        repository="frankyxhl/alfred",
+        branch_name="204-add-disposition-fields",
+        delivery_id="delivery-ac-spotcheck-unavailable",
+    )
+    recorder = _CommandRecorder(status_porcelain="M src/fx_alfred/core/schema.py\n")
+    _install_command_fakes(monkeypatch, recorder)
+
+    async def fake_changed_text(*args: Any, **kwargs: Any) -> str | None:
+        _ = (args, kwargs)
+        return None
+
+    async def fake_publish_branch(**kwargs: Any) -> PublishResult:
+        _ = kwargs
+        return PublishResult(success=True, message="pushed")
+
+    monkeypatch.setattr(adapters_module, "_changed_text_since_base", fake_changed_text)
+    monkeypatch.setattr(adapters_module, "publish_branch", fake_publish_branch)
+    adapter = PiOhMyPiDeepSeekAdapter()
+
+    result = await adapter.execute(contract, _context(tmp_path))
+
+    assert result.status == "executed"
+    assert result.commit_shas == [VALID_SHA]
+
+
+@pytest.mark.asyncio
+async def test_pi_adapter_ac_spotcheck_can_be_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    contract = build_job_contract(
+        issue={
+            "number": 204,
+            "title": "[Task]: Add Disposition fields",
+            "body": "## Acceptance Criteria\n\n"
+            "- [ ] Use values `mandatory-bind`, `optional-overlay`, and `inherit-only`\n",
+            "html_url": "https://example/issues/204",
+        },
+        repository="frankyxhl/alfred",
+        branch_name="204-add-disposition-fields",
+        delivery_id="delivery-ac-spotcheck-disabled",
+    )
+    recorder = _CommandRecorder(status_porcelain="M src/fx_alfred/core/schema.py\n")
+    _install_command_fakes(monkeypatch, recorder)
+    monkeypatch.setenv(ASSEMBLY_AC_SPOTCHECK_ENV, "0")
+
+    async def fake_changed_text(*args: Any, **kwargs: Any) -> str:
+        _ = (args, kwargs)
+        return 'DISPOSITION_CORE = "core"\n'
+
+    async def fake_publish_branch(**kwargs: Any) -> PublishResult:
+        _ = kwargs
+        return PublishResult(success=True, message="pushed")
+
+    monkeypatch.setattr(adapters_module, "_changed_text_since_base", fake_changed_text)
+    monkeypatch.setattr(adapters_module, "publish_branch", fake_publish_branch)
+    adapter = PiOhMyPiDeepSeekAdapter()
+
+    result = await adapter.execute(contract, _context(tmp_path))
+
+    assert result.status == "executed"
+    assert result.commit_shas == [VALID_SHA]
 
 
 @pytest.mark.asyncio

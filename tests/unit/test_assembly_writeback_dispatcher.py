@@ -238,6 +238,7 @@ def test_adapter_failure_diagnostic_reaches_comment_manifest_and_log(
                 summary="git push failed",
                 details={
                     "failure_debug_bundle_path": str(tmp_path / "failures" / "x"),
+                    "patch_left_behind": True,
                     "failure_diagnostic": {
                         "phase": "git_push",
                         "command_category": "git",
@@ -268,7 +269,9 @@ def test_adapter_failure_diagnostic_reaches_comment_manifest_and_log(
     assert "**Backend failure diagnostics:**" in body
     assert "- Phase: `git_push`" in body
     assert "- Command: `git`" in body
+    assert "- Check: `git push`" in body
     assert "- Exit code: `128`" in body
+    assert "- Patch left behind: `true`" in body
     assert "ghs_comment_secret" not in body
     assert "sk-proj-secret" not in body
     assert "ASSEMBLY_GITHUB_TOKEN=" not in body

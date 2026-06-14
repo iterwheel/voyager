@@ -50,6 +50,7 @@ def _format_backend_failure(adapter_result: dict[str, Any]) -> list[str]:
 
     phase = sanitize_public_text(failure.get("phase") or "unknown", limit=80)
     category = sanitize_public_text(failure.get("command_category") or "unknown", limit=80)
+    command = sanitize_public_text(failure.get("command") or "", limit=120)
     exit_code = failure.get("exit_code")
     timed_out = bool(failure.get("timed_out"))
     stderr_tail = sanitize_public_text(failure.get("stderr_tail") or "", limit=260)
@@ -60,6 +61,8 @@ def _format_backend_failure(adapter_result: dict[str, Any]) -> list[str]:
         f"- Phase: {_code_span(phase)}",
         f"- Command: {_code_span(category)}",
     ]
+    if command:
+        lines.append(f"- Check: {_code_span(command)}")
     if exit_code is not None:
         lines.append(f"- Exit code: {_code_span(str(exit_code))}")
     if timed_out:
@@ -69,6 +72,11 @@ def _format_backend_failure(adapter_result: dict[str, Any]) -> list[str]:
     elif stdout_tail:
         lines.append(f"- Stdout tail: {_code_span(stdout_tail)}")
     if details.get("failure_debug_bundle_path"):
+        patch_left = details.get("patch_left_behind")
+        if isinstance(patch_left, bool):
+            lines.append(f"- Patch left behind: {_code_span(str(patch_left).lower())}")
+        else:
+            lines.append("- Debug bundle retained: `true`")
         lines.append("- Debug bundle: recorded in the private audit manifest.")
     return lines
 

@@ -33,6 +33,7 @@ from .branch import make_branch_name
 from .commands import AssemblyCommand, parse_assembly_command
 from .comment import build_assembly_comment
 from .constants import (
+    ASSEMBLY_AC_SPOTCHECK_ENV,
     ASSEMBLY_AGENT_ID,
     ASSEMBLY_AGENT_SLUG,
     ASSEMBLY_AUDIT_DIR_DEFAULT,
@@ -68,6 +69,7 @@ from .publish import PublishResult, publish_branch
 from .routing import route_assembly_event, should_run_assembly
 
 __all__ = [
+    "ASSEMBLY_AC_SPOTCHECK_ENV",
     "ASSEMBLY_AGENT_ID",
     "ASSEMBLY_AGENT_SLUG",
     "ASSEMBLY_AUDIT_DIR_DEFAULT",
