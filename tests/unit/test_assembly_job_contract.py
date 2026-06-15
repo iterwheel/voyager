@@ -169,6 +169,40 @@ def test_acceptance_criteria_extracted_from_bullets() -> None:
     assert len(data["acceptance_criteria"]) == 3
 
 
+def test_acceptance_criteria_preserve_list_structure() -> None:
+    body = """## Acceptance Criteria
+
+- [ ] Remove deprecated values:
+  - `legacy-mode`
+  - `old-mode`
+- [ ] Audit `new-mode` behavior
+"""
+    contract = build_job_contract(
+        issue={
+            "number": 153,
+            "title": "[Task]: Preserve AC nesting",
+            "html_url": "https://github.com/iterwheel/voyager/issues/153",
+            "body": body,
+        },
+        repository="iterwheel/voyager",
+        branch_name="153-preserve-ac-nesting",
+        delivery_id="d",
+    ).to_dict()
+
+    assert contract["acceptance_criteria"] == [
+        "Remove deprecated values:",
+        "`legacy-mode`",
+        "`old-mode`",
+        "Audit `new-mode` behavior",
+    ]
+    assert contract["acceptance_criteria_items"] == [
+        {"text": "Remove deprecated values:", "depth": 0, "parent_index": None},
+        {"text": "`legacy-mode`", "depth": 1, "parent_index": 0},
+        {"text": "`old-mode`", "depth": 1, "parent_index": 0},
+        {"text": "Audit `new-mode` behavior", "depth": 0, "parent_index": None},
+    ]
+
+
 def test_task_summary_extracted_from_section() -> None:
     data = _build()
     assert data["task_summary_source"] == "section"

@@ -8,6 +8,7 @@ Uncertain prose remains non-blocking and falls through to normal review.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -44,12 +45,6 @@ _REQUIRED_TARGET_PREFIX_RE = re.compile(
     r"(?:\b(?:and|then|but)|[;,.])\s+"
     r"(?:add|create|emit|include|introduce|keep|register|require|set|support|use|write)\b|"
     r"\b(?:as|to|with)\s*$",
-    re.I,
-)
-_REQUIRED_CRITERION_RE = re.compile(
-    r"\b(?:add|chang(?:e|ed|es|ing)|create|describe|document|emit|ensure|include|"
-    r"introduce|keep|register|require|set|support|updat(?:e|ed|es|ing)|use|"
-    r"validat(?:e|ed|es|ing)|verify|write)\b",
     re.I,
 )
 _REMOVAL_SUFFIX_RE = re.compile(
@@ -102,11 +97,18 @@ class AcceptanceSpotCheckResult:
         }
 
 
+@dataclass(frozen=True)
+class _CriterionItem:
+    text: str
+    depth: int
+
+
 def check_acceptance_exact_tokens(
     *,
     issue_body: str,
     acceptance_criteria: list[str],
     changed_text: str,
+    acceptance_criteria_items: Sequence[Any] | None = None,
 ) -> AcceptanceSpotCheckResult:
     """Return exact-token findings that should block Assembly publication.
 
@@ -119,7 +121,11 @@ def check_acceptance_exact_tokens(
       examples are ignored.
     """
     findings: list[AcceptanceSpotCheckFinding] = []
-    for source, criterion, tokens in _required_token_groups(issue_body, acceptance_criteria):
+    for source, criterion, tokens in _required_token_groups(
+        issue_body,
+        acceptance_criteria,
+        acceptance_criteria_items,
+    ):
         missing = tuple(token for token in tokens if not _token_present(token, changed_text))
         if missing:
             findings.append(
@@ -136,10 +142,15 @@ def check_acceptance_exact_tokens(
 def _required_token_groups(
     issue_body: str,
     acceptance_criteria: list[str],
+    acceptance_criteria_items: Sequence[Any] | None = None,
 ) -> list[tuple[str, str, tuple[str, ...]]]:
     groups: list[tuple[str, str, tuple[str, ...]]] = []
     seen: set[tuple[str, ...]] = set()
-    removal_contexts = _removal_contexts_for_criteria(issue_body, acceptance_criteria)
+    removal_contexts = _removal_contexts_for_criteria(
+        issue_body,
+        acceptance_criteria,
+        acceptance_criteria_items,
+    )
 
     for criterion, removal_context in zip(acceptance_criteria, removal_contexts, strict=False):
         contextual_criterion = criterion
@@ -159,8 +170,12 @@ def _required_token_groups(
 def _removal_contexts_for_criteria(
     issue_body: str,
     acceptance_criteria: list[str],
+    acceptance_criteria_items: Sequence[Any] | None = None,
 ) -> list[str | None]:
-    bullet_contexts = _removal_contexts_by_bullet(_acceptance_section(issue_body))
+    criteria_items = _coerce_criterion_items(acceptance_criteria_items)
+    if not criteria_items:
+        criteria_items = _criterion_items_from_section(_acceptance_section(issue_body))
+    bullet_contexts = _removal_contexts_by_item(criteria_items)
     contexts: list[str | None] = []
     bullet_idx = 0
     for criterion in acceptance_criteria:
@@ -175,26 +190,66 @@ def _removal_contexts_for_criteria(
     return contexts
 
 
-def _removal_contexts_by_bullet(ac_section: str) -> list[tuple[str, str | None]]:
+def _removal_contexts_by_item(items: list[_CriterionItem]) -> list[tuple[str, str | None]]:
     contexts: list[tuple[str, str | None]] = []
-    stack: list[tuple[int, str, bool]] = []
+    stack: list[int] = []
+    for idx, item in enumerate(items):
+        while stack and item.depth <= items[stack[-1]].depth:
+            stack.pop()
+        removal_parent = next(
+            (
+                items[parent_idx].text
+                for parent_idx in reversed(stack)
+                if _starts_removal_list_context(items[parent_idx].text)
+            ),
+            None,
+        )
+        contexts.append((item.text, removal_parent))
+        stack.append(idx)
+    return contexts
+
+
+def _coerce_criterion_items(items: Sequence[Any] | None) -> list[_CriterionItem]:
+    if not items:
+        return []
+    coerced: list[_CriterionItem] = []
+    for raw in items:
+        if isinstance(raw, dict):
+            text = raw.get("text")
+            depth = raw.get("depth")
+        else:
+            text = getattr(raw, "text", None)
+            depth = getattr(raw, "depth", None)
+        if not isinstance(text, str):
+            return []
+        if depth is None:
+            return []
+        try:
+            depth_int = int(depth)
+        except (TypeError, ValueError):
+            return []
+        if depth_int < 0:
+            return []
+        coerced.append(_CriterionItem(text=text, depth=depth_int))
+    return coerced
+
+
+def _criterion_items_from_section(ac_section: str) -> list[_CriterionItem]:
+    items: list[_CriterionItem] = []
+    stack: list[tuple[int, int]] = []
     for line in (ac_section or "").splitlines():
         match = _BULLET_LINE_RE.match(line)
         if match is None:
             continue
         indent = len(match.group(1).replace("\t", "    "))
         criterion = match.group(2).strip()
+        if not criterion:
+            continue
         while stack and indent <= stack[-1][0]:
             stack.pop()
-        removal_parent = next((text for _, text, is_removal in reversed(stack) if is_removal), None)
-        context = (
-            removal_parent
-            if removal_parent is not None and _inherits_removal_list_context(criterion)
-            else None
-        )
-        contexts.append((criterion, context))
-        stack.append((indent, criterion, _starts_removal_list_context(criterion)))
-    return contexts
+        items.append(_CriterionItem(text=criterion, depth=len(stack)))
+        stack.append((indent, len(items) - 1))
+    return items
 
 
 def _starts_removal_list_context(criterion: str) -> bool:
@@ -202,11 +257,6 @@ def _starts_removal_list_context(criterion: str) -> bool:
     if not text or _REMOVAL_PREFIX_RE.search(text) is None:
         return False
     return text.endswith(":") or _INLINE_CODE_RE.search(text) is None
-
-
-def _inherits_removal_list_context(criterion: str) -> bool:
-    text = criterion or ""
-    return bool(_INLINE_CODE_RE.search(text)) and _REQUIRED_CRITERION_RE.search(text) is None
 
 
 def _append_required_token_group(

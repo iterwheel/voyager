@@ -56,7 +56,7 @@ from .constants import (
     REFUSAL_UNAUTHORIZED_ACTOR,
     VERIFICATION_COMMANDS,
 )
-from .job_contract import AssemblyJobContract, build_job_contract
+from .job_contract import AcceptanceCriterionItem, AssemblyJobContract, build_job_contract
 from .phase import (
     PhaseMode,
     PhaseName,
@@ -91,6 +91,7 @@ __all__ = [
     "FORBIDDEN_OPERATIONS",
     "REFUSAL_UNAUTHORIZED_ACTOR",
     "VERIFICATION_COMMANDS",
+    "AcceptanceCriterionItem",
     "ActorAuthorization",
     "AdapterExecutionContext",
     "AdapterResult",

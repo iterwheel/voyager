@@ -21,6 +21,15 @@ from .constants import (
 
 
 @dataclass(frozen=True)
+class AcceptanceCriterionItem:
+    """One acceptance-criteria bullet with its original list structure."""
+
+    text: str
+    depth: int
+    parent_index: int | None = None
+
+
+@dataclass(frozen=True)
 class AssemblyJobContract:
     """The structured contract handed to the execution adapter."""
 
@@ -37,6 +46,7 @@ class AssemblyJobContract:
     verification_commands: tuple[str, ...]
     delivery_id: str
     requested_at: str
+    acceptance_criteria_items: list[AcceptanceCriterionItem] = field(default_factory=list)
     # D14 provenance — "section" when extracted from the marked-up section,
     # "title_fallback" when Blueprint allowed it through but the section was
     # later removed (non-empty title), "empty_fallback" when both the section
@@ -112,18 +122,31 @@ def _extract_section(body: str, headings: set[str]) -> str:
     return "\n".join(out).strip()
 
 
-_BULLET_RE = re.compile(r"^\s*(?:[-*]\s+(?:\[[ xX]\]\s*)?|\d+\.\s+)(.+?)\s*$")
+_BULLET_RE = re.compile(r"^(\s*)(?:[-*]\s+(?:\[[ xX]\]\s*)?|\d+\.\s+)(.+?)\s*$")
 
 
-def _extract_bullets(text: str) -> list[str]:
-    bullets: list[str] = []
+def _extract_bullet_items(text: str) -> list[AcceptanceCriterionItem]:
+    items: list[AcceptanceCriterionItem] = []
+    stack: list[tuple[int, int]] = []
     for line in text.splitlines():
         match = _BULLET_RE.match(line)
         if match:
-            item = match.group(1).strip()
-            if item:
-                bullets.append(item)
-    return bullets
+            indent = len(match.group(1).replace("\t", "    "))
+            item = match.group(2).strip()
+            if not item:
+                continue
+            while stack and indent <= stack[-1][0]:
+                stack.pop()
+            parent_index = stack[-1][1] if stack else None
+            items.append(
+                AcceptanceCriterionItem(
+                    text=item,
+                    depth=len(stack),
+                    parent_index=parent_index,
+                )
+            )
+            stack.append((indent, len(items) - 1))
+    return items
 
 
 def _extract_task_summary(body: str, title: str) -> tuple[str, str]:
@@ -141,7 +164,10 @@ def _extract_task_summary(body: str, title: str) -> tuple[str, str]:
     return (title or "").strip(), "title_fallback"
 
 
-def _extract_acceptance_criteria(body: str, title: str) -> tuple[list[str], str]:
+def _extract_acceptance_criteria(
+    body: str,
+    title: str,
+) -> tuple[list[str], list[AcceptanceCriterionItem], str]:
     """Return (criteria_list, source) per D14.
 
     Three distinct sources per CHG-1819 F4 / D7-D8:
@@ -154,13 +180,13 @@ def _extract_acceptance_criteria(body: str, title: str) -> tuple[list[str], str]
         Assembly progress comment.
     """
     section = _extract_section(body, _AC_HEADINGS)
-    bullets = _extract_bullets(section)
-    if bullets:
-        return bullets, "section"
+    bullet_items = _extract_bullet_items(section)
+    if bullet_items:
+        return [item.text for item in bullet_items], bullet_items, "section"
     title_clean = (title or "").strip()
     if title_clean:
-        return [title_clean], "title_fallback"
-    return [], "empty_fallback"
+        return [title_clean], [AcceptanceCriterionItem(text=title_clean, depth=0)], "title_fallback"
+    return [], [], "empty_fallback"
 
 
 def _verification_commands_env_key(repository: str) -> str:
@@ -216,7 +242,7 @@ def build_job_contract(
     issue_title = str(issue.get("title") or "").strip()
     issue_body = str(issue.get("body") or "")
     task_summary, task_source = _extract_task_summary(issue_body, issue_title)
-    criteria, ac_source = _extract_acceptance_criteria(issue_body, issue_title)
+    criteria, criteria_items, ac_source = _extract_acceptance_criteria(issue_body, issue_title)
     return AssemblyJobContract(
         repository=repository,
         issue_number=int(issue.get("number") or 0),
@@ -231,6 +257,7 @@ def build_job_contract(
         verification_commands=_verification_commands_for_repository(repository),
         delivery_id=delivery_id,
         requested_at=datetime.now(UTC).isoformat(),
+        acceptance_criteria_items=criteria_items,
         acceptance_criteria_source=ac_source,
         task_summary_source=task_source,
     )

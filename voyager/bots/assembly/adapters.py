@@ -880,6 +880,7 @@ async def _run_acceptance_spotcheck(
     return check_acceptance_exact_tokens(
         issue_body=contract.issue_body,
         acceptance_criteria=contract.acceptance_criteria,
+        acceptance_criteria_items=contract.acceptance_criteria_items,
         changed_text=changed_text,
     )
 
