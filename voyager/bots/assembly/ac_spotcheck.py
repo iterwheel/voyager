@@ -51,6 +51,10 @@ _REQUIRED_ACTION_LABEL_RE = re.compile(
     rf"^\s*(?:{_REQUIRED_ACTION_VERBS})(?=\s|:|$)",
     re.I,
 )
+_REQUIRED_VALUE_LABEL_RE = re.compile(
+    r"^\s*(?:replacement(?:s|\s+values?)?|new\s+values?)\s*:\s*$",
+    re.I,
+)
 _REPLACEMENT_SOURCE_PREFIX_RE = re.compile(
     r"\b(?:chang(?:e|ed|es|ing)|updat(?:e|ed|es|ing))\b",
     re.I,
@@ -292,6 +296,13 @@ def _has_required_action_context(text: str) -> bool:
     )
 
 
+def _has_required_value_context(text: str) -> bool:
+    return (
+        _has_required_action_context(text)
+        or _REQUIRED_VALUE_LABEL_RE.search(text or "") is not None
+    )
+
+
 def _is_pure_removal_list_context(criterion: str) -> bool:
     text = (criterion or "").strip()
     return _starts_removal_list_context(text) and not _has_required_action_context(text)
@@ -370,7 +381,7 @@ def _is_pure_removal_value_group(criterion: str, window: list[str]) -> bool:
     for follow in window[1:]:
         follow_match = _BULLET_LINE_RE.match(follow)
         follow_criterion = follow_match.group(2).strip() if follow_match else follow.strip()
-        if _has_required_action_context(follow_criterion):
+        if _has_required_value_context(follow_criterion):
             return False
     return True
 
