@@ -48,7 +48,7 @@ _REQUIRED_ACTION_VERBS = (
     r"validat(?:e|ed|es|ing)|verify|wire|write"
 )
 _REQUIRED_ACTION_LABEL_RE = re.compile(
-    rf"^\s*(?:{_REQUIRED_ACTION_VERBS})\b",
+    rf"^\s*(?:{_REQUIRED_ACTION_VERBS})(?=\s|:|$)",
     re.I,
 )
 _REPLACEMENT_SOURCE_PREFIX_RE = re.compile(
@@ -57,7 +57,7 @@ _REPLACEMENT_SOURCE_PREFIX_RE = re.compile(
 )
 _REPLACEMENT_SOURCE_SUFFIX_RE = re.compile(r"^\s*(?:as|to|with)\s+`[^`\n]+`", re.I)
 _REQUIRED_TARGET_PREFIX_RE = re.compile(
-    rf"(?:\b(?:and|then|but)|[;,.])\s+(?:{_REQUIRED_ACTION_VERBS})\b|"
+    rf"(?:\b(?:and|then|but)|[;,.])\s+(?:{_REQUIRED_ACTION_VERBS})(?=\s|:|$)|"
     r"\b(?:as|to|with)\s*$",
     re.I,
 )
@@ -285,9 +285,16 @@ def _starts_removal_list_context(criterion: str) -> bool:
     return text.endswith(":") or _INLINE_CODE_RE.search(text) is None
 
 
+def _has_required_action_context(text: str) -> bool:
+    return (
+        _REQUIRED_TARGET_PREFIX_RE.search(text or "") is not None
+        or _REQUIRED_ACTION_LABEL_RE.search(text or "") is not None
+    )
+
+
 def _is_pure_removal_list_context(criterion: str) -> bool:
     text = (criterion or "").strip()
-    return _starts_removal_list_context(text) and _REQUIRED_TARGET_PREFIX_RE.search(text) is None
+    return _starts_removal_list_context(text) and not _has_required_action_context(text)
 
 
 def _is_removal_list_child(criterion: str) -> bool:
@@ -328,15 +335,23 @@ def _value_groups(
             continue
         bullet_match = _BULLET_LINE_RE.match(line)
         criterion = bullet_match.group(2).strip() if bullet_match is not None else line.strip()
-        if skip_removal_headings and _is_pure_removal_list_context(criterion):
-            continue
+        base_indent = (
+            len(bullet_match.group(1).replace("\t", "    ")) if bullet_match is not None else None
+        )
         window: list[str] = [line]
         for follow in lines[idx + 1 : idx + 10]:
             if _SECTION_HEADING_RE.match(follow):
                 break
+            follow_bullet_match = _BULLET_LINE_RE.match(follow)
+            if base_indent is not None and follow_bullet_match is not None:
+                follow_indent = len(follow_bullet_match.group(1).replace("\t", "    "))
+                if follow_indent <= base_indent:
+                    break
             if not follow.strip() and len(window) > 1:
                 break
             window.append(follow)
+        if skip_removal_headings and _is_pure_removal_value_group(criterion, window):
+            continue
         tokens = tuple(
             token
             for token in _unique_tokens(
@@ -347,6 +362,17 @@ def _value_groups(
         if len(tokens) >= 2:
             groups.append((line.strip(), tokens))
     return groups
+
+
+def _is_pure_removal_value_group(criterion: str, window: list[str]) -> bool:
+    if not _is_pure_removal_list_context(criterion):
+        return False
+    for follow in window[1:]:
+        follow_match = _BULLET_LINE_RE.match(follow)
+        follow_criterion = follow_match.group(2).strip() if follow_match else follow.strip()
+        if _has_required_action_context(follow_criterion):
+            return False
+    return True
 
 
 def _acceptance_section(issue_body: str) -> str:
