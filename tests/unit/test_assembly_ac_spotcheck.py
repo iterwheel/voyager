@@ -333,6 +333,7 @@ def test_spotcheck_keeps_required_action_labels_under_removal_headings_required(
         "Add mode: `new-mode`",
         "Add mode `new-mode`",
         "Add api/v1: `new-mode`",
+        "Add/support `new-mode`",
         "Support mode: `new-mode`",
         "Audit mode: `new-mode`",
         "Describe mode: `new-mode`",

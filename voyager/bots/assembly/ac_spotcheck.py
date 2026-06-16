@@ -47,7 +47,7 @@ _REQUIRED_ACTION_VERBS = (
     r"require|set|support|surface|track|updat(?:e|ed|es|ing)|use|"
     r"validat(?:e|ed|es|ing)|verify|wire|write"
 )
-_REQUIRED_ACTION_BOUNDARY = r"(?=\s|:|$)"
+_REQUIRED_ACTION_BOUNDARY = rf"(?=\s|:|$|/(?:{_REQUIRED_ACTION_VERBS})(?=\s|:|$))"
 _REQUIRED_MODAL_ACTION = (
     rf"(?:must|should|shall|will|need(?:s|ed)?\s+to|has\s+to|have\s+to)\s+"
     rf"(?:{_REQUIRED_ACTION_VERBS}){_REQUIRED_ACTION_BOUNDARY}"
