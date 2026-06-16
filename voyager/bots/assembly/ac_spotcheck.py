@@ -242,14 +242,14 @@ def _removal_contexts_by_item(items: list[_CriterionItem]) -> list[tuple[str, st
     for idx, item in enumerate(items):
         while stack and item.depth <= items[stack[-1]].depth:
             stack.pop()
-        removal_parent = next(
-            (
-                items[parent_idx].text
-                for parent_idx in reversed(stack)
-                if _starts_removal_list_context(items[parent_idx].text)
-            ),
-            None,
-        )
+        removal_parent = None
+        for parent_idx in reversed(stack):
+            parent = items[parent_idx].text
+            if _has_required_value_context(parent):
+                break
+            if _starts_removal_list_context(parent):
+                removal_parent = parent
+                break
         context = (
             removal_parent
             if removal_parent is not None and _is_removal_list_child(item.text)
@@ -414,10 +414,18 @@ def _value_groups(
 def _value_group_token_lines(criterion: str, window: list[str]) -> list[str]:
     if not _starts_removal_list_context(criterion):
         return window
+    in_required_replacement_context = _has_required_value_context(criterion)
     token_lines = [window[0]]
     for follow in window[1:]:
         follow_match = _BULLET_LINE_RE.match(follow)
-        if follow_match is not None and _is_removal_list_child(follow_match.group(2).strip()):
+        follow_criterion = follow_match.group(2).strip() if follow_match else follow.strip()
+        if _has_required_value_context(follow_criterion):
+            in_required_replacement_context = True
+            token_lines.append(follow)
+            continue
+        if follow_match is not None and _is_removal_list_child(follow_criterion):
+            continue
+        if not in_required_replacement_context and _required_inline_tokens(follow_criterion):
             continue
         token_lines.append(follow)
     return token_lines
