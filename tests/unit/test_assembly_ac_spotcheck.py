@@ -301,6 +301,7 @@ def test_spotcheck_keeps_required_action_labels_under_removal_headings_required(
         "Add mode: `new-mode`",
         "Support mode: `new-mode`",
         "Audit mode: `new-mode`",
+        "Describe mode: `new-mode`",
     ):
         result = check_acceptance_exact_tokens(
             issue_body="",
