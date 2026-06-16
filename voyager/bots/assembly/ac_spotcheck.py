@@ -56,12 +56,19 @@ _REQUIRED_ACTION_LABEL_RE = re.compile(
     rf"^\s*(?:{_REQUIRED_ACTION_VERBS}){_REQUIRED_ACTION_BOUNDARY}",
     re.I,
 )
-_REQUIRED_ACTION_CONTEXT_RE = re.compile(
-    rf"\b(?:{_REQUIRED_ACTION_VERBS}){_REQUIRED_ACTION_BOUNDARY}",
+_REQUIRED_SUBJECT_ACTION_RE = re.compile(
+    rf"^\s*(?:(?:the\s+)?(?:assembly|change|cli|code|command|docs?|documentation|"
+    rf"implementation|patch|runner|system|tests?|validator|workflow)\s+)+"
+    rf"(?:{_REQUIRED_ACTION_VERBS}){_REQUIRED_ACTION_BOUNDARY}",
     re.I,
 )
 _REQUIRED_MODAL_ACTION_RE = re.compile(
     rf"\b{_REQUIRED_MODAL_ACTION}",
+    re.I,
+)
+_REMOVAL_NOUN_LABEL_RE = re.compile(
+    r"^\s*(?:activity\s+log|audit\s+log|change\s+log|event\s+log|run\s+log|"
+    r"workflow\s+log):?\s*$",
     re.I,
 )
 _REQUIRED_VALUE_LABEL_RE = re.compile(
@@ -321,7 +328,7 @@ def _has_required_value_context(text: str) -> bool:
 def _has_required_child_context(text: str) -> bool:
     return (
         _has_required_action_context(text)
-        or _REQUIRED_ACTION_CONTEXT_RE.search(text or "") is not None
+        or _REQUIRED_SUBJECT_ACTION_RE.search(text or "") is not None
     )
 
 
@@ -340,6 +347,8 @@ def _is_removal_list_child(criterion: str) -> bool:
     label_match = _REMOVAL_LIST_CHILD_LABEL_RE.fullmatch(prefix)
     if label_match is None:
         return False
+    if _REMOVAL_NOUN_LABEL_RE.fullmatch(prefix):
+        return True
     return not _has_required_child_context(prefix)
 
 

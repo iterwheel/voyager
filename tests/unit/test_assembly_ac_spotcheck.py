@@ -311,6 +311,7 @@ def test_spotcheck_applies_removal_context_to_labeled_children() -> None:
         "default: `old-mode`",
         "api/v1: `legacy-mode`",
         "allow-list `legacy-mode`",
+        "audit log: `legacy-mode`",
     ):
         result = check_acceptance_exact_tokens(
             issue_body="",
