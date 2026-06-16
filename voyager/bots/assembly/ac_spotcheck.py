@@ -40,7 +40,7 @@ _REMOVAL_LIST_CHILD_PREFIX_RE = re.compile(
     r"^\s*(?:[-\u2014:;,().]|\s)*(?:(?:the\s+)?(?:value|mode|token|entry|item)\s+)?$",
     re.I,
 )
-_REMOVAL_LIST_CHILD_LABEL_RE = re.compile(r"^\s*[A-Za-z0-9][A-Za-z0-9 ._-]{0,80}:?\s*$")
+_REMOVAL_LIST_CHILD_LABEL_RE = re.compile(r"^\s*[A-Za-z0-9][A-Za-z0-9 ./_-]{0,80}:?\s*$")
 _REQUIRED_ACTION_LABEL_RE = re.compile(
     r"^\s*(?:add|allow|audit|chang(?:e|ed|es|ing)|create|describe|document|emit|"
     r"enable|ensure|expose|include|introduce|keep|log|persist|record|register|"
@@ -173,7 +173,7 @@ def _required_token_groups(
         _append_required_token_group(groups, seen, "acceptance_criterion", criterion, tokens)
 
     ac_section = _acceptance_section(issue_body)
-    for criterion, tokens in _value_groups(ac_section):
+    for criterion, tokens in _value_groups(ac_section, skip_removal_headings=True):
         _append_required_token_group(groups, seen, "issue_value_group", criterion, tokens)
 
     return groups
@@ -302,7 +302,11 @@ def _append_required_token_group(
     groups.append((source, criterion, tokens))
 
 
-def _value_groups(issue_body: str) -> list[tuple[str, tuple[str, ...]]]:
+def _value_groups(
+    issue_body: str,
+    *,
+    skip_removal_headings: bool = False,
+) -> list[tuple[str, tuple[str, ...]]]:
     lines = (issue_body or "").replace("\r\n", "\n").splitlines()
     groups: list[tuple[str, tuple[str, ...]]] = []
     for idx, line in enumerate(lines):
@@ -310,7 +314,7 @@ def _value_groups(issue_body: str) -> list[tuple[str, tuple[str, ...]]]:
             continue
         bullet_match = _BULLET_LINE_RE.match(line)
         criterion = bullet_match.group(2).strip() if bullet_match is not None else line.strip()
-        if _starts_removal_list_context(criterion):
+        if skip_removal_headings and _starts_removal_list_context(criterion):
             continue
         window: list[str] = [line]
         for follow in lines[idx + 1 : idx + 10]:

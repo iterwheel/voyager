@@ -309,6 +309,7 @@ def test_spotcheck_applies_removal_context_to_labeled_children() -> None:
         "legacy mode `legacy-mode`",
         "legacy value: `old-mode`",
         "default: `old-mode`",
+        "api/v1: `legacy-mode`",
     ):
         result = check_acceptance_exact_tokens(
             issue_body="",
@@ -330,6 +331,7 @@ def test_spotcheck_keeps_required_action_labels_under_removal_headings_required(
     for child in (
         "Add mode: `new-mode`",
         "Add mode `new-mode`",
+        "Add api/v1: `new-mode`",
         "Support mode: `new-mode`",
         "Audit mode: `new-mode`",
         "Describe mode: `new-mode`",
