@@ -394,16 +394,33 @@ def _value_groups(
             window.append(follow)
         if _should_skip_removal_value_group(skip_removal_headings, criterion, window):
             continue
+        token_lines = _value_group_token_lines(criterion, window)
         tokens = tuple(
             token
             for token in _unique_tokens(
-                [token for value_line in window for token in _required_inline_tokens(value_line)]
+                [
+                    token
+                    for value_line in token_lines
+                    for token in _required_inline_tokens(value_line)
+                ]
             )
             if _HYPHEN_VALUE_RE.match(token)
         )
         if len(tokens) >= 2:
             groups.append((line.strip(), tokens))
     return groups
+
+
+def _value_group_token_lines(criterion: str, window: list[str]) -> list[str]:
+    if not _starts_removal_list_context(criterion):
+        return window
+    token_lines = [window[0]]
+    for follow in window[1:]:
+        follow_match = _BULLET_LINE_RE.match(follow)
+        if follow_match is not None and _is_removal_list_child(follow_match.group(2).strip()):
+            continue
+        token_lines.append(follow)
+    return token_lines
 
 
 def _should_skip_removal_value_group(

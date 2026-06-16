@@ -460,6 +460,33 @@ def test_spotcheck_keeps_neutral_replacement_value_groups_checkable() -> None:
     assert value_group.missing_tokens == ("new-mode", "modern-mode")
 
 
+def test_spotcheck_filters_removed_children_from_replacement_value_groups() -> None:
+    issue_body = """## Acceptance Criteria
+
+- [ ] Remove deprecated values:
+  - `legacy-mode`
+  - `old-mode`
+  Replacement:
+  `new-mode`, `modern-mode`
+"""
+
+    result = check_acceptance_exact_tokens(
+        issue_body=issue_body,
+        acceptance_criteria=["Remove deprecated values:"],
+        acceptance_criteria_items=[
+            {"text": "Remove deprecated values:", "depth": 0},
+        ],
+        changed_text='SUPPORTED_VALUES = ["new-mode"]',
+    )
+
+    assert not result.ok
+    value_group = next(
+        finding for finding in result.findings if "new-mode" in finding.required_tokens
+    )
+    assert value_group.required_tokens == ("new-mode", "modern-mode")
+    assert value_group.missing_tokens == ("modern-mode",)
+
+
 def test_spotcheck_filters_removed_value_lines_without_skipping_required_values() -> None:
     issue_body = """## Acceptance Criteria
 
