@@ -67,8 +67,8 @@ _REQUIRED_MODAL_ACTION_RE = re.compile(
     re.I,
 )
 _REMOVAL_NOUN_LABEL_RE = re.compile(
-    r"^\s*(?:activity\s+log|audit\s+log|change\s+log|event\s+log|run\s+log|"
-    r"workflow\s+log):?\s*$",
+    r"^\s*(?:activity\s+log|allow\s+list|audit\s+log|change\s+log|event\s+log|"
+    r"run\s+log|support\s+matrix|workflow\s+log):?\s*$",
     re.I,
 )
 _REQUIRED_VALUE_LABEL_RE = re.compile(
