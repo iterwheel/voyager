@@ -41,11 +41,14 @@ _REMOVAL_LIST_CHILD_PREFIX_RE = re.compile(
     re.I,
 )
 _REMOVAL_LIST_CHILD_LABEL_RE = re.compile(r"^\s*[A-Za-z0-9][A-Za-z0-9 ./_-]{0,80}:?\s*$")
-_REQUIRED_ACTION_LABEL_RE = re.compile(
-    r"^\s*(?:add|allow|audit|chang(?:e|ed|es|ing)|create|describe|document|emit|"
+_REQUIRED_ACTION_VERBS = (
+    r"add|allow|audit|chang(?:e|ed|es|ing)|create|describe|document|emit|"
     r"enable|ensure|expose|include|introduce|keep|log|persist|record|register|"
     r"require|set|support|surface|track|updat(?:e|ed|es|ing)|use|"
-    r"validat(?:e|ed|es|ing)|verify|wire|write)\b",
+    r"validat(?:e|ed|es|ing)|verify|wire|write"
+)
+_REQUIRED_ACTION_LABEL_RE = re.compile(
+    rf"^\s*(?:{_REQUIRED_ACTION_VERBS})\b",
     re.I,
 )
 _REPLACEMENT_SOURCE_PREFIX_RE = re.compile(
@@ -54,8 +57,7 @@ _REPLACEMENT_SOURCE_PREFIX_RE = re.compile(
 )
 _REPLACEMENT_SOURCE_SUFFIX_RE = re.compile(r"^\s*(?:as|to|with)\s+`[^`\n]+`", re.I)
 _REQUIRED_TARGET_PREFIX_RE = re.compile(
-    r"(?:\b(?:and|then|but)|[;,.])\s+"
-    r"(?:add|create|emit|include|introduce|keep|register|require|set|support|use|write)\b|"
+    rf"(?:\b(?:and|then|but)|[;,.])\s+(?:{_REQUIRED_ACTION_VERBS})\b|"
     r"\b(?:as|to|with)\s*$",
     re.I,
 )
