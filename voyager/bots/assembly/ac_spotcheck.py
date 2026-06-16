@@ -246,7 +246,7 @@ def _removal_contexts_by_item(items: list[_CriterionItem]) -> list[tuple[str, st
         removal_parent = None
         for parent_idx in reversed(stack):
             parent = items[parent_idx].text
-            if _has_required_value_context(parent):
+            if _has_required_value_context(parent) or _has_required_child_context(parent):
                 break
             if _starts_removal_list_context(parent):
                 removal_parent = parent
@@ -424,7 +424,11 @@ def _value_group_token_lines(criterion: str, window: list[str]) -> list[str]:
             in_required_replacement_context = True
             token_lines.append(follow)
             continue
-        if follow_match is not None and _is_removal_list_child(follow_criterion):
+        if (
+            follow_match is not None
+            and not in_required_replacement_context
+            and _is_removal_list_child(follow_criterion)
+        ):
             continue
         if not in_required_replacement_context and _required_inline_tokens(follow_criterion):
             continue

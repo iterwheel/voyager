@@ -385,6 +385,27 @@ def test_spotcheck_stops_removal_context_at_required_child_headings() -> None:
     assert result.findings[0].missing_tokens == ("new-mode",)
 
 
+def test_spotcheck_stops_removal_context_at_subject_required_headings() -> None:
+    result = check_acceptance_exact_tokens(
+        issue_body="",
+        acceptance_criteria=[
+            "Remove deprecated values:",
+            "Tests verify replacement values:",
+            "`new-mode`",
+        ],
+        acceptance_criteria_items=[
+            {"text": "Remove deprecated values:", "depth": 0},
+            {"text": "Tests verify replacement values:", "depth": 1},
+            {"text": "`new-mode`", "depth": 2},
+        ],
+        changed_text='SUPPORTED_VALUES = ["modern-mode"]',
+    )
+
+    assert not result.ok
+    assert result.findings[0].required_tokens == ("new-mode",)
+    assert result.findings[0].missing_tokens == ("new-mode",)
+
+
 def test_spotcheck_matches_values_colon_headings_in_value_groups() -> None:
     issue_body = """## Acceptance Criteria
 
@@ -507,6 +528,32 @@ def test_spotcheck_keeps_same_line_replacement_values_checkable() -> None:
     )
     assert value_group.required_tokens == ("new-mode", "modern-mode")
     assert value_group.missing_tokens == ("new-mode", "modern-mode")
+
+
+def test_spotcheck_keeps_bullet_replacement_values_checkable() -> None:
+    issue_body = """## Acceptance Criteria
+
+- [ ] Remove deprecated values:
+  Replacement:
+  - `new-mode`
+  - `modern-mode`
+"""
+
+    result = check_acceptance_exact_tokens(
+        issue_body=issue_body,
+        acceptance_criteria=["Remove deprecated values:"],
+        acceptance_criteria_items=[
+            {"text": "Remove deprecated values:", "depth": 0},
+        ],
+        changed_text='SUPPORTED_VALUES = ["new-mode"]',
+    )
+
+    assert not result.ok
+    value_group = next(
+        finding for finding in result.findings if "new-mode" in finding.required_tokens
+    )
+    assert value_group.required_tokens == ("new-mode", "modern-mode")
+    assert value_group.missing_tokens == ("modern-mode",)
 
 
 def test_spotcheck_filters_removed_children_from_replacement_value_groups() -> None:
