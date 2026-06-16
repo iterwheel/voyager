@@ -277,6 +277,7 @@ def test_spotcheck_keeps_required_children_under_removal_headings_required() -> 
 def test_spotcheck_applies_removal_context_to_labeled_children() -> None:
     for child in (
         "legacy mode: `legacy-mode`",
+        "legacy mode `legacy-mode`",
         "legacy value: `old-mode`",
         "default: `old-mode`",
     ):
@@ -299,6 +300,7 @@ def test_spotcheck_applies_removal_context_to_labeled_children() -> None:
 def test_spotcheck_keeps_required_action_labels_under_removal_headings_required() -> None:
     for child in (
         "Add mode: `new-mode`",
+        "Add mode `new-mode`",
         "Support mode: `new-mode`",
         "Audit mode: `new-mode`",
         "Describe mode: `new-mode`",

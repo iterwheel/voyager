@@ -40,7 +40,7 @@ _REMOVAL_LIST_CHILD_PREFIX_RE = re.compile(
     r"^\s*(?:[-\u2014:;,().]|\s)*(?:(?:the\s+)?(?:value|mode|token|entry|item)\s+)?$",
     re.I,
 )
-_REMOVAL_LIST_CHILD_LABEL_RE = re.compile(r"^\s*[A-Za-z0-9][A-Za-z0-9 ._-]{0,80}:\s*$")
+_REMOVAL_LIST_CHILD_LABEL_RE = re.compile(r"^\s*[A-Za-z0-9][A-Za-z0-9 ._-]{0,80}:?\s*$")
 _REQUIRED_ACTION_LABEL_RE = re.compile(
     r"^\s*(?:add|allow|audit|chang(?:e|ed|es|ing)|create|describe|document|emit|"
     r"enable|ensure|expose|include|introduce|keep|log|persist|record|register|"
