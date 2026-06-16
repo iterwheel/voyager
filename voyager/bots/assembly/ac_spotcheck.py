@@ -57,8 +57,9 @@ _REQUIRED_ACTION_LABEL_RE = re.compile(
     re.I,
 )
 _REQUIRED_SUBJECT_ACTION_RE = re.compile(
-    rf"^\s*(?:(?:the\s+)?(?:assembly|change|cli|code|command|docs?|documentation|"
-    rf"implementation|patch|runner|system|tests?|validator|workflow)\s+)+"
+    rf"^\s*(?:(?:the\s+)?(?:(?:[A-Za-z][A-Za-z0-9_-]*\s+){{0,3}}"
+    rf"(?:test\s+suite|tests?)|assembly|change|cli|code|command|docs?|"
+    rf"documentation|implementation|patch|runner|system|validator|workflow)\s+)+"
     rf"(?:{_REQUIRED_ACTION_VERBS}){_REQUIRED_ACTION_BOUNDARY}",
     re.I,
 )
