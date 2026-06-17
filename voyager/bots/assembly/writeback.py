@@ -767,12 +767,27 @@ async def dispatch_assembly_writeback(
         # Check before every adapter execution so we don't waste compute
         # on a PR that has already exceeded the threshold.
         #
-        # Uses ``snapshot_labels`` (fetched before the lock) rather than a
-        # fresh ``get_issue`` call because the per-branch lock serialises
-        # deliveries for the same branch, so no concurrent fix round can
-        # have advanced the label state between our snapshot and now.
+        # Re-fetch authoritative labels now that we hold the per-branch lock
+        # (Codex P2). ``snapshot_labels`` were captured *before* the lock, so
+        # two concurrent same-branch deliveries could both observe a pre-
+        # threshold round; the second to enter the lock would then compute its
+        # round from stale labels and execute another fix the breaker should
+        # have stopped. A fresh ``get_issue`` inside the lock closes that
+        # window. On fetch failure we fall back to the pre-lock snapshot.
         # --------------------------------------------------------------
-        current_labels = _issue_labels_simple({"labels": snapshot_labels})
+        try:
+            locked_issue = await client.get_issue(
+                ASSEMBLY_AGENT_SLUG, repository, contract.issue_number
+            )
+            locked_labels = locked_issue.get("labels")
+        except (httpx.HTTPError, TimeoutError):
+            locked_labels = None
+        # Only trust an authoritative label list; on any non-list (fetch
+        # failure, partial payload) fall back to the pre-lock snapshot so the
+        # breaker decision never derives from an unusable value.
+        if not isinstance(locked_labels, list):
+            locked_labels = snapshot_labels
+        current_labels = _issue_labels_simple({"labels": locked_labels})
 
         if LOOP_CIRCUIT_BROKEN_LABEL in current_labels:
             base_result["pull_request"] = {
@@ -799,7 +814,11 @@ async def dispatch_assembly_writeback(
         max_rounds = _max_fix_rounds_threshold(cfg)
         if current_round >= max_rounds:
             base_result = await _apply_circuit_breaker(
-                client, repository, contract.issue_number, base_result
+                client,
+                repository,
+                contract.issue_number,
+                base_result,
+                is_dry_run=is_dry_run,
             )
             base_result["pull_request"] = {
                 "number": None,
@@ -1191,13 +1210,24 @@ async def _apply_circuit_breaker(
     repository: str,
     issue_number: int,
     result: dict[str, Any],
+    *,
+    is_dry_run: bool = False,
 ) -> dict[str, Any]:
     """Apply ``loop-circuit-broken`` label and exactly one escalation comment.
 
     Returns the updated *result* dict. Idempotent: if the label already
     exists, skipping the comment is safe because the upsert marker
     guarantees at most one escalation comment in all cases.
+
+    Honors the dry-run contract (Codex P2): when ``is_dry_run`` is set the
+    breaker performs no GitHub mutations (no label, no escalation comment) and
+    returns early. The progress comment still reports that the breaker *would*
+    fire, matching the dry-run reporting surface used elsewhere.
     """
+    if is_dry_run:
+        result.setdefault("circuit_breaker", {})["dry_run"] = True
+        return result
+
     # Apply the label (idempotent — POST /labels is a no-op if the label
     # already exists on the issue).
     try:
