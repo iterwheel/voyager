@@ -30,6 +30,7 @@ from voyager.bots.assembly.constants import (
     ASSEMBLY_BACKEND_PI_OH_MY_PI_DEEPSEEK,
 )
 from voyager.bots.assembly.job_contract import build_job_contract
+from voyager.bots.assembly.maturity import GateMaturity
 from voyager.bots.assembly.publish import PublishResult
 
 VALID_SHA = "0123456789abcdef0123456789abcdef01234567"
@@ -678,6 +679,54 @@ async def test_pi_adapter_ac_spotcheck_blocks_publish_and_retains_bundle(
     assert metadata["failure_diagnostic"]["phase"] == "acceptance_spotcheck"
     assert metadata["details"]["ac_spotcheck"]["ok"] is False
     assert metadata["details"]["patch_left_behind"] is True
+
+
+@pytest.mark.asyncio
+async def test_pi_adapter_l1_ac_spotcheck_surfaces_advisory_before_publish(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    issue_body = """## Acceptance Criteria
+
+- [ ] Register values `mandatory-bind` and `inherit-only`
+"""
+    contract = build_job_contract(
+        issue={
+            "number": 204,
+            "title": "[Task]: Add Disposition fields",
+            "body": issue_body,
+            "html_url": "https://example/issues/204",
+        },
+        repository="frankyxhl/alfred",
+        branch_name="204-add-disposition-fields",
+        delivery_id="delivery-ac-spotcheck-l1",
+    )
+    recorder = _CommandRecorder(status_porcelain="M src/fx_alfred/core/schema.py\n")
+    _install_command_fakes(monkeypatch, recorder)
+
+    async def fake_changed_text(*args: Any, **kwargs: Any) -> str:
+        _ = (args, kwargs)
+        return 'DISPOSITION_OPTIONAL_OVERLAY = "optional-overlay"\n'
+
+    monkeypatch.setattr(adapters_module, "_AC_SPOTCHECK_MATURITY", GateMaturity.L1)
+    monkeypatch.setattr(adapters_module, "_changed_text_since_base", fake_changed_text)
+    adapter = PiOhMyPiDeepSeekAdapter()
+
+    result = await adapter.execute(
+        contract,
+        _context(
+            tmp_path,
+            token="ghs_stage2_ac_secret",
+            audit_id="asmb-acac1111acac1111",
+        ),
+    )
+
+    assert result.status == "executed"
+    assert result.commit_shas == [VALID_SHA]
+    assert "L1 advisory gate findings were recorded and surfaced" in result.summary
+    assert recorder.git_calls("push"), "L1 spot-check findings must not block publish"
+    assert result.details["ac_spotcheck_maturity"] == "L1"
+    assert result.details["ac_spotcheck"]["ok"] is False
 
 
 @pytest.mark.asyncio

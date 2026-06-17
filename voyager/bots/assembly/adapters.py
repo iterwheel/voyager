@@ -580,7 +580,7 @@ class PiOhMyPiDeepSeekAdapter:
             return AdapterResult(
                 status="executed",
                 commit_shas=[head_sha],
-                summary="OMP completed, committed changes, and pushed the Assembly branch.",
+                summary=_executed_summary(details),
                 details=details,
             )
         except TimeoutError:
@@ -903,6 +903,23 @@ def _spotcheck_excerpt(result: AcceptanceSpotCheckResult) -> str:
         missing = ", ".join(finding.missing_tokens)
         lines.append(f"{finding.source}: missing {missing}")
     return "\n".join(lines)
+
+
+def _executed_summary(details: dict[str, Any]) -> str:
+    summary = "OMP completed, committed changes, and pushed the Assembly branch."
+    if _has_l1_advisory_gate_findings(details):
+        return f"{summary} L1 advisory gate findings were recorded and surfaced."
+    return summary
+
+
+def _has_l1_advisory_gate_findings(details: dict[str, Any]) -> bool:
+    if details.get("ac_spotcheck_maturity") != "L1":
+        return False
+    spotcheck = details.get("ac_spotcheck")
+    if not isinstance(spotcheck, dict):
+        return False
+    findings = spotcheck.get("findings")
+    return isinstance(findings, list) and bool(findings)
 
 
 def _ac_spotcheck_enabled() -> bool:
