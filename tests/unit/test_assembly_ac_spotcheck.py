@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from voyager.bots.assembly.ac_spotcheck import check_acceptance_exact_tokens
+from voyager.bots.assembly.ac_spotcheck import (
+    AcceptanceSpotCheckFinding,
+    AcceptanceSpotCheckResult,
+    check_acceptance_exact_tokens,
+)
 
 
 def test_spotcheck_catches_alfred_204_disposition_value_mismatch() -> None:
@@ -690,3 +694,35 @@ def test_spotcheck_passes_when_exact_tokens_are_present() -> None:
     )
 
     assert result.ok
+
+
+def test_advisory_finding_does_not_block() -> None:
+    result = AcceptanceSpotCheckResult(
+        findings=(
+            AcceptanceSpotCheckFinding(
+                direction="advisory",
+                source="acceptance_criterion",
+                criterion="Add value `mandatory-bind`",
+                required_tokens=("mandatory-bind",),
+                missing_tokens=("mandatory-bind",),
+            ),
+        ),
+    )
+    assert not result.ok
+    assert not result.blocked
+
+
+def test_block_finding_blocks() -> None:
+    result = AcceptanceSpotCheckResult(
+        findings=(
+            AcceptanceSpotCheckFinding(
+                direction="block",
+                source="acceptance_criterion",
+                criterion="Add value `mandatory-bind`",
+                required_tokens=("mandatory-bind",),
+                missing_tokens=("mandatory-bind",),
+            ),
+        ),
+    )
+    assert not result.ok
+    assert result.blocked

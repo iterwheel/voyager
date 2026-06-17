@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Literal
 
 _INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]*[A-Za-z0-9]$")
@@ -108,6 +108,7 @@ class AcceptanceSpotCheckFinding:
     criterion: str
     required_tokens: tuple[str, ...]
     missing_tokens: tuple[str, ...]
+    direction: Literal["block", "advisory"] = "block"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -122,6 +123,11 @@ class AcceptanceSpotCheckResult:
     @property
     def ok(self) -> bool:
         return not self.findings
+
+    @property
+    def blocked(self) -> bool:
+        """True when at least one finding has direction 'block'."""
+        return any(f.direction == "block" for f in self.findings)
 
     def summary(self) -> str:
         if self.ok:
