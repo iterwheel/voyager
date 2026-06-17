@@ -561,6 +561,7 @@ def _record_loop_summary(
     issue_number: int,
     pr_number: int | None,
     adapter_result: dict[str, Any] | None,
+    testpilot_result: dict[str, Any] | None = None,
     audit_id: str | None = None,
     root: Path | None = None,
 ) -> None:
@@ -575,13 +576,9 @@ def _record_loop_summary(
         root=root,
     )
     next_round = len(existing) + 1
-    details = adapter_result.get("details") if isinstance(adapter_result, dict) else {}
-    details = details if isinstance(details, dict) else {}
-    commits = (
-        len(adapter_result.get("commit_shas") or ()) if isinstance(adapter_result, dict) else 0
-    )
-    omp_session_path = details.get("omp_session_jsonl_path")
-    est_tokens = _estimate_tokens_from_session(omp_session_path)
+    result_parts = [adapter_result, testpilot_result]
+    commits = sum(_adapter_commit_count(part) for part in result_parts)
+    est_tokens = sum(_adapter_est_tokens(part) for part in result_parts)
     summary = LoopSummary(
         repository=repository,
         issue_number=issue_number,
@@ -600,6 +597,39 @@ def _record_loop_summary(
             extra={"repository": repository, "issue": issue_number, "round": next_round},
             exc_info=True,
         )
+
+
+def _adapter_commit_count(adapter_result: dict[str, Any] | None) -> int:
+    if not isinstance(adapter_result, dict):
+        return 0
+    commit_shas = adapter_result.get("commit_shas")
+    if isinstance(commit_shas, (list, tuple)):
+        return len(commit_shas)
+    return 0
+
+
+def _adapter_est_tokens(adapter_result: dict[str, Any] | None) -> int:
+    if not isinstance(adapter_result, dict):
+        return 0
+    details = adapter_result.get("details")
+    if not isinstance(details, dict):
+        return 0
+    omp_session_path = details.get("omp_session_jsonl_path")
+    return _estimate_tokens_from_session(
+        omp_session_path if isinstance(omp_session_path, str) else None
+    )
+
+
+def _pull_request_number_from_result(result: dict[str, Any]) -> int | None:
+    pull_request = result.get("pull_request")
+    if not isinstance(pull_request, dict):
+        return None
+    number = pull_request.get("number")
+    if isinstance(number, int):
+        return number
+    if isinstance(number, str) and number.strip().isdigit():
+        return int(number)
+    return None
 
 
 async def _live_issue_from_route(
@@ -908,7 +938,7 @@ async def dispatch_assembly_writeback(
             _record_loop_summary(
                 repository=repository,
                 issue_number=contract.issue_number,
-                pr_number=contract.issue_number,
+                pr_number=_pull_request_number_from_result(base_result),
                 adapter_result=base_result.get("adapter_result"),
                 audit_id=base_result.get("audit_id"),
             )
@@ -950,7 +980,7 @@ async def dispatch_assembly_writeback(
             _record_loop_summary(
                 repository=repository,
                 issue_number=contract.issue_number,
-                pr_number=contract.issue_number,
+                pr_number=_pull_request_number_from_result(base_result),
                 adapter_result=base_result.get("adapter_result"),
                 audit_id=base_result.get("audit_id"),
             )
@@ -1050,8 +1080,9 @@ async def dispatch_assembly_writeback(
         _record_loop_summary(
             repository=repository,
             issue_number=contract.issue_number,
-            pr_number=contract.issue_number,
+            pr_number=_pull_request_number_from_result(base_result),
             adapter_result=base_result.get("adapter_result"),
+            testpilot_result=base_result.get("testpilot_result"),
             audit_id=base_result.get("audit_id"),
         )
         return base_result
