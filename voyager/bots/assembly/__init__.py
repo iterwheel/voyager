@@ -57,6 +57,7 @@ from .constants import (
     VERIFICATION_COMMANDS,
 )
 from .job_contract import AcceptanceCriterionItem, AssemblyJobContract, build_job_contract
+from .maturity import DEFAULT_GATE_MATURITY, GateMaturity
 from .phase import (
     PhaseMode,
     PhaseName,
@@ -88,6 +89,7 @@ __all__ = [
     "CODEX_REVIEW_BOT_LOGIN",
     "CODEX_REVIEW_TRIGGER_BODY",
     "DEFAULT_AUTHORIZED_ASSOCIATIONS",
+    "DEFAULT_GATE_MATURITY",
     "FORBIDDEN_OPERATIONS",
     "REFUSAL_UNAUTHORIZED_ACTOR",
     "VERIFICATION_COMMANDS",
@@ -102,6 +104,7 @@ __all__ = [
     "DryRunAdapter",
     "ExecutionAdapter",
     "FakeSubprocessAdapter",
+    "GateMaturity",
     "PhaseMode",
     "PhaseMode",
     "PhaseName",

@@ -36,9 +36,17 @@ from .constants import (
     ASSEMBLY_FAKE_SUBPROCESS_OUTPUT_ENV,
 )
 from .job_contract import AssemblyJobContract
+from .maturity import GateMaturity
 from .publish import publish_branch
 
 _COMMIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+_AC_SPOTCHECK_MATURITY: GateMaturity = GateMaturity.L3
+"""Explicit maturity for the acceptance-criteria spotcheck gate.
+
+This gate was shipped as L3 (blocking) from day one via the #152 AC
+spotcheck.  New gates should default to ``GateMaturity.L1`` so they
+gradually earn their blocking power.
+"""
 _FAILURE_TAIL_LIMIT = 600
 
 
@@ -527,22 +535,26 @@ class PiOhMyPiDeepSeekAdapter:
                 )
                 if not ac_spotcheck.ok:
                     details["ac_spotcheck"] = ac_spotcheck.to_dict()
-                    return _failed_pi_result(
-                        ac_spotcheck.summary(),
-                        token,
-                        details,
-                        failure_diagnostic=_simple_diagnostic(
-                            phase="acceptance_spotcheck",
-                            command_category="acceptance_criteria",
-                            command="exact-token spot-check",
-                            stdout_tail=_spotcheck_excerpt(ac_spotcheck),
-                            secret=token,
-                        ),
-                        temp_root_path=temp_root_path,
-                        contract=contract,
-                        context=context,
-                        status="blocked",
-                    )
+                    if _AC_SPOTCHECK_MATURITY == GateMaturity.L1:
+                        # L1: advisory — record findings but do not block.
+                        details["ac_spotcheck_maturity"] = "L1"
+                    else:
+                        return _failed_pi_result(
+                            ac_spotcheck.summary(),
+                            token,
+                            details,
+                            failure_diagnostic=_simple_diagnostic(
+                                phase="acceptance_spotcheck",
+                                command_category="acceptance_criteria",
+                                command="exact-token spot-check",
+                                stdout_tail=_spotcheck_excerpt(ac_spotcheck),
+                                secret=token,
+                            ),
+                            temp_root_path=temp_root_path,
+                            contract=contract,
+                            context=context,
+                            status="blocked",
+                        )
 
             publish_result = await publish_branch(
                 repository=repository,
