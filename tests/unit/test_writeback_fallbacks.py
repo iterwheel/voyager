@@ -64,6 +64,50 @@ def test_dispatch_compute_fallback_reason_does_not_leak_exception_message(
     assert "https://" not in text
 
 
+def test_dispatch_wires_default_known_limitation_store(monkeypatch) -> None:
+    import voyager.bots.clearance as clearance_pkg
+    import voyager.bots.clearance.known_limitations as known_limitations_mod
+    import voyager.bots.clearance.pipeline as pipeline_mod
+    from voyager.core.writeback import dispatch_route_writeback
+
+    captured: dict[str, Any] = {}
+
+    class FakeKnownLimitationStore:
+        pass
+
+    async def capture_compute(*args, **kwargs):
+        _ = args
+        captured.update(kwargs)
+        return {
+            "enabled": True,
+            "status": "ready",
+            "reason": "ready",
+            "sync_actions": [],
+            "sync_actions_count": 0,
+        }
+
+    monkeypatch.setattr(
+        known_limitations_mod,
+        "KnownLimitationStore",
+        FakeKnownLimitationStore,
+    )
+    monkeypatch.setattr(pipeline_mod, "compute_clearance_automation", capture_compute)
+    monkeypatch.setattr(clearance_pkg, "enrich_clearance_route", _empty_enriched_route)
+    monkeypatch.setenv("DRY_RUN", "true")
+
+    result = asyncio.run(
+        dispatch_route_writeback(
+            object(),
+            _clearance_route(),
+            repository="iterwheel/voyager",
+            store=object(),
+        )
+    )
+
+    assert result["automation"]["status"] == "ready"
+    assert isinstance(captured["known_limitation_store"], FakeKnownLimitationStore)
+
+
 def test_dispatch_enrichment_fallback_reason_does_not_leak_exception_message(
     monkeypatch,
     caplog,
