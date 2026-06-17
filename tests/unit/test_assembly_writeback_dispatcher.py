@@ -294,6 +294,64 @@ def test_adapter_failure_diagnostic_reaches_comment_manifest_and_log(
     )
 
 
+def test_l1_gate_findings_reach_progress_comment_and_manifest(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from voyager.bots.assembly import adapters
+    from voyager.bots.assembly import writeback as wb_module
+
+    monkeypatch.setenv("DRY_RUN", "false")
+
+    class _L1GateAdapter:
+        name = "fake-l1-gate-adapter"
+
+        async def execute(self, contract, context):
+            _ = (contract, context)
+            return adapters.AdapterResult(
+                status="executed",
+                commit_shas=["a" * 40],
+                summary="changes published with advisory gate findings",
+                details={
+                    "ac_spotcheck_maturity": "L1",
+                    "ac_spotcheck": {
+                        "ok": False,
+                        "findings": [
+                            {
+                                "source": "acceptance_criterion",
+                                "criterion": "Add value `mandatory-bind`",
+                                "required_tokens": ["mandatory-bind"],
+                                "missing_tokens": ["mandatory-bind"],
+                                "direction": "block",
+                            }
+                        ],
+                    },
+                },
+            )
+
+    monkeypatch.setattr(
+        wb_module, "select_execution_adapter", lambda backend=None: _L1GateAdapter()
+    )
+    client = _mock_client_for_writes()
+
+    result = asyncio.run(
+        dispatch_assembly_writeback(client, _route(), repository="iterwheel/voyager-sandbox")
+    )
+
+    assert result["adapter_result"]["status"] == "executed"
+    body = client.upsert_issue_comment.await_args.kwargs["body"]
+    assert "**Advisory gate findings:**" in body
+    assert "Acceptance spot-check (`L1`) reported non-blocking finding(s)" in body
+    assert "acceptance_criterion: missing `mandatory-bind`" in body
+    assert "Add value `mandatory-bind`" in body
+
+    manifest_path = find_audit_manifest(result["audit_id"], root=tmp_path / "audit")
+    assert manifest_path is not None
+    manifest = load_audit_manifest(manifest_path)
+    findings = manifest.extra["advisory_gate_findings"]
+    assert findings[0]["missing_values"] == ["mandatory-bind"]
+
+
 def test_adapter_non_mapping_failure_diagnostic_does_not_break_manifest(
     monkeypatch,
     tmp_path,

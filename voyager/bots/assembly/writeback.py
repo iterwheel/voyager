@@ -502,6 +502,7 @@ def _write_audit_manifest(
     failure_diagnostic = (
         dict(failure_diagnostic_raw) if isinstance(failure_diagnostic_raw, dict) else {}
     )
+    advisory_gate_findings = _advisory_gate_findings_from_details(details)
     manifest = AssemblyAuditManifest(
         audit_id=audit_id,
         repository=repository,
@@ -530,6 +531,7 @@ def _write_audit_manifest(
             "branch": result.get("branch"),
             "pull_request": pull_request,
             "writeback_failures": result.get("writeback_failures") or [],
+            "advisory_gate_findings": advisory_gate_findings,
         },
     )
     try:
@@ -549,6 +551,31 @@ def _write_audit_manifest(
             extra={"repository": repository, "issue": contract.issue_number},
             exc_info=True,
         )
+
+
+def _advisory_gate_findings_from_details(details: dict[str, Any]) -> list[dict[str, Any]]:
+    if details.get("ac_spotcheck_maturity") != "L1":
+        return []
+    spotcheck = details.get("ac_spotcheck")
+    if not isinstance(spotcheck, dict):
+        return []
+    findings = spotcheck.get("findings")
+    if not isinstance(findings, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        normalized.append(
+            {
+                "source": finding.get("source"),
+                "criterion": finding.get("criterion"),
+                "required_values": finding.get("required_tokens") or [],
+                "missing_values": finding.get("missing_tokens") or [],
+                "direction": finding.get("direction"),
+            }
+        )
+    return normalized
 
 
 async def _live_issue_from_route(

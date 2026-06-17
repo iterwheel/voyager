@@ -81,6 +81,48 @@ def _format_backend_failure(adapter_result: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _format_advisory_gate_findings(adapter_result: dict[str, Any]) -> list[str]:
+    details = adapter_result.get("details")
+    if not isinstance(details, dict):
+        return []
+    if details.get("ac_spotcheck_maturity") != "L1":
+        return []
+    spotcheck = details.get("ac_spotcheck")
+    if not isinstance(spotcheck, dict):
+        return []
+    findings = spotcheck.get("findings")
+    if not isinstance(findings, list) or not findings:
+        return []
+
+    lines = [
+        "",
+        "**Advisory gate findings:**",
+        "- Acceptance spot-check (`L1`) reported non-blocking finding(s); publish continued.",
+    ]
+    for finding in findings[:5]:
+        if not isinstance(finding, dict):
+            continue
+        missing_tokens = finding.get("missing_tokens")
+        if isinstance(missing_tokens, list):
+            missing = ", ".join(
+                sanitize_public_text(str(token), limit=80) for token in missing_tokens
+            )
+        else:
+            missing = ""
+        criterion = sanitize_public_text(finding.get("criterion") or "", limit=180)
+        source = sanitize_public_text(finding.get("source") or "gate", limit=80)
+        if missing:
+            lines.append(f"- {source}: missing {_code_span(missing)}")
+        elif criterion:
+            lines.append(f"- {source}: finding recorded")
+        if criterion:
+            lines.append(f"  > {criterion}")
+    extra_count = len(findings) - 5
+    if extra_count > 0:
+        lines.append(f"- {extra_count} additional finding(s) recorded in the audit manifest.")
+    return lines
+
+
 def _format_refusal(refusal: dict[str, Any]) -> str:
     reason = refusal.get("reason", "unknown")
 
@@ -247,6 +289,7 @@ def build_assembly_comment(
         lines.append(f"- {lookup_hint(audit_id, str(repository), int(issue_number))}")
 
     lines.extend(_format_backend_failure(adapter_result))
+    lines.extend(_format_advisory_gate_findings(adapter_result))
 
     criteria = contract.get("acceptance_criteria") or []
     if criteria:
