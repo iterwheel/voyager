@@ -18,6 +18,7 @@ import inspect
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -42,6 +43,9 @@ from .constants import (
     ASSEMBLY_AGENT_SLUG,
     ASSEMBLY_COMMENT_MARKER,
     ASSEMBLY_EXECUTION_BACKEND_ENV,
+    ASSEMBLY_FIX_ROUND_LABEL_PREFIX,
+    ASSEMBLY_MAX_FIX_ROUNDS_DEFAULT,
+    ASSEMBLY_MAX_FIX_ROUNDS_ENV,
     ASSEMBLY_PI_COMMAND_PATH_ENV,
     ASSEMBLY_PI_DEFAULT_COMMAND_PATH,
     ASSEMBLY_PI_DEFAULT_TIMEOUT_SECONDS,
@@ -49,6 +53,7 @@ from .constants import (
     ASSEMBLY_PI_TIMEOUT_SECONDS_ENV,
     ASSEMBLY_PI_WORKDIR_ENV,
     CODEX_REVIEW_TRIGGER_BODY,
+    LOOP_CIRCUIT_BROKEN_LABEL,
 )
 from .job_contract import AssemblyJobContract, build_job_contract
 from .phase import (
@@ -758,6 +763,65 @@ async def dispatch_assembly_writeback(
             command_flags=command_flags,
         )
         # --------------------------------------------------------------
+        # Circuit breaker — stop unbounded fix loops (issue #157).
+        # Check before every adapter execution so we don't waste compute
+        # on a PR that has already exceeded the threshold.
+        #
+        # Uses ``snapshot_labels`` (fetched before the lock) rather than a
+        # fresh ``get_issue`` call because the per-branch lock serialises
+        # deliveries for the same branch, so no concurrent fix round can
+        # have advanced the label state between our snapshot and now.
+        # --------------------------------------------------------------
+        current_labels = _issue_labels_simple({"labels": snapshot_labels})
+
+        if LOOP_CIRCUIT_BROKEN_LABEL in current_labels:
+            base_result["pull_request"] = {
+                "number": None,
+                "url": None,
+                "action": "circuit_broken_already",
+            }
+            base_result["applied"] = False
+            _persist_session_metadata(
+                contract=contract,
+                result=base_result,
+                repository=repository,
+            )
+            _write_audit_manifest(
+                contract=contract,
+                result=base_result,
+                delivery_id=delivery_id,
+                repository=repository,
+            )
+            await _upsert_progress_comments(client, contract, repository, base_result)
+            return base_result
+
+        current_round = _read_current_fix_round(current_labels)
+        max_rounds = _max_fix_rounds_threshold(cfg)
+        if current_round >= max_rounds:
+            base_result = await _apply_circuit_breaker(
+                client, repository, contract.issue_number, base_result
+            )
+            base_result["pull_request"] = {
+                "number": None,
+                "url": None,
+                "action": "circuit_broken",
+            }
+            base_result["applied"] = False
+            _persist_session_metadata(
+                contract=contract,
+                result=base_result,
+                repository=repository,
+            )
+            _write_audit_manifest(
+                contract=contract,
+                result=base_result,
+                delivery_id=delivery_id,
+                repository=repository,
+            )
+            await _upsert_progress_comments(client, contract, repository, base_result)
+            return base_result
+
+        # --------------------------------------------------------------
         # Adapter execution.  Failures are captured but do NOT abort the
         # progress-comment step (D11 "always runs").
         # --------------------------------------------------------------
@@ -900,6 +964,29 @@ async def dispatch_assembly_writeback(
             pr_ok = await _ensure_pull_request(client, repository, contract, base_result)
 
         # --------------------------------------------------------------
+        # Increment fix-round counter after a successful push.
+        # --------------------------------------------------------------
+        if pr_ok:
+            next_round = current_round + 1
+            try:
+                await client.add_labels(
+                    ASSEMBLY_AGENT_SLUG,
+                    repository,
+                    contract.issue_number,
+                    [f"{ASSEMBLY_FIX_ROUND_LABEL_PREFIX}{next_round}"],
+                )
+            except (httpx.HTTPError, TimeoutError) as exc:
+                base_result["writeback_failures"].append(
+                    build_writeback_failure(
+                        operation="incrementFixRound",
+                        exc=exc,
+                        repository=repository,
+                        issue=contract.issue_number,
+                    )
+                )
+
+        # --------------------------------------------------------------
+
         # TestPilot phase (two-phase mode only)
         # --------------------------------------------------------------
         if phase_mode == PhaseMode.TWO_PHASE and pr_ok:
@@ -1046,6 +1133,121 @@ async def _post_refusal_comment(
                 issue=int(issue_number),
             )
         )
+    return result
+
+
+# Circuit breaker marker — ensures exactly one escalation comment per PR.
+_CIRCUIT_BREAKER_COMMENT_MARKER = "<!-- iterwheel:assembly-circuit-breaker -->"
+_FIX_ROUND_LABEL_RE = re.compile(rf"^{re.escape(ASSEMBLY_FIX_ROUND_LABEL_PREFIX)}(\d+)$")
+
+
+def _issue_labels_simple(issue: dict[str, Any]) -> list[str]:
+    """Extract flat label names from an issue/PR snapshot."""
+    raw = issue.get("labels") or []
+    names: list[str] = []
+    for item in raw:
+        if isinstance(item, str):
+            names.append(item)
+        elif isinstance(item, dict):
+            name = item.get("name")
+            if isinstance(name, str):
+                names.append(name)
+    return names
+
+
+def _read_current_fix_round(labels: list[str]) -> int:
+    """Return the current fix-round count from the label list (0 = first round)."""
+    max_round = 0
+    for label in labels:
+        m = _FIX_ROUND_LABEL_RE.match(label)
+        if m:
+            round_n = int(m.group(1))
+            if round_n > max_round:
+                max_round = round_n
+    return max_round
+
+
+def _max_fix_rounds_threshold(cfg: Any | None) -> int:
+    """Resolve the max fix rounds threshold: env var > config > default."""
+    raw = os.environ.get(ASSEMBLY_MAX_FIX_ROUNDS_ENV)
+    if raw is not None:
+        stripped = raw.strip()
+        if stripped:
+            try:
+                value = int(stripped)
+                if value >= 1:
+                    return value
+            except ValueError:
+                pass
+    if cfg is not None:
+        assembly = getattr(cfg, "assembly", None)
+        if assembly is not None:
+            return getattr(assembly, "max_fix_rounds", ASSEMBLY_MAX_FIX_ROUNDS_DEFAULT)
+    return ASSEMBLY_MAX_FIX_ROUNDS_DEFAULT
+
+
+async def _apply_circuit_breaker(
+    client: GitHubAppClient,
+    repository: str,
+    issue_number: int,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """Apply ``loop-circuit-broken`` label and exactly one escalation comment.
+
+    Returns the updated *result* dict. Idempotent: if the label already
+    exists, skipping the comment is safe because the upsert marker
+    guarantees at most one escalation comment in all cases.
+    """
+    # Apply the label (idempotent — POST /labels is a no-op if the label
+    # already exists on the issue).
+    try:
+        await client.add_labels(
+            ASSEMBLY_AGENT_SLUG,
+            repository,
+            issue_number,
+            [LOOP_CIRCUIT_BROKEN_LABEL],
+        )
+    except (httpx.HTTPError, TimeoutError) as exc:
+        result["writeback_failures"].append(
+            build_writeback_failure(
+                operation="applyCircuitBreakerLabel",
+                exc=exc,
+                repository=repository,
+                issue=issue_number,
+            )
+        )
+
+    # Post exactly one escalation comment via marker-based upsert.
+    escalation_body = (
+        f"{_CIRCUIT_BREAKER_COMMENT_MARKER}\n\n"
+        "## 🛑 Circuit Breaker Activated\n\n"
+        "This PR has exceeded the maximum number of automated fix rounds "
+        "without receiving human approval. The loop has been halted to "
+        "prevent unbounded bot-driven commits.\n\n"
+        "**Next steps for a human operator:**\n"
+        "- Review the PR history and decide whether to merge, close, or "
+        "request additional manual changes.\n"
+        "- To resume automated fixes, remove the `loop-circuit-broken` "
+        "label and re-run `/assembly`.\n"
+    )
+    try:
+        await client.upsert_issue_comment(
+            ASSEMBLY_AGENT_SLUG,
+            repository,
+            issue_number,
+            marker=_CIRCUIT_BREAKER_COMMENT_MARKER,
+            body=escalation_body,
+        )
+    except (httpx.HTTPError, TimeoutError) as exc:
+        result["writeback_failures"].append(
+            build_writeback_failure(
+                operation="upsertCircuitBreakerComment",
+                exc=exc,
+                repository=repository,
+                issue=issue_number,
+            )
+        )
+
     return result
 
 
