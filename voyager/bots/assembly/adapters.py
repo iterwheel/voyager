@@ -525,8 +525,9 @@ class PiOhMyPiDeepSeekAdapter:
                     git_env,
                     secret=token,
                 )
-                if ac_spotcheck.blocked:
+                if ac_spotcheck.findings:
                     details["ac_spotcheck"] = ac_spotcheck.to_dict()
+                if ac_spotcheck.blocked:
                     return _failed_pi_result(
                         ac_spotcheck.summary(),
                         token,

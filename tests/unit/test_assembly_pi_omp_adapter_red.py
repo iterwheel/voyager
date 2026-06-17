@@ -20,6 +20,10 @@ import pytest
 
 from voyager.bots.assembly import adapters as adapters_module
 from voyager.bots.assembly import writeback as writeback_module
+from voyager.bots.assembly.ac_spotcheck import (
+    AcceptanceSpotCheckFinding,
+    AcceptanceSpotCheckResult,
+)
 from voyager.bots.assembly.adapters import (
     AdapterExecutionContext,
     PiOhMyPiDeepSeekAdapter,
@@ -678,6 +682,50 @@ async def test_pi_adapter_ac_spotcheck_blocks_publish_and_retains_bundle(
     assert metadata["failure_diagnostic"]["phase"] == "acceptance_spotcheck"
     assert metadata["details"]["ac_spotcheck"]["ok"] is False
     assert metadata["details"]["patch_left_behind"] is True
+
+
+@pytest.mark.asyncio
+async def test_pi_adapter_ac_spotcheck_preserves_advisory_findings_without_blocking(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    recorder = _CommandRecorder(status_porcelain="M voyager/bots/assembly/adapters.py\n")
+    _install_command_fakes(monkeypatch, recorder)
+
+    async def fake_spotcheck(*args: Any, **kwargs: Any) -> AcceptanceSpotCheckResult:
+        _ = (args, kwargs)
+        return AcceptanceSpotCheckResult(
+            findings=(
+                AcceptanceSpotCheckFinding(
+                    source="acceptance_criterion",
+                    criterion="Document `advisory-token` when practical",
+                    required_tokens=("advisory-token",),
+                    missing_tokens=("advisory-token",),
+                    direction="advisory",
+                ),
+            )
+        )
+
+    monkeypatch.setattr(adapters_module, "_run_acceptance_spotcheck", fake_spotcheck)
+    adapter = PiOhMyPiDeepSeekAdapter()
+
+    result = await adapter.execute(
+        _contract(),
+        _context(
+            tmp_path,
+            token="ghs_stage2_ac_secret",
+            audit_id="asmb-advisoryacacacac",
+        ),
+    )
+
+    assert result.status == "executed"
+    assert result.commit_shas == [VALID_SHA]
+    assert "failure_diagnostic" not in result.details
+    assert recorder.git_calls("push"), "advisory spot-check findings must not block publish"
+    spotcheck = result.details["ac_spotcheck"]
+    assert spotcheck["ok"] is False
+    assert spotcheck["findings"][0]["direction"] == "advisory"
+    assert spotcheck["findings"][0]["missing_tokens"] == ["advisory-token"]
 
 
 @pytest.mark.asyncio

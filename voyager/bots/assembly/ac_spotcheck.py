@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any, Literal
 
 _INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
@@ -111,7 +111,13 @@ class AcceptanceSpotCheckFinding:
     direction: Literal["block", "advisory"] = "block"
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return {
+            "source": self.source,
+            "criterion": self.criterion,
+            "required_tokens": list(self.required_tokens),
+            "missing_tokens": list(self.missing_tokens),
+            "direction": self.direction,
+        }
 
 
 @dataclass(frozen=True)
