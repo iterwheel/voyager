@@ -341,7 +341,7 @@ def test_l1_gate_findings_reach_progress_comment_and_manifest(
     assert result["adapter_result"]["status"] == "executed"
     body = client.upsert_issue_comment.await_args.kwargs["body"]
     assert "**Advisory gate findings:**" in body
-    assert "Acceptance spot-check (`L1`) reported non-blocking finding(s)" in body
+    assert "Acceptance spot-check (`L1`) reported advisory finding(s); publish continued." in body
     assert "acceptance_criterion: missing `mandatory-bind`" in body
     assert "Add value `mandatory-bind`" in body
 

@@ -94,10 +94,12 @@ def _format_advisory_gate_findings(adapter_result: dict[str, Any]) -> list[str]:
     if not isinstance(findings, list) or not findings:
         return []
 
+    adapter_status = str(adapter_result.get("status") or "").lower()
+    outcome = "publish continued." if adapter_status == "executed" else "publish did not complete."
     lines = [
         "",
         "**Advisory gate findings:**",
-        "- Acceptance spot-check (`L1`) reported non-blocking finding(s); publish continued.",
+        f"- Acceptance spot-check (`L1`) reported advisory finding(s); {outcome}",
     ]
     for finding in findings[:5]:
         if not isinstance(finding, dict):

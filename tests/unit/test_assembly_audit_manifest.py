@@ -197,6 +197,41 @@ def test_comment_renders_public_backend_failure_diagnostics_safely() -> None:
     assert "ASSEMBLY_GITHUB_TOKEN=" not in body
 
 
+def test_comment_does_not_claim_publish_continued_after_failed_l1_advisory() -> None:
+    body = build_assembly_comment(
+        status="failed",
+        contract={
+            "repository": "iterwheel/voyager",
+            "issue_number": 161,
+            "acceptance_criteria": [],
+        },
+        adapter_result={
+            "status": "failed",
+            "summary": "Git push failed after advisory findings.",
+            "details": {
+                "ac_spotcheck_maturity": "L1",
+                "ac_spotcheck": {
+                    "ok": False,
+                    "findings": [
+                        {
+                            "source": "acceptance_criterion",
+                            "criterion": "Add value `mandatory-bind`",
+                            "missing_tokens": ["mandatory-bind"],
+                        }
+                    ],
+                },
+            },
+        },
+        branch={"name": "161-maturity-level-gate-field"},
+        pull_request={"action": "skipped_no_changes"},
+        audit_id="asmb-0123456789abcdef",
+    )
+
+    assert "**Advisory gate findings:**" in body
+    assert "publish did not complete" in body
+    assert "publish continued" not in body
+
+
 def test_comment_wraps_failure_tail_with_backtick_safe_code_span() -> None:
     body = build_assembly_comment(
         status="failed",
