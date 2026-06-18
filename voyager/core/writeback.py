@@ -431,6 +431,7 @@ async def dispatch_route_writeback(
 
         automation: dict[str, Any] | None = None
         if store is not None:
+            from voyager.bots.clearance.known_limitations import KnownLimitationStore
             from voyager.bots.clearance.pipeline import compute_clearance_automation
 
             try:
@@ -444,6 +445,7 @@ async def dispatch_route_writeback(
                     store=store,
                     default_profile_name=default_profile_name,
                     investigator=investigator,
+                    known_limitation_store=KnownLimitationStore(),
                     expected_sha=webhook_head_sha,
                 )
             except Exception as exc:

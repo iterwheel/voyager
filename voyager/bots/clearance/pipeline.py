@@ -57,6 +57,7 @@ from voyager.bots.clearance.investigator import (
     ThreadInvestigator,
 )
 from voyager.bots.clearance.judge import VerdictDecision, judge
+from voyager.bots.clearance.known_limitations import KnownLimitationStore
 from voyager.bots.clearance.models import (
     Evidence,
     GitHubThreadState,
@@ -556,6 +557,25 @@ def _latest_clean_codex_signal_after_thread(
     return None
 
 
+def _known_limitation_line_candidates(thread_dict: dict[str, Any]) -> list[int | None]:
+    lines: list[int | None] = []
+    for key in ("line", "originalLine", "originalStartLine", "startLine"):
+        if key not in thread_dict:
+            continue
+        raw = thread_dict.get(key)
+        if raw is None:
+            if key == "line" and None not in lines:
+                lines.append(None)
+            continue
+        try:
+            line = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if line not in lines:
+            lines.append(line)
+    return lines or [None]
+
+
 async def _process_thread(
     thread_dict: dict[str, Any],
     *,
@@ -576,6 +596,7 @@ async def _process_thread(
     profile_name: str | None = None,
     pr_pushed_at: str | None = None,
     current_head_updated_at: str | None = None,
+    known_limitation_store: KnownLimitationStore | None = None,
 ) -> tuple[Thread, ThreadSnapshot] | None:
     """Classify, judge, and build Thread + ThreadSnapshot for one Codex thread.
 
@@ -633,6 +654,100 @@ async def _process_thread(
                 }
             ),
         )
+
+    # Check known-limitations store for an already-accepted finding.
+    # When a finding's fingerprint matches a recorded limitation, the thread
+    # is suppressed (RESOLVED + annotated with the decision link) — no
+    # judgment, no signal lookup, no investigator cost.
+    if known_limitation_store is not None:
+        expr_path = thread_dict.get("path") or "unknown"
+        expr_line = thread_dict.get("line")
+        body_raw = (comments_nodes[0].get("body") if comments_nodes else None) or ""
+        line_candidates = _known_limitation_line_candidates(thread_dict)
+        kl_entry = known_limitation_store.lookup_for_finding(
+            repo=repo,
+            path=expr_path,
+            line_candidates=line_candidates,
+            body=body_raw,
+        )
+        if kl_entry is not None:
+            existing_close_reason_marker = _has_current_head_verdict_comment(
+                comments_nodes,
+                thread_id=thread_dict["id"],
+                head_sha=head_sha,
+                verdict=Verdict.RESOLVED,
+            )
+            existing_thread_conclusion_marker = _has_current_head_verdict_comment(
+                comments_nodes,
+                thread_id=thread_dict["id"],
+                head_sha=head_sha,
+                verdict=Verdict.RESOLVED,
+            )
+            existing_head_verdict_marker = _has_current_head_final_verdict_comment(
+                comments_nodes,
+                thread_id=thread_dict["id"],
+                head_sha=head_sha,
+            )
+            _log.info(
+                "known_limitation_suppressed: %s",
+                json.dumps(
+                    {
+                        "event": "known_limitation_suppressed",
+                        "repo": repo,
+                        "pr": pr,
+                        "thread_id": thread_dict.get("id"),
+                        "fingerprint": kl_entry.fingerprint[:12],
+                        "decision_link": kl_entry.decision_link,
+                    }
+                ),
+            )
+            thread_model = Thread(
+                id=thread_dict["id"],
+                comment_id=comment_id,
+                path=expr_path,
+                line=expr_line,
+                codex_severity=sev_decision.codex_severity,
+                effective_severity=sev_decision.effective_severity,
+                demotion_reason=sev_decision.reason,
+                verdict=Verdict.RESOLVED,
+                verdict_reason=f"accepted known limitation — {kl_entry.decision_link}",
+                github_isResolved=bool(thread_dict.get("isResolved")),
+                known_limitation_link=kl_entry.decision_link,
+                existing_head_verdict_marker=existing_head_verdict_marker,
+                existing_close_reason_marker=existing_close_reason_marker,
+                existing_thread_conclusion_marker=existing_thread_conclusion_marker,
+            )
+            snapshot = ThreadSnapshot(
+                thread_id=thread_dict["id"],
+                repo=repo,
+                pr=pr,
+                first_seen=now,
+                last_polled=now,
+                codex_comment_id=comment_id,
+                path=expr_path,
+                current_line=expr_line,
+                codex_severity=sev_decision.codex_severity,
+                effective_severity=sev_decision.effective_severity,
+                demotion_reason=sev_decision.reason,
+                verdict=Verdict.RESOLVED,
+                verdict_history=[
+                    VerdictHistoryEntry(
+                        ts=now,
+                        verdict=Verdict.RESOLVED,
+                        reason=f"accepted known limitation — {kl_entry.decision_link}",
+                    )
+                ],
+                evidence=Evidence(
+                    thread_state=state,
+                    codex_followed_up=False,
+                ),
+                github_state=GitHubThreadState(
+                    isResolved=bool(thread_dict.get("isResolved")),
+                    isOutdated=bool(thread_dict.get("isOutdated")),
+                    viewerCanResolve=bool(thread_dict.get("viewerCanResolve", True)),
+                ),
+            )
+            return thread_model, snapshot
 
     decision = judge(
         classification=state,
@@ -1595,6 +1710,7 @@ async def compute_clearance_automation(
     repository: str,
     store: StateStore,
     investigator: ThreadInvestigator | None = None,
+    known_limitation_store: KnownLimitationStore | None = None,
     default_profile_name: str | None = None,
     expected_sha: str | None = None,
 ) -> dict[str, Any]:
@@ -1757,6 +1873,7 @@ async def compute_clearance_automation(
             profile_name=default_profile_name,
             pr_pushed_at=pr_pushed_at,
             current_head_updated_at=current_head_updated_at,
+            known_limitation_store=known_limitation_store,
         )
         if result is None:
             continue

@@ -313,7 +313,11 @@ class GitHubAppClient:
                   viewerCanResolve
                   path
                   line
+                  originalLine
                   startLine
+                  originalStartLine
+                  diffSide
+                  startDiffSide
                   comments(first: 100) {
                     pageInfo { hasNextPage endCursor }
                     nodes {
