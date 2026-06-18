@@ -560,8 +560,12 @@ def _latest_clean_codex_signal_after_thread(
 def _known_limitation_line_candidates(thread_dict: dict[str, Any]) -> list[int | None]:
     lines: list[int | None] = []
     for key in ("line", "originalLine", "originalStartLine", "startLine"):
+        if key not in thread_dict:
+            continue
         raw = thread_dict.get(key)
         if raw is None:
+            if key == "line" and None not in lines:
+                lines.append(None)
             continue
         try:
             line = int(raw)

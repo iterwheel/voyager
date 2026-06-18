@@ -15,7 +15,7 @@ from voyager.bots.clearance.known_limitations import (
     compute_scoped_fingerprint,
 )
 from voyager.bots.clearance.models import Verdict
-from voyager.bots.clearance.pipeline import _process_thread
+from voyager.bots.clearance.pipeline import _known_limitation_line_candidates, _process_thread
 
 # ---------------------------------------------------------------------------
 # Fingerprint tests
@@ -290,6 +290,15 @@ def test_matched_fingerprint_is_suppressed(tmp_store: KnownLimitationStore) -> N
     assert tmp_store.lookup(fp_other) is None
 
 
+def test_known_limitation_line_candidates_keep_explicit_null_line() -> None:
+    """Explicit null line fingerprints stay eligible before original anchors."""
+    assert _known_limitation_line_candidates({"line": None, "originalLine": 42}) == [
+        None,
+        42,
+    ]
+    assert _known_limitation_line_candidates({"originalLine": 42}) == [42]
+
+
 @pytest.mark.asyncio
 async def test_known_limitation_fast_path_preserves_existing_marker_flags(
     tmp_store: KnownLimitationStore,
@@ -381,6 +390,62 @@ async def test_known_limitation_fast_path_matches_outdated_original_line(
                     "author": {"login": "chatgpt-codex-connector"},
                     "body": body,
                     "url": "https://example/comments/201",
+                    "createdAt": "2026-06-17T00:00:00Z",
+                },
+            ]
+        },
+    }
+
+    processed = await _process_thread(
+        thread_dict,
+        repo="org/repo",
+        pr=42,
+        head_sha="abcdef1234567890abcdef1234567890abcdef12",
+        pr_title="Test PR",
+        now=datetime.now(UTC),
+        base_branch="main",
+        branch_protected_state=True,
+        client=object(),
+        known_limitation_store=tmp_store,
+    )
+
+    assert processed is not None
+    thread, snapshot = processed
+    assert thread.verdict == Verdict.RESOLVED
+    assert thread.known_limitation_link == "https://github.com/org/repo/issues/42"
+    assert thread.line is None
+    assert snapshot.current_line is None
+
+
+@pytest.mark.asyncio
+async def test_known_limitation_fast_path_matches_outdated_null_line_fingerprint(
+    tmp_store: KnownLimitationStore,
+) -> None:
+    """Outdated acceptances recorded with line=None keep matching after anchors appear."""
+    body = "**P2** accepted outdated known limitation."
+    tmp_store.record_for_finding(
+        repo="org/repo",
+        path="app.py",
+        line=None,
+        body=body,
+        decision_link="https://github.com/org/repo/issues/42",
+        pr_number=42,
+    )
+    thread_dict = {
+        "id": "PRRT_known_limitation_outdated_null_line",
+        "isResolved": False,
+        "isOutdated": True,
+        "viewerCanResolve": True,
+        "path": "app.py",
+        "line": None,
+        "originalLine": 10,
+        "comments": {
+            "nodes": [
+                {
+                    "databaseId": 301,
+                    "author": {"login": "chatgpt-codex-connector"},
+                    "body": body,
+                    "url": "https://example/comments/301",
                     "createdAt": "2026-06-17T00:00:00Z",
                 },
             ]
