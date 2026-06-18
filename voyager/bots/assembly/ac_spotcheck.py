@@ -98,6 +98,13 @@ _REMOVAL_SUFFIX_RE = re.compile(
     r"no\s+longer\s+(?:accepted|allowed|supported))\b",
     re.I,
 )
+_ADVISORY_DIRECTION_RE = re.compile(
+    r"\b(?:false[-\s]?negative|under[-\s]?block(?:ing|ed|s)?|too\s+permissive)\b|"
+    r"\blets?\b.{0,80}\bthrough\b|"
+    r"\bfails?\s+to\s+(?:block|catch|detect|reject)\b|"
+    r"\bmiss(?:es|ing)?\s+(?:bad|invalid|unmet|wrong)\b",
+    re.I,
+)
 
 
 @dataclass(frozen=True)
@@ -155,6 +162,14 @@ class _CriterionItem:
     depth: int
 
 
+@dataclass(frozen=True)
+class _TokenGroup:
+    source: str
+    criterion: str
+    tokens: tuple[str, ...]
+    direction: Literal["block", "advisory"]
+
+
 def check_acceptance_exact_tokens(
     *,
     issue_body: str,
@@ -173,19 +188,20 @@ def check_acceptance_exact_tokens(
       examples are ignored.
     """
     findings: list[AcceptanceSpotCheckFinding] = []
-    for source, criterion, tokens in _required_token_groups(
+    for group in _required_token_groups(
         issue_body,
         acceptance_criteria,
         acceptance_criteria_items,
     ):
-        missing = tuple(token for token in tokens if not _token_present(token, changed_text))
+        missing = tuple(token for token in group.tokens if not _token_present(token, changed_text))
         if missing:
             findings.append(
                 AcceptanceSpotCheckFinding(
-                    source=source,
-                    criterion=criterion,
-                    required_tokens=tokens,
+                    source=group.source,
+                    criterion=group.criterion,
+                    required_tokens=group.tokens,
                     missing_tokens=missing,
+                    direction=group.direction,
                 )
             )
     return AcceptanceSpotCheckResult(tuple(findings))
@@ -195,8 +211,8 @@ def _required_token_groups(
     issue_body: str,
     acceptance_criteria: list[str],
     acceptance_criteria_items: Sequence[Any] | None = None,
-) -> list[tuple[str, str, tuple[str, ...]]]:
-    groups: list[tuple[str, str, tuple[str, ...]]] = []
+) -> list[_TokenGroup]:
+    groups: list[_TokenGroup] = []
     seen: set[tuple[str, ...]] = set()
     criteria_removal_contexts = _removal_contexts_for_criteria(
         issue_body,
@@ -366,7 +382,7 @@ def _is_removal_list_child(criterion: str) -> bool:
 
 
 def _append_required_token_group(
-    groups: list[tuple[str, str, tuple[str, ...]]],
+    groups: list[_TokenGroup],
     seen: set[tuple[str, ...]],
     source: str,
     criterion: str,
@@ -375,7 +391,21 @@ def _append_required_token_group(
     if not tokens or tokens in seen:
         return
     seen.add(tokens)
-    groups.append((source, criterion, tokens))
+    groups.append(
+        _TokenGroup(
+            source=source,
+            criterion=criterion,
+            tokens=tokens,
+            direction=_finding_direction(criterion),
+        )
+    )
+
+
+def _finding_direction(criterion: str) -> Literal["block", "advisory"]:
+    """Classify verifier-underblocking criteria as advisory findings."""
+    if _ADVISORY_DIRECTION_RE.search(criterion or "") is not None:
+        return "advisory"
+    return "block"
 
 
 def _value_groups(

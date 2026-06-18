@@ -51,6 +51,40 @@ The `**Instantiates:**` and `**Overlays:**` fields use `COR-NNNN`.
         "inherit-only",
     )
     assert value_group.missing_tokens == ("mandatory-bind", "inherit-only")
+    assert value_group.direction == "block"
+    assert result.blocked
+
+
+def test_spotcheck_generated_false_negative_direction_findings_are_advisory() -> None:
+    result = check_acceptance_exact_tokens(
+        issue_body=(
+            "## Acceptance Criteria\n\n"
+            "- [ ] False-negative under-blocking misses are reported as `advisory`\n"
+        ),
+        acceptance_criteria=[
+            "False-negative under-blocking misses are reported as `advisory`",
+        ],
+        changed_text="Findings are reported in the progress comment.",
+    )
+
+    assert not result.ok
+    assert not result.blocked
+    assert result.findings[0].required_tokens == ("advisory",)
+    assert result.findings[0].missing_tokens == ("advisory",)
+    assert result.findings[0].direction == "advisory"
+
+
+def test_spotcheck_generated_required_token_findings_remain_blocking() -> None:
+    result = check_acceptance_exact_tokens(
+        issue_body="## Acceptance Criteria\n\n- [ ] Add value `mandatory-bind`\n",
+        acceptance_criteria=["Add value `mandatory-bind`"],
+        changed_text='SUPPORTED_VALUES = ["optional-overlay"]',
+    )
+
+    assert not result.ok
+    assert result.blocked
+    assert result.findings[0].missing_tokens == ("mandatory-bind",)
+    assert result.findings[0].direction == "block"
 
 
 def test_spotcheck_ignores_value_groups_outside_acceptance_criteria() -> None:
