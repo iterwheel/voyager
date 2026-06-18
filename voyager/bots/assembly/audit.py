@@ -471,7 +471,7 @@ def _estimate_tokens_from_session(omp_session_jsonl_path: str | None) -> int:
             return 0
         explicit_tokens = 0
         total_chars = 0
-        for raw in path.read_text(encoding="utf-8").splitlines():
+        for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
             raw = raw.strip()
             if not raw:
                 continue

@@ -321,6 +321,15 @@ def test_estimate_tokens_from_pi_session_uses_snake_case_total_tokens(
     assert _estimate_tokens_from_session(str(session_path)) == 245
 
 
+def test_estimate_tokens_from_session_ignores_invalid_utf8_transcripts(
+    tmp_path: Path,
+) -> None:
+    session_path = tmp_path / "session.jsonl"
+    session_path.write_bytes(b"\xff\xfe\x00not-json")
+
+    assert _estimate_tokens_from_session(str(session_path)) == 0
+
+
 def test_estimate_tokens_from_pi_session_reads_nested_content_blocks(
     tmp_path: Path,
 ) -> None:
