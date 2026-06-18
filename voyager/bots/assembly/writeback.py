@@ -904,6 +904,14 @@ async def dispatch_assembly_writeback(
                     delivery_id=delivery_id,
                     repository=repository,
                 )
+                _record_loop_summary(
+                    repository=repository,
+                    issue_number=contract.issue_number,
+                    pr_number=_pull_request_number_from_result(base_result),
+                    adapter_result=base_result.get("adapter_result"),
+                    testpilot_result=base_result.get("testpilot_result"),
+                    audit_id=base_result.get("audit_id"),
+                )
                 return base_result
             # Codex P2: the breaker label is idempotent but the escalation
             # comment is not. If a prior run added the label but its comment
@@ -924,6 +932,14 @@ async def dispatch_assembly_writeback(
                 repository=repository,
             )
             await _upsert_progress_comments(client, contract, repository, base_result)
+            _record_loop_summary(
+                repository=repository,
+                issue_number=contract.issue_number,
+                pr_number=_pull_request_number_from_result(base_result),
+                adapter_result=base_result.get("adapter_result"),
+                testpilot_result=base_result.get("testpilot_result"),
+                audit_id=base_result.get("audit_id"),
+            )
             return base_result
 
         current_round = _read_current_fix_round(current_labels)
@@ -951,6 +967,14 @@ async def dispatch_assembly_writeback(
                     result=base_result,
                     delivery_id=delivery_id,
                     repository=repository,
+                )
+                _record_loop_summary(
+                    repository=repository,
+                    issue_number=contract.issue_number,
+                    pr_number=_pull_request_number_from_result(base_result),
+                    adapter_result=base_result.get("adapter_result"),
+                    testpilot_result=base_result.get("testpilot_result"),
+                    audit_id=base_result.get("audit_id"),
                 )
                 return base_result
             pr_context = await _find_existing_pull_request_context(
@@ -1003,6 +1027,14 @@ async def dispatch_assembly_writeback(
                     repository=repository,
                 )
                 await _upsert_progress_comments(client, contract, repository, base_result)
+                _record_loop_summary(
+                    repository=repository,
+                    issue_number=contract.issue_number,
+                    pr_number=_pull_request_number_from_result(base_result),
+                    adapter_result=base_result.get("adapter_result"),
+                    testpilot_result=base_result.get("testpilot_result"),
+                    audit_id=base_result.get("audit_id"),
+                )
                 return base_result
 
         # --------------------------------------------------------------
