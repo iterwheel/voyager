@@ -99,6 +99,34 @@ async def dispatch_changelog_writeback(
     if dry_run_enabled():
         return {"applied": False, "dry_run": True, "planned": planned}
 
+    try:
+        existing = await client.find_pull_request_by_head(
+            CHANGELOG_APP_SLUG,
+            repository,
+            branch,
+        )
+    except Exception as exc:
+        _log.warning(
+            "changelog existing draft lookup failed for %s:%s: %s",
+            repository,
+            branch,
+            exc.__class__.__name__,
+        )
+        return {
+            "applied": False,
+            "reason": f"existing draft lookup failed: {exc.__class__.__name__}",
+            "planned": planned,
+        }
+    if existing and isinstance(existing, dict) and existing.get("number"):
+        return {
+            "applied": False,
+            "reason": "existing changelog draft PR",
+            "planned": planned,
+            "pr_number": int(existing["number"]),
+            "pr_url": existing.get("html_url"),
+            "preserved_existing_branch": True,
+        }
+
     token = await client.installation_token(CHANGELOG_APP_SLUG, repository=repository)
     if not token:
         return {"applied": False, "reason": "empty installation token"}
