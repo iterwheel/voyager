@@ -480,3 +480,64 @@ def test_loop_summary_file_is_jsonl(tmp_path: Path) -> None:
         data = json.loads(raw)
         assert data["rounds"] == idx
         assert data["commits"] == 0
+
+
+def test_loop_summary_file_permissions_are_private(tmp_path: Path) -> None:
+    """Loop summary telemetry is private audit state and must be 0600."""
+    from voyager.bots.assembly.audit import (
+        LoopSummary,
+        append_loop_summary_with_next_round,
+        loop_summary_path,
+    )
+
+    repo = "iterwheel/voyager"
+    issue = 100
+    root = tmp_path / "audit-root"
+
+    append_loop_summary_with_next_round(
+        LoopSummary(
+            repository=repo,
+            issue_number=issue,
+            pr_number=issue,
+            rounds=0,
+            commits=0,
+            est_tokens=0,
+            timestamp="2026-06-17T00:00:00",
+        ),
+        root=root,
+    )
+
+    path = loop_summary_path(repository=repo, issue_number=issue, root=root)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_loop_summary_append_chmods_existing_file(tmp_path: Path) -> None:
+    """Appending also tightens older loop-summary files created with a broad umask."""
+    from voyager.bots.assembly.audit import (
+        LoopSummary,
+        append_loop_summary_with_next_round,
+        loop_summary_path,
+    )
+
+    repo = "iterwheel/voyager"
+    issue = 101
+    root = tmp_path / "audit-root"
+    path = loop_summary_path(repository=repo, issue_number=issue, root=root)
+    path.parent.mkdir(parents=True)
+    path.write_text("", encoding="utf-8")
+    path.chmod(0o644)
+
+    append_loop_summary_with_next_round(
+        LoopSummary(
+            repository=repo,
+            issue_number=issue,
+            pr_number=issue,
+            rounds=0,
+            commits=0,
+            est_tokens=0,
+            timestamp="2026-06-17T00:00:00",
+        ),
+        root=root,
+    )
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600

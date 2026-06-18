@@ -29,6 +29,7 @@ _SECRET_KEY_RE = re.compile(
     r"(token|secret|password|private[_-]?key|api[_-]?key|credential)",
     re.IGNORECASE,
 )
+_PRIVATE_AUDIT_FILE_MODE = 0o600
 
 
 def utc_now_iso() -> str:
@@ -494,7 +495,9 @@ def _append_jsonl(path: Path, data: dict[str, Any]) -> None:
     """Atomic append of a JSON line to *path*, same pattern as clearance StateStore."""
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(data, sort_keys=True) + "\n"
-    with path.open("a") as f:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, _PRIVATE_AUDIT_FILE_MODE)
+    os.fchmod(fd, _PRIVATE_AUDIT_FILE_MODE)
+    with os.fdopen(fd, "a", encoding="utf-8") as f:
         import fcntl
 
         fcntl.flock(f.fileno(), fcntl.LOCK_EX)
@@ -515,7 +518,9 @@ def _append_jsonl(path: Path, data: dict[str, Any]) -> None:
 
 def _append_loop_summary_with_next_round(path: Path, summary: LoopSummary) -> LoopSummary:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a+") as f:
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, _PRIVATE_AUDIT_FILE_MODE)
+    os.fchmod(fd, _PRIVATE_AUDIT_FILE_MODE)
+    with os.fdopen(fd, "r+", encoding="utf-8") as f:
         import fcntl
 
         fcntl.flock(f.fileno(), fcntl.LOCK_EX)
