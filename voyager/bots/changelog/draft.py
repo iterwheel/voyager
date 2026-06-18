@@ -9,6 +9,7 @@ from typing import Any
 from .constants import CHANGELOG_RELEVANT_LABELS, CHANGELOG_SKIP_LABELS
 
 _CHANGELOG_HEADING_RE = re.compile(r"^## \[(?P<name>[^\]]+)\]")
+_CHANGELOG_SUBSECTION_RE = re.compile(r"^###\s+")
 _SPACE_RE = re.compile(r"\s+")
 
 
@@ -55,7 +56,7 @@ def build_changelog_bullet(*, pr_number: int, pr_title: str, pr_url: str) -> str
 
 def _has_source_pr_reference(section_text: str, source_pr_number: int) -> bool:
     number = re.escape(str(source_pr_number))
-    reference_re = re.compile(rf"(?:\[\#{number}\]|/pull/{number}(?!\d))")
+    reference_re = re.compile(rf"/pull/{number}(?!\d)")
     return reference_re.search(section_text) is not None
 
 
@@ -77,23 +78,29 @@ def append_unreleased_bullet(
     if header_idx is None:
         return ChangelogAppendResult(changelog_text, changed=False, reason="missing_unreleased")
 
-    next_heading_idx = len(lines)
+    section_end_idx = len(lines)
     for idx in range(header_idx + 1, len(lines)):
         if _CHANGELOG_HEADING_RE.match(lines[idx].strip()):
-            next_heading_idx = idx
+            section_end_idx = idx
             break
 
-    section_text = "\n".join(lines[header_idx + 1 : next_heading_idx])
+    section_text = "\n".join(lines[header_idx + 1 : section_end_idx])
     if _has_source_pr_reference(section_text, source_pr_number):
         return ChangelogAppendResult(changelog_text, changed=False, reason="already_present")
 
-    insert_at = next_heading_idx
+    insert_boundary_idx = section_end_idx
+    for idx in range(header_idx + 1, section_end_idx):
+        if _CHANGELOG_SUBSECTION_RE.match(lines[idx].strip()):
+            insert_boundary_idx = idx
+            break
+
+    insert_at = insert_boundary_idx
     while insert_at > header_idx + 1 and not lines[insert_at - 1].strip():
         insert_at -= 1
 
-    # Drop existing trailing blank lines in the Unreleased section, then add
-    # exactly one blank line after the new bullet before the next release.
-    del lines[insert_at:next_heading_idx]
+    # Drop blank lines at the insertion boundary, then keep exactly one blank
+    # line between the new bullet and the following subsection or release.
+    del lines[insert_at:insert_boundary_idx]
 
     additions: list[str] = []
     if insert_at > header_idx + 1:

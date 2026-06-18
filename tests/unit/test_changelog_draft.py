@@ -163,6 +163,25 @@ def test_append_unreleased_bullet_does_not_treat_prefix_pr_url_as_duplicate() ->
     assert "Earlier work" in result.text
 
 
+def test_append_unreleased_bullet_does_not_treat_issue_link_as_source_pr() -> None:
+    text = """# Changelog
+
+## [Unreleased]
+
+- Track blueprint scope ([#12](https://github.com/iterwheel/voyager/issues/12)).
+
+## [0.1.0]
+"""
+    result = append_unreleased_bullet(
+        text,
+        bullet="- Earlier work ([#12](https://github.com/iterwheel/voyager/pull/12)).",
+        source_pr_number=12,
+    )
+
+    assert result.changed is True
+    assert "- Earlier work ([#12](https://github.com/iterwheel/voyager/pull/12))." in (result.text)
+
+
 def test_append_unreleased_bullet_matches_source_pr_url_with_path_boundary() -> None:
     text = """# Changelog
 
@@ -180,6 +199,31 @@ def test_append_unreleased_bullet_matches_source_pr_url_with_path_boundary() -> 
 
     assert result.changed is False
     assert result.reason == "already_present"
+
+
+def test_append_unreleased_bullet_inserts_before_unreleased_subsections() -> None:
+    text = """# Changelog
+
+## [Unreleased]
+
+### Added
+
+- Existing categorized note.
+
+## [0.1.0]
+"""
+    result = append_unreleased_bullet(
+        text,
+        bullet="- Add export workflow ([#123](https://github.com/iterwheel/voyager/pull/123)).",
+        source_pr_number=123,
+    )
+
+    assert result.changed is True
+    assert (
+        "## [Unreleased]\n"
+        "- Add export workflow ([#123](https://github.com/iterwheel/voyager/pull/123)).\n\n"
+        "### Added"
+    ) in result.text
 
 
 def test_simulated_labeled_merge_produces_expected_unreleased_bullet() -> None:
