@@ -273,6 +273,39 @@ def test_dispatch_route_writeback_returns_structured_branch_lookup_failure(monke
     assert result["planned"]["branch"] == "changelog/pr-123-unreleased"
 
 
+def test_dispatch_route_writeback_opens_pr_for_existing_branch_without_open_pr(monkeypatch) -> None:
+    monkeypatch.setenv("DRY_RUN", "false")
+    route = route_changelog_event(
+        "pull_request",
+        _pull_request_payload(labels=["enhancement"]),
+    )[0]
+    client = MagicMock()
+    client.branch_ref_exists = AsyncMock(return_value=True)
+    client.find_pull_request_by_head = AsyncMock(return_value=None)
+    client.create_pull_request = AsyncMock(
+        return_value={
+            "number": 456,
+            "html_url": "https://github.com/iterwheel/voyager/pull/456",
+        }
+    )
+    client.create_issue_comment = AsyncMock(return_value={"id": 789})
+    client.installation_token = AsyncMock(return_value="ghs_should_not_be_used")
+
+    result = asyncio.run(
+        dispatch_route_writeback(
+            client,
+            route,
+            repository="iterwheel/voyager",
+        )
+    )
+
+    assert result["applied"] is True
+    assert result["pr_number"] == 456
+    assert result["preserved_existing_branch"] is True
+    client.create_pull_request.assert_awaited_once()
+    client.installation_token.assert_not_awaited()
+
+
 def test_dispatch_route_writeback_returns_structured_token_failure(monkeypatch) -> None:
     monkeypatch.setenv("DRY_RUN", "false")
     route = route_changelog_event(

@@ -94,6 +94,25 @@ async def _publish_new_changelog_pr(
         _log.warning("changelog branch push failed for %s:%s: %s", repository, branch, stderr)
         return {"applied": False, "reason": "git push failed"}
 
+    return await _create_changelog_pr(
+        client,
+        repository=repository,
+        branch=branch,
+        base=base,
+        title=title,
+        body=body,
+    )
+
+
+async def _create_changelog_pr(
+    client: Any,
+    *,
+    repository: str,
+    branch: str,
+    base: str,
+    title: str,
+    body: str,
+) -> dict[str, Any]:
     try:
         pr = await client.create_pull_request(
             CHANGELOG_APP_SLUG,
@@ -214,6 +233,16 @@ async def dispatch_changelog_writeback(
         if existing and existing.get("number"):
             result["pr_number"] = int(existing["number"])
             result["pr_url"] = existing.get("html_url")
+        else:
+            created = await _create_changelog_pr(
+                client,
+                repository=repository,
+                branch=branch,
+                base=base,
+                title=title,
+                body=_pr_body(draft),
+            )
+            result.update(created)
         return result
 
     try:
