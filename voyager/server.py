@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse
 
 from voyager.bots.assembly import route_assembly_event
 from voyager.bots.blueprint import route_blueprint_event
+from voyager.bots.changelog import route_changelog_event
 from voyager.bots.clearance import route_clearance_event
 from voyager.bots.stack import route_stack_event
 from voyager.build_info import BUILD_COMMIT, VERSION
@@ -471,6 +472,7 @@ async def github_webhook(
         *route_blueprint_event(x_github_event, payload),
         *route_stack_event(x_github_event, payload),
         *route_clearance_event(x_github_event, payload),
+        *route_changelog_event(x_github_event, payload),
         *route_assembly_event(x_github_event, payload, cfg=cfg),
     ]
     routes, denied_routes = _filter_routes_by_repository(candidate_routes, repository, cfg)

@@ -1,0 +1,99 @@
+"""Pure changelog drafting helpers."""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Any
+
+from .constants import CHANGELOG_RELEVANT_LABELS, CHANGELOG_SKIP_LABELS
+
+_CHANGELOG_HEADING_RE = re.compile(r"^## \[(?P<name>[^\]]+)\]")
+_SPACE_RE = re.compile(r"\s+")
+
+
+@dataclass(frozen=True)
+class ChangelogAppendResult:
+    """Result from appending a source PR bullet to ``[Unreleased]``."""
+
+    text: str
+    changed: bool
+    reason: str | None = None
+
+
+def label_names(labels: list[Any] | tuple[Any, ...] | None) -> list[str]:
+    """Return GitHub label names from either webhook dicts or plain strings."""
+    names: list[str] = []
+    for label in labels or []:
+        if isinstance(label, str):
+            names.append(label)
+        elif isinstance(label, dict):
+            name = label.get("name")
+            if isinstance(name, str):
+                names.append(name)
+    return names
+
+
+def _normalized_label_set(labels: list[Any] | tuple[Any, ...] | None) -> set[str]:
+    return {name.strip().lower() for name in label_names(labels) if name.strip()}
+
+
+def is_changelog_relevant(labels: list[Any] | tuple[Any, ...] | None) -> bool:
+    """Return True when labels say the merged PR should get a changelog entry."""
+    normalized = _normalized_label_set(labels)
+    if normalized & CHANGELOG_SKIP_LABELS:
+        return False
+    return bool(normalized & CHANGELOG_RELEVANT_LABELS)
+
+
+def build_changelog_bullet(*, pr_number: int, pr_title: str, pr_url: str) -> str:
+    """Build the single ``[Unreleased]`` bullet for a merged PR."""
+    title = _SPACE_RE.sub(" ", pr_title).strip()
+    title = title.rstrip(".")
+    return f"- {title} ([#{pr_number}]({pr_url}))."
+
+
+def append_unreleased_bullet(
+    changelog_text: str,
+    *,
+    bullet: str,
+    source_pr_number: int,
+) -> ChangelogAppendResult:
+    """Append *bullet* to the ``## [Unreleased]`` section if not already present."""
+    lines = changelog_text.splitlines()
+    header_idx: int | None = None
+    for idx, line in enumerate(lines):
+        heading = _CHANGELOG_HEADING_RE.match(line.strip())
+        if heading and heading.group("name").strip().lower() == "unreleased":
+            header_idx = idx
+            break
+
+    if header_idx is None:
+        return ChangelogAppendResult(changelog_text, changed=False, reason="missing_unreleased")
+
+    next_heading_idx = len(lines)
+    for idx in range(header_idx + 1, len(lines)):
+        if _CHANGELOG_HEADING_RE.match(lines[idx].strip()):
+            next_heading_idx = idx
+            break
+
+    section_text = "\n".join(lines[header_idx + 1 : next_heading_idx])
+    if f"[#{source_pr_number}]" in section_text or f"/pull/{source_pr_number}" in section_text:
+        return ChangelogAppendResult(changelog_text, changed=False, reason="already_present")
+
+    insert_at = next_heading_idx
+    while insert_at > header_idx + 1 and not lines[insert_at - 1].strip():
+        insert_at -= 1
+
+    # Drop existing trailing blank lines in the Unreleased section, then add
+    # exactly one blank line after the new bullet before the next release.
+    del lines[insert_at:next_heading_idx]
+
+    additions: list[str] = []
+    if insert_at > header_idx + 1:
+        additions.append("")
+    additions.append(bullet)
+    additions.append("")
+    lines[insert_at:insert_at] = additions
+
+    return ChangelogAppendResult("\n".join(lines) + "\n", changed=True)

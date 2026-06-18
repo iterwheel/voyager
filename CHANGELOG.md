@@ -8,6 +8,14 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+### Added — Changelog merge drafter ([#163](https://github.com/iterwheel/voyager/issues/163))
+
+- Voyager now routes merged, changelog-relevant PR webhooks into an
+  Assembly-backed changelog draft flow that opens a follow-up PR with an
+  `[Unreleased]` bullet for the merged PR.
+- Changelog skip labels are ignored by the drafter, and duplicate source PR
+  bullets are not re-added.
+
 ### Added — Release readiness checks ([#162](https://github.com/iterwheel/voyager/issues/162))
 
 - The existing pytest CI job now runs a release-readiness gate that finds
