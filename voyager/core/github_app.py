@@ -552,6 +552,55 @@ class GitHubAppClient:
             json_body={"labels": labels},
         )
 
+    async def ensure_label(
+        self,
+        app_slug: str,
+        repo: str,
+        label: str,
+        *,
+        color: str = "cfd3d7",
+        description: str | None = None,
+    ) -> Any:
+        """Ensure a repository label exists before attaching it to issues.
+
+        ``POST /issues/{number}/labels`` only attaches labels that already
+        exist at repository scope. Dynamic Assembly labels therefore need a
+        small provisioning step before ``add_labels``.
+        """
+        owner, name = repo.split("/", 1)
+        label_path = quote(label, safe="")
+        try:
+            return await self.request(
+                app_slug,
+                "GET",
+                f"/repos/{owner}/{name}/labels/{label_path}",
+                repository=repo,
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 404:
+                raise
+
+        try:
+            payload: dict[str, Any] = {
+                "name": label,
+                "color": color.lstrip("#"),
+            }
+            if description is not None:
+                payload["description"] = description
+            return await self.request(
+                app_slug,
+                "POST",
+                f"/repos/{owner}/{name}/labels",
+                repository=repo,
+                json_body=payload,
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 422:
+                response_text = exc.response.text.lower()
+                if "already_exists" in response_text or "already exists" in response_text:
+                    return None
+            raise
+
     async def remove_label(self, app_slug: str, repo: str, issue_number: int, label: str) -> Any:
         owner, name = repo.split("/", 1)
         label_path = quote(label, safe="")

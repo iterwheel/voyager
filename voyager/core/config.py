@@ -86,6 +86,7 @@ class AssemblyConfig:
     pi_timeout_seconds: int | None = None
     authorized_actors: tuple[str, ...] = ()
     authorized_associations: tuple[str, ...] = ()
+    max_fix_rounds: int = 8
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -341,6 +342,18 @@ def _parse_assembly(raw: dict[str, Any]) -> AssemblyConfig:
     workdir_raw = _optional_string(section, "pi_workdir", "[assembly]")
     workdir = Path(workdir_raw).expanduser() if workdir_raw is not None else None
 
+    fix_rounds_raw = section.get("max_fix_rounds")
+    if fix_rounds_raw is not None:
+        if isinstance(fix_rounds_raw, bool) or not isinstance(fix_rounds_raw, int):
+            raise ValueError(
+                f"[assembly].max_fix_rounds must be a TOML integer, got "
+                f"{type(fix_rounds_raw).__name__}: {fix_rounds_raw!r}"
+            )
+        if fix_rounds_raw < 1:
+            raise ValueError(f"[assembly].max_fix_rounds must be >= 1, got {fix_rounds_raw!r}")
+    else:
+        fix_rounds_raw = 8
+
     return AssemblyConfig(
         execution_backend=_optional_string(section, "execution_backend", "[assembly]"),
         phase_mode=_optional_string(section, "phase_mode", "[assembly]"),
@@ -349,6 +362,7 @@ def _parse_assembly(raw: dict[str, Any]) -> AssemblyConfig:
         pi_command_path=_optional_string(section, "pi_command_path", "[assembly]"),
         pi_workdir=workdir,
         pi_timeout_seconds=timeout,
+        max_fix_rounds=fix_rounds_raw,
         authorized_actors=_string_tuple(
             section,
             "authorized_actors",
