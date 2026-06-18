@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import voyager.bots.changelog.writeback as changelog_writeback
 from voyager.bots.changelog import (
     append_unreleased_bullet,
     build_changelog_bullet,
@@ -292,6 +294,43 @@ def test_dispatch_route_writeback_returns_structured_token_failure(monkeypatch) 
     assert result["applied"] is False
     assert result["reason"] == "installation token failed: RuntimeError"
     assert result["planned"]["branch"] == "changelog/pr-123-unreleased"
+
+
+def test_publish_new_changelog_pr_uses_empty_branch_lease(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    async def fake_run_git(argv: list[str], **kwargs: Any) -> tuple[int, str]:
+        captured["argv"] = argv
+        captured["kwargs"] = kwargs
+        return 0, ""
+
+    monkeypatch.setattr(changelog_writeback, "_run_git", fake_run_git)
+    client = MagicMock()
+    client.create_pull_request = AsyncMock(
+        return_value={
+            "number": 456,
+            "html_url": "https://github.com/iterwheel/voyager/pull/456",
+        }
+    )
+    client.create_issue_comment = AsyncMock(return_value={"id": 789})
+
+    result = asyncio.run(
+        changelog_writeback._publish_new_changelog_pr(
+            client,
+            repository="iterwheel/voyager",
+            branch="changelog/pr-123-unreleased",
+            base="main",
+            title="chore(changelog): draft entry for #123",
+            body="body",
+            cwd=Path("."),
+            env={},
+        )
+    )
+
+    assert result["applied"] is True
+    assert "--force-with-lease=refs/heads/changelog/pr-123-unreleased:" in captured["argv"]
+    assert "HEAD:refs/heads/changelog/pr-123-unreleased" in captured["argv"]
+    assert result["codex_comment_id"] == 789
 
 
 def test_build_changelog_bullet_normalizes_title_spacing_and_punctuation() -> None:

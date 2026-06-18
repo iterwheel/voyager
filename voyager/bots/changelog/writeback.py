@@ -10,9 +10,9 @@ from pathlib import Path
 from typing import Any
 
 from voyager.core.publish import (
+    CODEX_REVIEW_TRIGGER_BODY,
     _git_auth_env,
     _write_git_askpass,
-    assembly_app_publish,
 )
 from voyager.core.writeback import dry_run_enabled
 
@@ -65,6 +65,83 @@ def _pr_body(draft: dict[str, Any]) -> str:
         f"{bullet}\n\n"
         f"Refs #{pr_number}."
     )
+
+
+async def _publish_new_changelog_pr(
+    client: Any,
+    *,
+    repository: str,
+    branch: str,
+    base: str,
+    title: str,
+    body: str,
+    cwd: Path,
+    env: dict[str, str],
+) -> dict[str, Any]:
+    rc, stderr = await _run_git(
+        [
+            "git",
+            "push",
+            f"--force-with-lease=refs/heads/{branch}:",
+            "--no-verify",
+            "origin",
+            f"HEAD:refs/heads/{branch}",
+        ],
+        cwd=cwd,
+        env=env,
+    )
+    if rc != 0:
+        _log.warning("changelog branch push failed for %s:%s: %s", repository, branch, stderr)
+        return {"applied": False, "reason": "git push failed"}
+
+    try:
+        pr = await client.create_pull_request(
+            CHANGELOG_APP_SLUG,
+            repository,
+            title=title,
+            head=branch,
+            base=base,
+            body=body,
+        )
+    except Exception as exc:
+        _log.warning(
+            "changelog pull request creation failed for %s:%s: %s",
+            repository,
+            branch,
+            exc.__class__.__name__,
+        )
+        return {"applied": False, "reason": f"create_pull_request failed: {exc.__class__.__name__}"}
+
+    pr_number = int(pr.get("number") or 0) if isinstance(pr, dict) else 0
+    pr_url = pr.get("html_url") if isinstance(pr, dict) else None
+    codex_id: int | None = None
+    if pr_number:
+        try:
+            comment = await client.create_issue_comment(
+                CHANGELOG_APP_SLUG,
+                repository,
+                pr_number,
+                body=CODEX_REVIEW_TRIGGER_BODY,
+            )
+            codex_id = (
+                int(comment["id"]) if isinstance(comment, dict) and comment.get("id") else None
+            )
+        except Exception as exc:
+            _log.warning(
+                "changelog codex trigger failed for %s#%s: %s",
+                repository,
+                pr_number,
+                exc.__class__.__name__,
+            )
+
+    return {
+        "applied": True,
+        "reason": None,
+        "pr_number": pr_number or None,
+        "pr_url": pr_url,
+        "pr_action": "opened",
+        "codex_comment_id": codex_id,
+    }
 
 
 async def dispatch_changelog_writeback(
@@ -214,22 +291,17 @@ async def dispatch_changelog_writeback(
                 _log.warning("changelog git command failed for %s: %s", repository, stderr)
                 return {"applied": False, "reason": f"{argv[1]} failed"}
 
-        publish = await assembly_app_publish(
+        publish = await _publish_new_changelog_pr(
+            client,
             repository=repository,
             branch=branch,
             base=base,
-            pr_title=title,
-            pr_body=_pr_body(draft),
-            app_slug=CHANGELOG_APP_SLUG,
-            client=client,
+            title=title,
+            body=_pr_body(draft),
             cwd=checkout,
+            env=env,
         )
         return {
-            "applied": publish.error is None,
-            "reason": publish.error,
+            **publish,
             "planned": planned,
-            "pr_number": publish.pr_number,
-            "pr_url": publish.pr_url,
-            "pr_action": publish.pr_action,
-            "codex_comment_id": publish.codex_comment_id,
         }
