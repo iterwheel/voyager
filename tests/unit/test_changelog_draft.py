@@ -225,6 +225,7 @@ def test_dispatch_route_writeback_preserves_existing_changelog_pr(monkeypatch) -
         _pull_request_payload(labels=["enhancement"]),
     )[0]
     client = MagicMock()
+    client.branch_ref_exists = AsyncMock(return_value=True)
     client.find_pull_request_by_head = AsyncMock(
         return_value={
             "number": 456,
@@ -242,10 +243,55 @@ def test_dispatch_route_writeback_preserves_existing_changelog_pr(monkeypatch) -
     )
 
     assert result["applied"] is False
-    assert result["reason"] == "existing changelog draft PR"
+    assert result["reason"] == "existing changelog draft branch"
     assert result["pr_number"] == 456
     assert result["preserved_existing_branch"] is True
     client.installation_token.assert_not_awaited()
+
+
+def test_dispatch_route_writeback_returns_structured_branch_lookup_failure(monkeypatch) -> None:
+    monkeypatch.setenv("DRY_RUN", "false")
+    route = route_changelog_event(
+        "pull_request",
+        _pull_request_payload(labels=["enhancement"]),
+    )[0]
+    client = MagicMock()
+    client.branch_ref_exists = AsyncMock(side_effect=RuntimeError("no key"))
+
+    result = asyncio.run(
+        dispatch_route_writeback(
+            client,
+            route,
+            repository="iterwheel/voyager",
+        )
+    )
+
+    assert result["applied"] is False
+    assert result["reason"] == "existing branch lookup failed: RuntimeError"
+    assert result["planned"]["branch"] == "changelog/pr-123-unreleased"
+
+
+def test_dispatch_route_writeback_returns_structured_token_failure(monkeypatch) -> None:
+    monkeypatch.setenv("DRY_RUN", "false")
+    route = route_changelog_event(
+        "pull_request",
+        _pull_request_payload(labels=["enhancement"]),
+    )[0]
+    client = MagicMock()
+    client.branch_ref_exists = AsyncMock(return_value=False)
+    client.installation_token = AsyncMock(side_effect=RuntimeError("no key"))
+
+    result = asyncio.run(
+        dispatch_route_writeback(
+            client,
+            route,
+            repository="iterwheel/voyager",
+        )
+    )
+
+    assert result["applied"] is False
+    assert result["reason"] == "installation token failed: RuntimeError"
+    assert result["planned"]["branch"] == "changelog/pr-123-unreleased"
 
 
 def test_build_changelog_bullet_normalizes_title_spacing_and_punctuation() -> None:

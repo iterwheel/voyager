@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import tempfile
 from pathlib import Path
@@ -99,35 +100,58 @@ async def dispatch_changelog_writeback(
     if dry_run_enabled():
         return {"applied": False, "dry_run": True, "planned": planned}
 
+    existing: dict[str, Any] | None = None
     try:
-        existing = await client.find_pull_request_by_head(
+        branch_exists = await client.branch_ref_exists(
             CHANGELOG_APP_SLUG,
             repository,
             branch,
         )
     except Exception as exc:
         _log.warning(
-            "changelog existing draft lookup failed for %s:%s: %s",
+            "changelog existing branch lookup failed for %s:%s: %s",
             repository,
             branch,
             exc.__class__.__name__,
         )
         return {
             "applied": False,
-            "reason": f"existing draft lookup failed: {exc.__class__.__name__}",
+            "reason": f"existing branch lookup failed: {exc.__class__.__name__}",
             "planned": planned,
         }
-    if existing and isinstance(existing, dict) and existing.get("number"):
-        return {
+    if branch_exists:
+        with contextlib.suppress(Exception):
+            maybe_existing = await client.find_pull_request_by_head(
+                CHANGELOG_APP_SLUG,
+                repository,
+                branch,
+            )
+            if isinstance(maybe_existing, dict):
+                existing = maybe_existing
+        result: dict[str, Any] = {
             "applied": False,
-            "reason": "existing changelog draft PR",
+            "reason": "existing changelog draft branch",
             "planned": planned,
-            "pr_number": int(existing["number"]),
-            "pr_url": existing.get("html_url"),
             "preserved_existing_branch": True,
         }
+        if existing and existing.get("number"):
+            result["pr_number"] = int(existing["number"])
+            result["pr_url"] = existing.get("html_url")
+        return result
 
-    token = await client.installation_token(CHANGELOG_APP_SLUG, repository=repository)
+    try:
+        token = await client.installation_token(CHANGELOG_APP_SLUG, repository=repository)
+    except Exception as exc:
+        _log.warning(
+            "changelog installation token failed for %s: %s",
+            repository,
+            exc.__class__.__name__,
+        )
+        return {
+            "applied": False,
+            "reason": f"installation token failed: {exc.__class__.__name__}",
+            "planned": planned,
+        }
     if not token:
         return {"applied": False, "reason": "empty installation token"}
 
