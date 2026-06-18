@@ -141,6 +141,44 @@ def test_append_unreleased_bullet_is_idempotent_for_source_pr() -> None:
     assert result.text == text
 
 
+def test_append_unreleased_bullet_does_not_treat_prefix_pr_url_as_duplicate() -> None:
+    text = """# Changelog
+
+## [Unreleased]
+
+- Later work (https://github.com/iterwheel/voyager/pull/123).
+
+## [0.1.0]
+"""
+    result = append_unreleased_bullet(
+        text,
+        bullet="- Earlier work ([#12](https://github.com/iterwheel/voyager/pull/12)).",
+        source_pr_number=12,
+    )
+
+    assert result.changed is True
+    assert "Earlier work" in result.text
+
+
+def test_append_unreleased_bullet_matches_source_pr_url_with_path_boundary() -> None:
+    text = """# Changelog
+
+## [Unreleased]
+
+- Earlier work (https://github.com/iterwheel/voyager/pull/12/files).
+
+## [0.1.0]
+"""
+    result = append_unreleased_bullet(
+        text,
+        bullet="- Earlier work ([#12](https://github.com/iterwheel/voyager/pull/12)).",
+        source_pr_number=12,
+    )
+
+    assert result.changed is False
+    assert result.reason == "already_present"
+
+
 def test_simulated_labeled_merge_produces_expected_unreleased_bullet() -> None:
     routes = route_changelog_event(
         "pull_request",

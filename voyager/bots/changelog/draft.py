@@ -53,6 +53,12 @@ def build_changelog_bullet(*, pr_number: int, pr_title: str, pr_url: str) -> str
     return f"- {title} ([#{pr_number}]({pr_url}))."
 
 
+def _has_source_pr_reference(section_text: str, source_pr_number: int) -> bool:
+    number = re.escape(str(source_pr_number))
+    reference_re = re.compile(rf"(?:\[\#{number}\]|/pull/{number}(?!\d))")
+    return reference_re.search(section_text) is not None
+
+
 def append_unreleased_bullet(
     changelog_text: str,
     *,
@@ -78,7 +84,7 @@ def append_unreleased_bullet(
             break
 
     section_text = "\n".join(lines[header_idx + 1 : next_heading_idx])
-    if f"[#{source_pr_number}]" in section_text or f"/pull/{source_pr_number}" in section_text:
+    if _has_source_pr_reference(section_text, source_pr_number):
         return ChangelogAppendResult(changelog_text, changed=False, reason="already_present")
 
     insert_at = next_heading_idx
