@@ -419,14 +419,16 @@ def _read_jsonl_lines(path: Path) -> list[str]:
 
 
 def _session_usage_tokens(value: Any) -> int:
-    """Return nested Pi/OMP usage.totalTokens values from a session record."""
+    """Return nested Pi/OMP usage token totals from a session record."""
     if isinstance(value, dict):
         total = 0
         usage = value.get("usage")
         if isinstance(usage, dict):
-            total_tokens = usage.get("totalTokens")
-            if type(total_tokens) is int and total_tokens > 0:
-                total += total_tokens
+            for key in ("totalTokens", "total_tokens"):
+                total_tokens = usage.get(key)
+                if type(total_tokens) is int and total_tokens > 0:
+                    total += total_tokens
+                    break
         for child in value.values():
             total += _session_usage_tokens(child)
         return total

@@ -305,6 +305,22 @@ def test_estimate_tokens_from_pi_session_uses_nested_usage_total_tokens(
     assert _estimate_tokens_from_session(str(session_path)) == 123
 
 
+def test_estimate_tokens_from_pi_session_uses_snake_case_total_tokens(
+    tmp_path: Path,
+) -> None:
+    session_path = tmp_path / "session.jsonl"
+    session_path.write_text(
+        (
+            '{"type":"message","message":{"role":"assistant",'
+            '"content":[{"type":"text","text":"not double counted"}],'
+            '"usage":{"prompt_tokens":200,"completion_tokens":45,"total_tokens":245}}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    assert _estimate_tokens_from_session(str(session_path)) == 245
+
+
 def test_estimate_tokens_from_pi_session_reads_nested_content_blocks(
     tmp_path: Path,
 ) -> None:
