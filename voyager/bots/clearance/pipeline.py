@@ -57,7 +57,7 @@ from voyager.bots.clearance.investigator import (
     ThreadInvestigator,
 )
 from voyager.bots.clearance.judge import VerdictDecision, judge
-from voyager.bots.clearance.known_limitations import KnownLimitationStore, compute_fingerprint
+from voyager.bots.clearance.known_limitations import KnownLimitationStore
 from voyager.bots.clearance.models import (
     Evidence,
     GitHubThreadState,
@@ -557,6 +557,21 @@ def _latest_clean_codex_signal_after_thread(
     return None
 
 
+def _known_limitation_line_candidates(thread_dict: dict[str, Any]) -> list[int | None]:
+    lines: list[int | None] = []
+    for key in ("line", "originalLine", "originalStartLine", "startLine"):
+        raw = thread_dict.get(key)
+        if raw is None:
+            continue
+        try:
+            line = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if line not in lines:
+            lines.append(line)
+    return lines or [None]
+
+
 async def _process_thread(
     thread_dict: dict[str, Any],
     *,
@@ -644,8 +659,13 @@ async def _process_thread(
         expr_path = thread_dict.get("path") or "unknown"
         expr_line = thread_dict.get("line")
         body_raw = (comments_nodes[0].get("body") if comments_nodes else None) or ""
-        fp = compute_fingerprint(expr_path, expr_line, body_raw)
-        kl_entry = known_limitation_store.lookup(fp)
+        line_candidates = _known_limitation_line_candidates(thread_dict)
+        kl_entry = known_limitation_store.lookup_for_finding(
+            repo=repo,
+            path=expr_path,
+            line_candidates=line_candidates,
+            body=body_raw,
+        )
         if kl_entry is not None:
             existing_close_reason_marker = _has_current_head_verdict_comment(
                 comments_nodes,
@@ -672,7 +692,7 @@ async def _process_thread(
                         "repo": repo,
                         "pr": pr,
                         "thread_id": thread_dict.get("id"),
-                        "fingerprint": fp[:12],
+                        "fingerprint": kl_entry.fingerprint[:12],
                         "decision_link": kl_entry.decision_link,
                     }
                 ),

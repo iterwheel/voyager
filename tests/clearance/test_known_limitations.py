@@ -12,6 +12,7 @@ from voyager.bots.clearance.known_limitations import (
     KnownLimitationEntry,
     KnownLimitationStore,
     compute_fingerprint,
+    compute_scoped_fingerprint,
 )
 from voyager.bots.clearance.models import Verdict
 from voyager.bots.clearance.pipeline import _process_thread
@@ -51,6 +52,12 @@ class TestComputeFingerprint:
         fp = compute_fingerprint("x.py", 1, "body text")
         assert len(fp) == 64
         int(fp, 16)  # valid hex
+
+    def test_scoped_fingerprint_includes_repository(self) -> None:
+        """The same path/line/body differs across repositories."""
+        fp1 = compute_scoped_fingerprint("org/repo-a", "src/main.py", 42, "same body")
+        fp2 = compute_scoped_fingerprint("org/repo-b", "src/main.py", 42, "same body")
+        assert fp1 != fp2
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +126,88 @@ class TestKnownLimitationStore:
         assert entry.decision_link == decision
         assert entry.repo == "org/repo"
         assert entry.pr_number == 42
+
+    def test_record_for_finding_is_scoped_by_repo(self, tmp_store: KnownLimitationStore) -> None:
+        """Repo-scoped findings do not suppress another repository."""
+        decision = "https://github.com/org/repo-a/issues/123"
+        tmp_store.record_for_finding(
+            repo="org/repo-a",
+            path="src/main.py",
+            line=42,
+            body="same finding",
+            decision_link=decision,
+            pr_number=123,
+        )
+
+        assert (
+            tmp_store.lookup_for_finding(
+                repo="org/repo-a",
+                path="src/main.py",
+                line_candidates=[42],
+                body="same finding",
+            )
+            is not None
+        )
+        assert (
+            tmp_store.lookup_for_finding(
+                repo="org/repo-b",
+                path="src/main.py",
+                line_candidates=[42],
+                body="same finding",
+            )
+            is None
+        )
+
+    def test_legacy_lookup_filters_by_recorded_repo(self, tmp_store: KnownLimitationStore) -> None:
+        """Old unscoped records only match their stored repo or global entries."""
+        fp = compute_fingerprint("src/main.py", 42, "same finding")
+        tmp_store.record(
+            fp,
+            "https://github.com/org/repo-a/issues/123",
+            repo="org/repo-a",
+            pr_number=123,
+        )
+
+        assert (
+            tmp_store.lookup_for_finding(
+                repo="org/repo-a",
+                path="src/main.py",
+                line_candidates=[42],
+                body="same finding",
+            )
+            is not None
+        )
+        assert (
+            tmp_store.lookup_for_finding(
+                repo="org/repo-b",
+                path="src/main.py",
+                line_candidates=[42],
+                body="same finding",
+            )
+            is None
+        )
+
+    def test_lookup_uses_original_line_candidate_for_outdated_threads(
+        self, tmp_store: KnownLimitationStore
+    ) -> None:
+        """A current-thread acceptance still matches after GitHub nulls line."""
+        tmp_store.record_for_finding(
+            repo="org/repo",
+            path="src/main.py",
+            line=42,
+            body="same finding",
+            decision_link="https://github.com/org/repo/issues/123",
+        )
+
+        entry = tmp_store.lookup_for_finding(
+            repo="org/repo",
+            path="src/main.py",
+            line_candidates=[None, 42],
+            body="same finding",
+        )
+
+        assert entry is not None
+        assert entry.decision_link == "https://github.com/org/repo/issues/123"
 
     def test_contains(self, tmp_store: KnownLimitationStore) -> None:
         """__contains__ works for recorded and missing fingerprints."""
@@ -261,6 +350,62 @@ async def test_known_limitation_fast_path_preserves_existing_marker_flags(
     assert thread.existing_close_reason_marker is True
     assert thread.existing_thread_conclusion_marker is True
     assert thread.existing_head_verdict_marker is True
+
+
+@pytest.mark.asyncio
+async def test_known_limitation_fast_path_matches_outdated_original_line(
+    tmp_store: KnownLimitationStore,
+) -> None:
+    """Outdated GitHub threads keep matching via originalLine when line is null."""
+    body = "**P2** accepted known limitation."
+    tmp_store.record_for_finding(
+        repo="org/repo",
+        path="app.py",
+        line=10,
+        body=body,
+        decision_link="https://github.com/org/repo/issues/42",
+        pr_number=42,
+    )
+    thread_dict = {
+        "id": "PRRT_known_limitation_outdated",
+        "isResolved": False,
+        "isOutdated": True,
+        "viewerCanResolve": True,
+        "path": "app.py",
+        "line": None,
+        "originalLine": 10,
+        "comments": {
+            "nodes": [
+                {
+                    "databaseId": 201,
+                    "author": {"login": "chatgpt-codex-connector"},
+                    "body": body,
+                    "url": "https://example/comments/201",
+                    "createdAt": "2026-06-17T00:00:00Z",
+                },
+            ]
+        },
+    }
+
+    processed = await _process_thread(
+        thread_dict,
+        repo="org/repo",
+        pr=42,
+        head_sha="abcdef1234567890abcdef1234567890abcdef12",
+        pr_title="Test PR",
+        now=datetime.now(UTC),
+        base_branch="main",
+        branch_protected_state=True,
+        client=object(),
+        known_limitation_store=tmp_store,
+    )
+
+    assert processed is not None
+    thread, snapshot = processed
+    assert thread.verdict == Verdict.RESOLVED
+    assert thread.known_limitation_link == "https://github.com/org/repo/issues/42"
+    assert thread.line is None
+    assert snapshot.current_line is None
 
 
 def test_unrecorded_finding_handled_normally(tmp_store: KnownLimitationStore) -> None:

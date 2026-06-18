@@ -47,6 +47,12 @@ def compute_fingerprint(path: str, line: int | None, body: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def compute_scoped_fingerprint(repo: str, path: str, line: int | None, body: str) -> str:
+    """Return a repository-scoped fingerprint for a finding."""
+    raw = _fingerprint_input(f"{repo}|{path}", line, body)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 class KnownLimitationEntry:
     """One accepted known limitation — serialised as a JSON object."""
 
@@ -120,6 +126,35 @@ class KnownLimitationStore:
         idx = self._load_index()
         return idx.get(fingerprint)
 
+    def lookup_for_finding(
+        self,
+        *,
+        repo: str,
+        path: str,
+        line_candidates: list[int | None],
+        body: str,
+    ) -> KnownLimitationEntry | None:
+        """Return an accepted limitation for a repo/path/body finding.
+
+        New entries are keyed by repository so a shared ``~/.voyager/state``
+        store cannot suppress another repository's matching path/body. Legacy
+        unscoped fingerprints remain readable, but only when the stored repo
+        is absent (global) or matches the current repository.
+        """
+        idx = self._load_index()
+        for line in _unique_lines(line_candidates):
+            entry = idx.get(compute_scoped_fingerprint(repo, path, line, body))
+            if entry is not None:
+                return entry
+
+        for line in _unique_lines(line_candidates):
+            entry = idx.get(compute_fingerprint(path, line, body))
+            if entry is None:
+                continue
+            if entry.repo is None or entry.repo == repo:
+                return entry
+        return None
+
     def record(
         self,
         fingerprint: str,
@@ -143,6 +178,24 @@ class KnownLimitationStore:
         index = self._ensure_index()
         index[fingerprint] = entry
         return entry
+
+    def record_for_finding(
+        self,
+        *,
+        repo: str,
+        path: str,
+        line: int | None,
+        body: str,
+        decision_link: str,
+        pr_number: int | None = None,
+    ) -> KnownLimitationEntry:
+        """Record a repo-scoped accepted limitation for a finding."""
+        return self.record(
+            compute_scoped_fingerprint(repo, path, line, body),
+            decision_link,
+            repo=repo,
+            pr_number=pr_number,
+        )
 
     def __contains__(self, fingerprint: str) -> bool:
         return self.lookup(fingerprint) is not None
@@ -192,3 +245,14 @@ class KnownLimitationStore:
         line = entry.to_json() + "\n"
         with self._store_path().open("a") as f:
             f.write(line)
+
+
+def _unique_lines(lines: list[int | None]) -> list[int | None]:
+    seen: set[int | None] = set()
+    unique: list[int | None] = []
+    for line in lines:
+        if line in seen:
+            continue
+        seen.add(line)
+        unique.append(line)
+    return unique or [None]
