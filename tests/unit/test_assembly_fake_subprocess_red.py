@@ -14,8 +14,10 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from voyager.bots.assembly.adapters import AdapterResult
+from voyager.bots.assembly.audit import load_loop_summaries
 from voyager.bots.assembly.constants import (
     ASSEMBLY_AGENT_SLUG,
+    ASSEMBLY_AUDIT_DIR_ENV,
     ASSEMBLY_EXECUTION_BACKEND_ENV,
     CODEX_REVIEW_TRIGGER_BODY,
 )
@@ -640,6 +642,126 @@ def test_two_phase_codex_trigger_waits_for_testpilot_result(monkeypatch) -> None
     assert result["branch"]["sha"] == OTHER_VALID_SHA
     assert result["codex_review_comment_id"] == 4242
     assert observed_testpilot_results == [result["testpilot_result"]]
+
+
+def test_loop_summary_records_pr_number_and_two_phase_usage(monkeypatch, tmp_path) -> None:
+    import voyager.bots.assembly.writeback as writeback
+    from voyager.bots.assembly.constants import ASSEMBLY_BACKEND_FAKE_SUBPROCESS
+
+    audit_root = tmp_path / "audit"
+    implementer_session = tmp_path / "implementer.jsonl"
+    testpilot_session = tmp_path / "testpilot.jsonl"
+    implementer_session.write_text(json.dumps({"content": "i" * 40}) + "\n", encoding="utf-8")
+    testpilot_session.write_text(json.dumps({"content": "t" * 20}) + "\n", encoding="utf-8")
+
+    monkeypatch.setenv(ASSEMBLY_AUDIT_DIR_ENV, str(audit_root))
+    monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setenv(ASSEMBLY_EXECUTION_BACKEND_ENV, ASSEMBLY_BACKEND_FAKE_SUBPROCESS)
+    monkeypatch.setenv("ASSEMBLY_PHASE_MODE", "two-phase")
+    monkeypatch.setenv("ASSEMBLY_TESTPILOT_BACKEND", ASSEMBLY_BACKEND_FAKE_SUBPROCESS)
+    monkeypatch.setenv(FAKE_ALLOW_ENV, "1")
+    _set_fake_output(
+        monkeypatch,
+        {
+            "status": "executed",
+            "commit_shas": [VALID_SHA],
+            "summary": "implementer commit",
+            "details": {"omp_session_jsonl_path": str(implementer_session)},
+        },
+    )
+    monkeypatch.setenv(
+        "ASSEMBLY_FAKE_SUBPROCESS_OUTPUT_TESTPILOT",
+        json.dumps(
+            {
+                "status": "executed",
+                "commit_shas": [OTHER_VALID_SHA],
+                "summary": "testpilot commit",
+                "details": {"omp_session_jsonl_path": str(testpilot_session)},
+            }
+        ),
+    )
+
+    result = asyncio.run(
+        writeback.dispatch_assembly_writeback(
+            _mock_client(),
+            _route(),
+            repository="iterwheel/voyager-sandbox",
+        )
+    )
+
+    summaries = load_loop_summaries(
+        repository="iterwheel/voyager-sandbox",
+        issue_number=69,
+        root=audit_root,
+    )
+    assert result["pull_request"]["number"] == 1234
+    assert len(summaries) == 1
+    assert summaries[0].pr_number == 1234
+    assert summaries[0].commits == 2
+    assert summaries[0].est_tokens == 15
+
+
+@pytest.mark.parametrize("status", ["failed", "blocked"])
+def test_loop_summary_preserves_existing_pr_for_no_commit_terminal_status(
+    monkeypatch,
+    tmp_path,
+    status: str,
+) -> None:
+    import voyager.bots.assembly.writeback as writeback
+    from voyager.bots.assembly.constants import ASSEMBLY_BACKEND_FAKE_SUBPROCESS
+
+    audit_root = tmp_path / "audit"
+    implementer_session = tmp_path / "implementer.jsonl"
+    implementer_session.write_text(json.dumps({"content": "i" * 40}) + "\n", encoding="utf-8")
+
+    monkeypatch.setenv(ASSEMBLY_AUDIT_DIR_ENV, str(audit_root))
+    monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setenv(ASSEMBLY_EXECUTION_BACKEND_ENV, ASSEMBLY_BACKEND_FAKE_SUBPROCESS)
+    monkeypatch.setenv(FAKE_ALLOW_ENV, "1")
+    _set_fake_output(
+        monkeypatch,
+        {
+            "status": status,
+            "summary": f"fake subprocess reported {status}",
+            "details": {"omp_session_jsonl_path": str(implementer_session)},
+        },
+    )
+    client = _mock_client()
+    client.find_pull_request_by_head = AsyncMock(
+        return_value={
+            "number": 1234,
+            "html_url": "https://example/pr/1234",
+            "head": {
+                "sha": VALID_SHA,
+                "repo": {"full_name": "iterwheel/voyager-sandbox"},
+            },
+            "base": {"repo": {"full_name": "iterwheel/voyager-sandbox"}},
+        }
+    )
+
+    result = asyncio.run(
+        writeback.dispatch_assembly_writeback(
+            client,
+            _route(),
+            repository="iterwheel/voyager-sandbox",
+        )
+    )
+
+    summaries = load_loop_summaries(
+        repository="iterwheel/voyager-sandbox",
+        issue_number=69,
+        root=audit_root,
+    )
+    assert result["adapter_result"]["status"] == status
+    assert result["pull_request"] == {
+        "number": 1234,
+        "url": "https://example/pr/1234",
+        "action": "updated",
+    }
+    assert len(summaries) == 1
+    assert summaries[0].pr_number == 1234
+    assert summaries[0].commits == 0
+    assert summaries[0].est_tokens == 10
 
 
 def test_two_phase_testpilot_starts_with_fresh_session_when_implementer_resumed(

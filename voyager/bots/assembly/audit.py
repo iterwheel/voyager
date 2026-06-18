@@ -10,7 +10,8 @@ import hashlib
 import json
 import os
 import re
-from dataclasses import asdict, dataclass, field
+from collections.abc import Iterable
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,7 @@ _SECRET_KEY_RE = re.compile(
     r"(token|secret|password|private[_-]?key|api[_-]?key|credential)",
     re.IGNORECASE,
 )
+_PRIVATE_AUDIT_FILE_MODE = 0o600
 
 
 def utc_now_iso() -> str:
@@ -313,3 +315,243 @@ def find_session_metadata(
         root=root,
     )
     return path if path.exists() else None
+
+
+_LOOP_SUMMARY_SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True)
+class LoopSummary:
+    """One Assembly writeback loop summary record (per-PR telemetry).
+
+    Appended as a JSONL line after each ``dispatch_assembly_writeback`` run so
+    the circuit breaker and cost monitoring can read the cumulative record.
+
+    ``repository`` and ``issue_number`` are used to derive the storage path
+    and identify which PR the run belongs to. ``pr_number`` is the GitHub PR
+    number (may differ from the issue number on fork-PR workflows).
+    """
+
+    repository: str
+    issue_number: int
+    pr_number: int | None
+    rounds: int
+    commits: int
+    est_tokens: int
+    timestamp: str
+    audit_id: str | None = None
+    schema_version: int = _LOOP_SUMMARY_SCHEMA_VERSION
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> LoopSummary:
+        return cls(
+            repository=str(data.get("repository") or ""),
+            issue_number=int(data.get("issue_number") or 0),
+            pr_number=data.get("pr_number"),
+            rounds=int(data.get("rounds") or 0),
+            commits=int(data.get("commits") or 0),
+            est_tokens=int(data.get("est_tokens") or 0),
+            timestamp=str(data.get("timestamp") or ""),
+            audit_id=data.get("audit_id"),
+            schema_version=int(data.get("schema_version") or _LOOP_SUMMARY_SCHEMA_VERSION),
+        )
+
+
+def loop_summary_path(
+    *,
+    repository: str,
+    issue_number: int,
+    root: Path | None = None,
+) -> Path:
+    """Return the JSONL path for this PR's loop summary records."""
+    owner, _, repo = repository.partition("/")
+    if not owner or not repo:
+        owner, repo = "unknown", repository or "unknown"
+    return (root or audit_storage_root()) / owner / repo / str(issue_number) / "loop-summary.jsonl"
+
+
+def append_loop_summary(summary: LoopSummary, *, root: Path | None = None) -> Path:
+    """Append one *summary* record to the per-PR JSONL log."""
+    path = loop_summary_path(
+        repository=summary.repository,
+        issue_number=summary.issue_number,
+        root=root,
+    )
+    _append_jsonl(path, summary.to_dict())
+    return path
+
+
+def append_loop_summary_with_next_round(
+    summary: LoopSummary,
+    *,
+    root: Path | None = None,
+) -> tuple[Path, LoopSummary]:
+    """Append *summary* with its round assigned under the JSONL file lock."""
+    path = loop_summary_path(
+        repository=summary.repository,
+        issue_number=summary.issue_number,
+        root=root,
+    )
+    assigned = _append_loop_summary_with_next_round(path, summary)
+    return path, assigned
+
+
+def load_loop_summaries(
+    *,
+    repository: str,
+    issue_number: int,
+    root: Path | None = None,
+) -> list[LoopSummary]:
+    """Return all LoopSummary records for a given PR, in order."""
+    path = loop_summary_path(repository=repository, issue_number=issue_number, root=root)
+    if not path.exists():
+        return []
+    return _loop_summaries_from_lines(_read_jsonl_lines(path))
+
+
+def _read_jsonl_lines(path: Path) -> list[str]:
+    """Return non-blank lines from a JSONL file (no validation)."""
+    if not path.exists():
+        return []
+    return [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def _session_usage_tokens(value: Any) -> int:
+    """Return nested Pi/OMP usage token totals from a session record."""
+    if isinstance(value, dict):
+        total = 0
+        usage = value.get("usage")
+        if isinstance(usage, dict):
+            for key in ("totalTokens", "total_tokens"):
+                total_tokens = usage.get(key)
+                if type(total_tokens) is int and total_tokens > 0:
+                    total += total_tokens
+                    break
+        for child in value.values():
+            total += _session_usage_tokens(child)
+        return total
+    if isinstance(value, list):
+        return sum(_session_usage_tokens(item) for item in value)
+    return 0
+
+
+def _session_text_chars(value: Any) -> int:
+    """Return text chars from common Pi/OMP transcript shapes."""
+    if isinstance(value, str):
+        return len(value)
+    if isinstance(value, list):
+        return sum(_session_text_chars(item) for item in value)
+    if isinstance(value, dict):
+        total = 0
+        for key in (
+            "content",
+            "text",
+            "thinking",
+            "message",
+            "output",
+            "prompt",
+            "summary",
+            "command",
+        ):
+            if key in value:
+                total += _session_text_chars(value[key])
+        return total
+    return 0
+
+
+def _estimate_tokens_from_session(omp_session_jsonl_path: str | None) -> int:
+    """Rough token estimate from an OMP session transcript (~4 chars/token)."""
+    if not omp_session_jsonl_path:
+        return 0
+    try:
+        path = Path(omp_session_jsonl_path)
+        if not path.exists():
+            return 0
+        explicit_tokens = 0
+        total_chars = 0
+        for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                record = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            usage_tokens = _session_usage_tokens(record)
+            if usage_tokens:
+                explicit_tokens += usage_tokens
+            else:
+                total_chars += _session_text_chars(record)
+        estimated_tokens = explicit_tokens + (total_chars // 4)
+        return max(1, estimated_tokens) if explicit_tokens or total_chars else 0
+    except (OSError, json.JSONDecodeError):
+        return 0
+
+
+def _append_jsonl(path: Path, data: dict[str, Any]) -> None:
+    """Atomic append of a JSON line to *path*, same pattern as clearance StateStore."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(data, sort_keys=True) + "\n"
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, _PRIVATE_AUDIT_FILE_MODE)
+    os.fchmod(fd, _PRIVATE_AUDIT_FILE_MODE)
+    with os.fdopen(fd, "a", encoding="utf-8") as f:
+        import fcntl
+
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            size = os.fstat(f.fileno()).st_size
+            if size > 0:
+                with path.open("rb") as r:
+                    r.seek(size - 1)
+                    last = r.read(1)
+                if last != b"\n":
+                    payload = "\n" + payload
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+
+def _append_loop_summary_with_next_round(path: Path, summary: LoopSummary) -> LoopSummary:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, _PRIVATE_AUDIT_FILE_MODE)
+    os.fchmod(fd, _PRIVATE_AUDIT_FILE_MODE)
+    with os.fdopen(fd, "r+", encoding="utf-8") as f:
+        import fcntl
+
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            f.seek(0)
+            existing = _loop_summaries_from_lines(
+                line.strip() for line in f.read().splitlines() if line.strip()
+            )
+            assigned = replace(summary, rounds=len(existing) + 1)
+            payload = json.dumps(assigned.to_dict(), sort_keys=True) + "\n"
+            size = os.fstat(f.fileno()).st_size
+            if size > 0:
+                f.seek(size - 1)
+                last = f.read(1)
+                if last != "\n":
+                    payload = "\n" + payload
+            f.seek(0, os.SEEK_END)
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+            return assigned
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+
+def _loop_summaries_from_lines(lines: Iterable[str]) -> list[LoopSummary]:
+    records: list[LoopSummary] = []
+    for raw in lines:
+        try:
+            data = json.loads(raw)
+            records.append(LoopSummary.from_dict(data))
+        except (json.JSONDecodeError, ValueError, TypeError):
+            continue
+    return records

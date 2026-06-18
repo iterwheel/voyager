@@ -30,6 +30,9 @@ from .adapters import AdapterExecutionContext, AdapterResult, select_execution_a
 from .audit import (
     AssemblyAuditManifest,
     AssemblySessionMetadata,
+    LoopSummary,
+    _estimate_tokens_from_session,
+    append_loop_summary_with_next_round,
     find_session_metadata,
     generate_audit_id,
     load_session_metadata,
@@ -556,6 +559,82 @@ def _write_audit_manifest(
         )
 
 
+def _record_loop_summary(
+    *,
+    repository: str,
+    issue_number: int,
+    pr_number: int | None,
+    adapter_result: dict[str, Any] | None,
+    testpilot_result: dict[str, Any] | None = None,
+    audit_id: str | None = None,
+    root: Path | None = None,
+) -> None:
+    """Append a LoopSummary record after a completed loop run.
+
+    The round counter is assigned while holding the summary file's append lock
+    so concurrent Assembly completions cannot write duplicate round values.
+    """
+    result_parts = [adapter_result, testpilot_result]
+    commits = sum(_adapter_commit_count(part) for part in result_parts)
+    est_tokens = sum(_adapter_est_tokens(part) for part in result_parts)
+    summary = LoopSummary(
+        repository=repository,
+        issue_number=issue_number,
+        pr_number=pr_number,
+        rounds=0,
+        commits=commits,
+        est_tokens=est_tokens,
+        timestamp=utc_now_iso(),
+        audit_id=audit_id,
+    )
+    try:
+        _path, assigned = append_loop_summary_with_next_round(summary, root=root)
+    except OSError:
+        _log.warning(
+            "failed to record loop summary",
+            extra={"repository": repository, "issue": issue_number},
+            exc_info=True,
+        )
+    else:
+        _log.debug(
+            "recorded loop summary",
+            extra={"repository": repository, "issue": issue_number, "round": assigned.rounds},
+        )
+
+
+def _adapter_commit_count(adapter_result: dict[str, Any] | None) -> int:
+    if not isinstance(adapter_result, dict):
+        return 0
+    commit_shas = adapter_result.get("commit_shas")
+    if isinstance(commit_shas, (list, tuple)):
+        return len(commit_shas)
+    return 0
+
+
+def _adapter_est_tokens(adapter_result: dict[str, Any] | None) -> int:
+    if not isinstance(adapter_result, dict):
+        return 0
+    details = adapter_result.get("details")
+    if not isinstance(details, dict):
+        return 0
+    omp_session_path = details.get("omp_session_jsonl_path")
+    return _estimate_tokens_from_session(
+        omp_session_path if isinstance(omp_session_path, str) else None
+    )
+
+
+def _pull_request_number_from_result(result: dict[str, Any]) -> int | None:
+    pull_request = result.get("pull_request")
+    if not isinstance(pull_request, dict):
+        return None
+    number = pull_request.get("number")
+    if isinstance(number, int):
+        return number
+    if isinstance(number, str) and number.strip().isdigit():
+        return int(number)
+    return None
+
+
 async def _live_issue_from_route(
     client: GitHubAppClient,
     repository: str,
@@ -825,6 +904,14 @@ async def dispatch_assembly_writeback(
                     delivery_id=delivery_id,
                     repository=repository,
                 )
+                _record_loop_summary(
+                    repository=repository,
+                    issue_number=contract.issue_number,
+                    pr_number=_pull_request_number_from_result(base_result),
+                    adapter_result=base_result.get("adapter_result"),
+                    testpilot_result=base_result.get("testpilot_result"),
+                    audit_id=base_result.get("audit_id"),
+                )
                 return base_result
             # Codex P2: the breaker label is idempotent but the escalation
             # comment is not. If a prior run added the label but its comment
@@ -845,6 +932,14 @@ async def dispatch_assembly_writeback(
                 repository=repository,
             )
             await _upsert_progress_comments(client, contract, repository, base_result)
+            _record_loop_summary(
+                repository=repository,
+                issue_number=contract.issue_number,
+                pr_number=_pull_request_number_from_result(base_result),
+                adapter_result=base_result.get("adapter_result"),
+                testpilot_result=base_result.get("testpilot_result"),
+                audit_id=base_result.get("audit_id"),
+            )
             return base_result
 
         current_round = _read_current_fix_round(current_labels)
@@ -872,6 +967,14 @@ async def dispatch_assembly_writeback(
                     result=base_result,
                     delivery_id=delivery_id,
                     repository=repository,
+                )
+                _record_loop_summary(
+                    repository=repository,
+                    issue_number=contract.issue_number,
+                    pr_number=_pull_request_number_from_result(base_result),
+                    adapter_result=base_result.get("adapter_result"),
+                    testpilot_result=base_result.get("testpilot_result"),
+                    audit_id=base_result.get("audit_id"),
                 )
                 return base_result
             pr_context = await _find_existing_pull_request_context(
@@ -924,6 +1027,14 @@ async def dispatch_assembly_writeback(
                     repository=repository,
                 )
                 await _upsert_progress_comments(client, contract, repository, base_result)
+                _record_loop_summary(
+                    repository=repository,
+                    issue_number=contract.issue_number,
+                    pr_number=_pull_request_number_from_result(base_result),
+                    adapter_result=base_result.get("adapter_result"),
+                    testpilot_result=base_result.get("testpilot_result"),
+                    audit_id=base_result.get("audit_id"),
+                )
                 return base_result
 
         # --------------------------------------------------------------
@@ -1023,6 +1134,13 @@ async def dispatch_assembly_writeback(
                 delivery_id=delivery_id,
                 repository=repository,
             )
+            _record_loop_summary(
+                repository=repository,
+                issue_number=contract.issue_number,
+                pr_number=_pull_request_number_from_result(base_result),
+                adapter_result=base_result.get("adapter_result"),
+                audit_id=base_result.get("audit_id"),
+            )
             return base_result
 
         base_result["applied"] = True
@@ -1043,7 +1161,7 @@ async def dispatch_assembly_writeback(
                 "url": None,
                 "action": "skipped_no_changes",
             }
-            await _preserve_existing_pr_context_for_no_changes(
+            await _preserve_existing_pr_context_for_no_commit_terminal(
                 client, repository, contract, base_result
             )
             _persist_session_metadata(
@@ -1058,6 +1176,13 @@ async def dispatch_assembly_writeback(
                 repository=repository,
             )
             await _upsert_progress_comments(client, contract, repository, base_result)
+            _record_loop_summary(
+                repository=repository,
+                issue_number=contract.issue_number,
+                pr_number=_pull_request_number_from_result(base_result),
+                adapter_result=base_result.get("adapter_result"),
+                audit_id=base_result.get("audit_id"),
+            )
             return base_result
 
         # --------------------------------------------------------------
@@ -1185,6 +1310,14 @@ async def dispatch_assembly_writeback(
             repository=repository,
         )
         await _upsert_progress_comments(client, contract, repository, base_result)
+        _record_loop_summary(
+            repository=repository,
+            issue_number=contract.issue_number,
+            pr_number=_pull_request_number_from_result(base_result),
+            adapter_result=base_result.get("adapter_result"),
+            testpilot_result=base_result.get("testpilot_result"),
+            audit_id=base_result.get("audit_id"),
+        )
         return base_result
 
 
@@ -1798,15 +1931,15 @@ async def _has_current_human_approval(
     return any(state == "APPROVED" for state in latest_state_by_human.values())
 
 
-async def _preserve_existing_pr_context_for_no_changes(
+async def _preserve_existing_pr_context_for_no_commit_terminal(
     client: GitHubAppClient,
     repository: str,
     contract: AssemblyJobContract,
     result: dict[str, Any],
 ) -> None:
-    """Keep duplicate no_changes runs from erasing an already-open PR context."""
+    """Keep no-commit terminal runs from erasing an already-open PR context."""
     adapter_result = result.get("adapter_result") or {}
-    if adapter_result.get("status") != "no_changes":
+    if adapter_result.get("status") not in {"no_changes", "failed", "blocked"}:
         return
 
     try:
@@ -1815,9 +1948,9 @@ async def _preserve_existing_pr_context_for_no_changes(
         )
     except (httpx.HTTPError, TimeoutError):
         # This lookup is only for monotonic progress rendering. If it is
-        # unavailable, keep the original first-run no_changes surface.
+        # unavailable, keep the original first-run no-PR surface.
         _log.warning(
-            "Assembly no_changes PR-context lookup failed",
+            "Assembly no-commit PR-context lookup failed",
             extra={"repository": repository, "issue": contract.issue_number},
             exc_info=True,
         )
@@ -1848,6 +1981,9 @@ async def _preserve_existing_pr_context_for_no_changes(
         "url": existing.get("html_url"),
         "action": "updated",
     }
+
+
+_preserve_existing_pr_context_for_no_changes = _preserve_existing_pr_context_for_no_commit_terminal
 
 
 async def _post_codex_trigger(

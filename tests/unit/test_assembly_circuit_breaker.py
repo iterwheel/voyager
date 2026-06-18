@@ -14,6 +14,7 @@ from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
 from voyager.bots.assembly.constants import (
+    ASSEMBLY_AUDIT_DIR_ENV,
     ASSEMBLY_COMMENT_MARKER,
     ASSEMBLY_FIX_ROUND_LABEL_PREFIX,
     ASSEMBLY_MAX_FIX_ROUNDS_ENV,
@@ -259,10 +260,12 @@ def _adapter_executed() -> Mock:
     return executed
 
 
-def test_dispatch_circuit_broken_label_halts_immediately() -> None:
+def test_dispatch_circuit_broken_label_halts_immediately(monkeypatch, tmp_path) -> None:
     """When ``loop-circuit-broken`` label is already present, stop."""
+    from voyager.bots.assembly.audit import load_loop_summaries
     from voyager.bots.assembly.writeback import dispatch_assembly_writeback
 
+    monkeypatch.setenv(ASSEMBLY_AUDIT_DIR_ENV, str(tmp_path / "audit"))
     labels = ["blueprint-ready", "stack-type-feature", LOOP_CIRCUIT_BROKEN_LABEL]
     client = _mock_client(get_issue_labels=labels)
     adapter = _adapter_executed()
@@ -277,12 +280,21 @@ def test_dispatch_circuit_broken_label_halts_immediately() -> None:
     assert pr_action == "circuit_broken_already"
     # Adapter should never have been called
     adapter.execute.assert_not_called()
+    summaries = load_loop_summaries(repository=_REPO, issue_number=_ISSUE_NUMBER)
+    assert len(summaries) == 1
+    assert summaries[0].pr_number == 1234
+    assert summaries[0].rounds == 1
+    assert summaries[0].commits == 0
+    assert summaries[0].est_tokens == 0
+    assert summaries[0].audit_id == result.get("audit_id")
 
 
-def test_dispatch_threshold_exceeded_halts_with_label_and_comment() -> None:
+def test_dispatch_threshold_exceeded_halts_with_label_and_comment(monkeypatch, tmp_path) -> None:
     """When fix rounds reach the max threshold, the circuit breaker fires."""
+    from voyager.bots.assembly.audit import load_loop_summaries
     from voyager.bots.assembly.writeback import dispatch_assembly_writeback
 
+    monkeypatch.setenv(ASSEMBLY_AUDIT_DIR_ENV, str(tmp_path / "audit"))
     # Simulate threshold+1 rounds (max=8, labels show round-8 → current_round=8)
     round_labels = [f"{ASSEMBLY_FIX_ROUND_LABEL_PREFIX}8"]
     client = _mock_client(get_issue_labels=["blueprint-ready", "stack-type-feature", *round_labels])
@@ -325,6 +337,13 @@ def test_dispatch_threshold_exceeded_halts_with_label_and_comment() -> None:
     assert [call.args[2] for call in progress_calls] == [_ISSUE_NUMBER, 1234]
     assert "status: `blocked`" in progress_calls[0].kwargs["body"]
     assert "Circuit breaker threshold reached" in progress_calls[0].kwargs["body"]
+    summaries = load_loop_summaries(repository=_REPO, issue_number=_ISSUE_NUMBER)
+    assert len(summaries) == 1
+    assert summaries[0].pr_number == 1234
+    assert summaries[0].rounds == 1
+    assert summaries[0].commits == 0
+    assert summaries[0].est_tokens == 0
+    assert summaries[0].audit_id == result.get("audit_id")
 
 
 def test_dispatch_threshold_with_current_human_approval_proceeds_normally() -> None:
@@ -459,12 +478,14 @@ def test_dispatch_fix_round_label_provisioning_failure_records_failure() -> None
     client.add_labels.assert_not_awaited()
 
 
-def test_dispatch_threshold_dry_run_makes_no_mutations() -> None:
+def test_dispatch_threshold_dry_run_makes_no_mutations(monkeypatch, tmp_path) -> None:
     """A threshold-hit breaker on a dry-run invocation performs NO GitHub
     mutations: no label, no escalation comment, no progress comment (Codex P2).
     """
+    from voyager.bots.assembly.audit import load_loop_summaries
     from voyager.bots.assembly.writeback import dispatch_assembly_writeback
 
+    monkeypatch.setenv(ASSEMBLY_AUDIT_DIR_ENV, str(tmp_path / "audit"))
     round_labels = [f"{ASSEMBLY_FIX_ROUND_LABEL_PREFIX}8"]
     client = _mock_client(get_issue_labels=["blueprint-ready", "stack-type-feature", *round_labels])
     adapter = _adapter_executed()
@@ -480,6 +501,13 @@ def test_dispatch_threshold_dry_run_makes_no_mutations() -> None:
     adapter.execute.assert_not_called()
     client.add_labels.assert_not_called()
     client.upsert_issue_comment.assert_not_called()
+    summaries = load_loop_summaries(repository=_REPO, issue_number=_ISSUE_NUMBER)
+    assert len(summaries) == 1
+    assert summaries[0].pr_number is None
+    assert summaries[0].rounds == 1
+    assert summaries[0].commits == 0
+    assert summaries[0].est_tokens == 0
+    assert summaries[0].audit_id == result.get("audit_id")
 
 
 def test_dispatch_circuit_broken_already_retries_escalation() -> None:

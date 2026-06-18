@@ -6,6 +6,7 @@ from pathlib import Path
 from voyager.bots.assembly.adapters import _latest_omp_session_jsonl
 from voyager.bots.assembly.audit import (
     AssemblyAuditManifest,
+    _estimate_tokens_from_session,
     audit_manifest_path,
     find_audit_manifest,
     generate_audit_id,
@@ -280,3 +281,263 @@ def test_latest_omp_session_jsonl_skips_transient_stat_failures(
     monkeypatch.setattr(Path, "stat", fake_stat)
 
     assert _latest_omp_session_jsonl(checkout_dir) == str(newest)
+
+
+def test_estimate_tokens_from_pi_session_uses_nested_usage_total_tokens(
+    tmp_path: Path,
+) -> None:
+    session_path = tmp_path / "session.jsonl"
+    session_path.write_text(
+        "\n".join(
+            [
+                '{"type":"session","version":3}',
+                (
+                    '{"type":"message","message":{"role":"assistant",'
+                    '"content":[{"type":"text","text":"not double counted"}],'
+                    '"usage":{"input":100,"output":23,"totalTokens":123}}}'
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert _estimate_tokens_from_session(str(session_path)) == 123
+
+
+def test_estimate_tokens_from_pi_session_uses_snake_case_total_tokens(
+    tmp_path: Path,
+) -> None:
+    session_path = tmp_path / "session.jsonl"
+    session_path.write_text(
+        (
+            '{"type":"message","message":{"role":"assistant",'
+            '"content":[{"type":"text","text":"not double counted"}],'
+            '"usage":{"prompt_tokens":200,"completion_tokens":45,"total_tokens":245}}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    assert _estimate_tokens_from_session(str(session_path)) == 245
+
+
+def test_estimate_tokens_from_session_ignores_invalid_utf8_transcripts(
+    tmp_path: Path,
+) -> None:
+    session_path = tmp_path / "session.jsonl"
+    session_path.write_bytes(b"\xff\xfe\x00not-json")
+
+    assert _estimate_tokens_from_session(str(session_path)) == 0
+
+
+def test_estimate_tokens_from_pi_session_reads_nested_content_blocks(
+    tmp_path: Path,
+) -> None:
+    session_path = tmp_path / "session.jsonl"
+    text = "a" * 40
+    thinking = "b" * 20
+    output = "c" * 16
+    session_path.write_text(
+        "\n".join(
+            [
+                (
+                    '{"type":"message","message":{"role":"assistant",'
+                    f'"content":[{{"type":"text","text":"{text}"}},'
+                    f'{{"type":"thinking","thinking":"{thinking}"}}]}}}}'
+                ),
+                (
+                    '{"type":"message","message":{"role":"toolResult",'
+                    f'"content":[{{"type":"text","text":"{output}"}}],'
+                    '"isError":false}}'
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert _estimate_tokens_from_session(str(session_path)) == (40 + 20 + 16) // 4
+
+
+# ---------------------------------------------------------------------------
+# Loop Summary telemetry (VOY-1817 Surface 20 / per-PR round tracking)
+# ---------------------------------------------------------------------------
+
+
+def test_loop_summary_round_trip(monkeypatch, tmp_path: Path) -> None:
+    """A LoopSummary written to JSONL can be read back with identical fields."""
+    from voyager.bots.assembly.audit import (
+        LoopSummary,
+        append_loop_summary,
+        load_loop_summaries,
+    )
+
+    monkeypatch.setenv(ASSEMBLY_AUDIT_DIR_ENV, str(tmp_path / "audit"))
+    summary = LoopSummary(
+        repository="iterwheel/voyager",
+        issue_number=42,
+        pr_number=42,
+        rounds=1,
+        commits=3,
+        est_tokens=1500,
+        timestamp="2026-06-17T12:00:00",
+        audit_id="asmb-0011223344556677",
+    )
+    append_loop_summary(summary)
+
+    loaded = load_loop_summaries(repository="iterwheel/voyager", issue_number=42)
+    assert len(loaded) == 1
+    assert loaded[0] == summary
+
+
+def test_loop_summary_round_counts_increment(tmp_path: Path) -> None:
+    """After N simulated runs, each record has the expected round number."""
+    from voyager.bots.assembly.audit import (
+        LoopSummary,
+        append_loop_summary,
+        load_loop_summaries,
+    )
+
+    root = tmp_path / "audit-root"
+    repo = "iterwheel/voyager"
+    issue = 42
+
+    for i in range(1, 5):
+        summary = LoopSummary(
+            repository=repo,
+            issue_number=issue,
+            pr_number=issue,
+            rounds=i,
+            commits=i,
+            est_tokens=100 * i,
+            timestamp=f"2026-06-17T12:0{i}:00",
+        )
+        append_loop_summary(summary, root=root)
+
+    loaded = load_loop_summaries(repository=repo, issue_number=issue, root=root)
+    assert len(loaded) == 4
+    for idx, record in enumerate(loaded, start=1):
+        assert record.rounds == idx
+        assert record.commits == idx
+
+
+def test_loop_summary_round_assignment_ignores_stale_pre_append_reads(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Round assignment happens under the append lock, not from a stale read."""
+    import voyager.bots.assembly.writeback as writeback
+    from voyager.bots.assembly.audit import load_loop_summaries
+
+    root = tmp_path / "audit-root"
+    monkeypatch.setattr(writeback, "load_loop_summaries", lambda **_kwargs: [], raising=False)
+
+    for audit_id in ("asmb-0011223344556677", "asmb-8899aabbccddeeff"):
+        writeback._record_loop_summary(
+            repository="iterwheel/voyager",
+            issue_number=42,
+            pr_number=172,
+            adapter_result={"commit_shas": ["a" * 40]},
+            audit_id=audit_id,
+            root=root,
+        )
+
+    loaded = load_loop_summaries(repository="iterwheel/voyager", issue_number=42, root=root)
+    assert [record.rounds for record in loaded] == [1, 2]
+
+
+def test_loop_summary_file_is_jsonl(tmp_path: Path) -> None:
+    """The underlying file is valid JSONL — one JSON object per line."""
+    from voyager.bots.assembly.audit import (
+        LoopSummary,
+        append_loop_summary,
+        loop_summary_path,
+    )
+
+    repo = "iterwheel/voyager"
+    issue = 99
+    root = tmp_path / "audit-root"
+
+    for i in range(1, 4):
+        summary = LoopSummary(
+            repository=repo,
+            issue_number=issue,
+            pr_number=issue,
+            rounds=i,
+            commits=0,
+            est_tokens=0,
+            timestamp="2026-06-17T00:00:00",
+        )
+        append_loop_summary(summary, root=root)
+
+    path = loop_summary_path(repository=repo, issue_number=issue, root=root)
+    lines = path.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 3
+
+    import json
+
+    for idx, raw in enumerate(lines, start=1):
+        data = json.loads(raw)
+        assert data["rounds"] == idx
+        assert data["commits"] == 0
+
+
+def test_loop_summary_file_permissions_are_private(tmp_path: Path) -> None:
+    """Loop summary telemetry is private audit state and must be 0600."""
+    from voyager.bots.assembly.audit import (
+        LoopSummary,
+        append_loop_summary_with_next_round,
+        loop_summary_path,
+    )
+
+    repo = "iterwheel/voyager"
+    issue = 100
+    root = tmp_path / "audit-root"
+
+    append_loop_summary_with_next_round(
+        LoopSummary(
+            repository=repo,
+            issue_number=issue,
+            pr_number=issue,
+            rounds=0,
+            commits=0,
+            est_tokens=0,
+            timestamp="2026-06-17T00:00:00",
+        ),
+        root=root,
+    )
+
+    path = loop_summary_path(repository=repo, issue_number=issue, root=root)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_loop_summary_append_chmods_existing_file(tmp_path: Path) -> None:
+    """Appending also tightens older loop-summary files created with a broad umask."""
+    from voyager.bots.assembly.audit import (
+        LoopSummary,
+        append_loop_summary_with_next_round,
+        loop_summary_path,
+    )
+
+    repo = "iterwheel/voyager"
+    issue = 101
+    root = tmp_path / "audit-root"
+    path = loop_summary_path(repository=repo, issue_number=issue, root=root)
+    path.parent.mkdir(parents=True)
+    path.write_text("", encoding="utf-8")
+    path.chmod(0o644)
+
+    append_loop_summary_with_next_round(
+        LoopSummary(
+            repository=repo,
+            issue_number=issue,
+            pr_number=issue,
+            rounds=0,
+            commits=0,
+            est_tokens=0,
+            timestamp="2026-06-17T00:00:00",
+        ),
+        root=root,
+    )
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
