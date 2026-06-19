@@ -425,6 +425,15 @@ async def dispatch_route_writeback(
             repository=repository,
         )
 
+    if dynamic == "pr_branch_cleanup":
+        from voyager.bots.cleanup.writeback import dispatch_pr_branch_cleanup
+
+        return await dispatch_pr_branch_cleanup(
+            client,
+            route,
+            repository=repository,
+        )
+
     if dynamic == "clearance_readiness":
         if not repository:
             return {

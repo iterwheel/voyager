@@ -525,11 +525,12 @@ class GitHubAppClient:
         response.raise_for_status()
         return response.text
 
-    async def branch_protected(self, app_slug: str, repo: str, branch: str) -> bool:
-        """Return True if base branch has protection rules.
+    async def branch_protected_or_raise(self, app_slug: str, repo: str, branch: str) -> bool:
+        """Return True if branch has protection rules, propagating lookup errors.
 
-        Fail-safe: returns True on HTTP error / 404 / timeout (don't demote on
-        uncertainty per VOY-1809 D3).
+        Destructive writeback paths use this strict form so uncertainty is
+        reported as a writeback failure instead of being mistaken for a
+        protected-branch skip.
         """
         owner, name = repo.split("/", 1)
         token = await self.installation_token(app_slug, repository=repo)
@@ -543,10 +544,19 @@ class GitHubAppClient:
         # disable the demotion path. Codex PR-#12 P2.
         url = f"{GITHUB_API}/repos/{owner}/{name}/branches/{quote(branch, safe='')}"
         client = self._async_client()
+        response = await client.get(url, headers=headers)
+        response.raise_for_status()
+        return bool((response.json() or {}).get("protected", False))
+
+    async def branch_protected(self, app_slug: str, repo: str, branch: str) -> bool:
+        """Return True if base branch has protection rules.
+
+        Fail-safe: returns True on HTTP error / 404 / timeout (don't demote on
+        uncertainty per VOY-1809 D3).
+        """
+        owner, name = repo.split("/", 1)
         try:
-            response = await client.get(url, headers=headers)
-            response.raise_for_status()
-            return bool((response.json() or {}).get("protected", False))
+            return await self.branch_protected_or_raise(app_slug, repo, branch)
         except (httpx.HTTPError, TimeoutError) as exc:
             status = (
                 exc.response.status_code
@@ -563,6 +573,33 @@ class GitHubAppClient:
                 status,
             )
             return True
+
+    async def branch_head_sha_or_raise(self, app_slug: str, repo: str, branch: str) -> str:
+        """Return the current Git ref SHA for a branch, propagating lookup errors."""
+        owner, name = repo.split("/", 1)
+        payload = await self.request(
+            app_slug,
+            "GET",
+            f"/repos/{owner}/{name}/git/ref/heads/{quote(branch, safe='')}",
+            repository=repo,
+        )
+        obj = (payload or {}).get("object") or {}
+        return str(obj.get("sha") or "")
+
+    async def delete_branch(self, app_slug: str, repo: str, branch: str) -> None:
+        """Delete a branch via ``DELETE /repos/{owner}/{name}/git/refs/heads/{branch}``.
+
+        Raises ``httpx.HTTPStatusError`` on 404 (branch already gone) or 422
+        (branch is protected).  Callers should decide whether to suppress the
+        404 (idempotent) or let it propagate.
+        """
+        owner, name = repo.split("/", 1)
+        await self.request(
+            app_slug,
+            "DELETE",
+            f"/repos/{owner}/{name}/git/refs/heads/{quote(branch, safe='')}",
+            repository=repo,
+        )
 
     async def add_labels(
         self, app_slug: str, repo: str, issue_number: int, labels: list[str]
