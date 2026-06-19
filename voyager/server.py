@@ -38,6 +38,7 @@ _config: Any = _SENTINEL
 _default_profile_name: Any = _SENTINEL
 _investigator: Any = _SENTINEL
 _drift_alert_task: asyncio.Task[None] | None = None
+_stale_pr_task: asyncio.Task[None] | None = None
 
 
 def _get_config() -> Any:
@@ -248,12 +249,113 @@ async def _stop_deployed_version_drift_schedule() -> None:
     _drift_alert_task = None
 
 
+def _stale_pr_enabled() -> bool:
+    return _truthy(os.environ.get("BRIDGE_STALE_PR_ENABLED"))
+
+
+def _stale_pr_interval_seconds() -> int:
+    raw = os.environ.get("BRIDGE_STALE_PR_INTERVAL_SECONDS", "86400")
+    try:
+        return max(60, int(raw))
+    except ValueError:
+        _log.warning("Invalid BRIDGE_STALE_PR_INTERVAL_SECONDS=%r; using 86400", raw)
+        return 86400
+
+
+def _stale_pr_days() -> int:
+    raw = os.environ.get("BRIDGE_STALE_PR_DAYS", "7")
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        _log.warning("Invalid BRIDGE_STALE_PR_DAYS=%r; using 7", raw)
+        return 7
+
+
+def _stale_pr_repository() -> str:
+    return os.environ.get("BRIDGE_STALE_PR_REPOSITORY", "iterwheel/voyager")
+
+
+def _stale_pr_app_slug() -> str:
+    return os.environ.get("BRIDGE_STALE_PR_APP_SLUG", "iterwheel-assembly")
+
+
+async def _run_stale_pr_triage() -> None:
+    repo = _stale_pr_repository()
+    app_slug = _stale_pr_app_slug()
+    stale_days = _stale_pr_days()
+    if dry_run_enabled():
+        _log.info(
+            "DRY_RUN: would run stale_pr_triage repo=%s app_slug=%s stale_days=%d",
+            repo,
+            app_slug,
+            stale_days,
+        )
+        return
+
+    client = _get_client()
+    if client is None:
+        _log.warning("Skipping stale-PR triage: no GitHub client available")
+        return
+
+    from voyager.bots.stale_pr import run_stale_pr_triage as run_triage
+
+    try:
+        summary = await run_triage(client, app_slug, repo, stale_days=stale_days)
+        _log.info(
+            "stale_pr_triage: repo=%s checked=%d labeled=%d already_labeled=%d commented=%d fresh=%d",
+            repo,
+            summary["checked"],
+            len(summary["labeled"]),
+            len(summary["already_labeled"]),
+            len(summary["commented"]),
+            len(summary["skipped_fresh"]),
+        )
+    except Exception:
+        _log.exception("stale_pr_triage failed for %s", repo)
+
+
+async def _stale_pr_loop() -> None:
+    interval = _stale_pr_interval_seconds()
+    while True:
+        try:
+            await _run_stale_pr_triage()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("Scheduled stale-PR triage failed")
+        await asyncio.sleep(interval)
+
+
+async def _start_stale_pr_schedule() -> None:
+    global _stale_pr_task
+    if not _stale_pr_enabled():
+        return
+    if _stale_pr_task is not None and not _stale_pr_task.done():
+        return
+    _stale_pr_task = asyncio.create_task(
+        _stale_pr_loop(),
+        name="stale-pr-triage",
+    )
+
+
+async def _stop_stale_pr_schedule() -> None:
+    global _stale_pr_task
+    if _stale_pr_task is None:
+        return
+    _stale_pr_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await _stale_pr_task
+    _stale_pr_task = None
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await _start_deployed_version_drift_schedule()
+    await _start_stale_pr_schedule()
     try:
         yield
     finally:
+        await _stop_stale_pr_schedule()
         await _stop_deployed_version_drift_schedule()
 
 
