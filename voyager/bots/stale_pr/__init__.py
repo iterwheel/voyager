@@ -22,6 +22,9 @@ _log = logging.getLogger(__name__)
 STALE_AGENT_SLUG = "iterwheel-assembly"
 STALE_LABEL = "stale"
 STALE_COMMENT_MARKER = "<!-- voyager:stale-pr-reminder -->"
+STALE_LABEL_COLOR = "cfd3d7"
+STALE_LABEL_DESCRIPTION = "Stale pull request pending human attention."
+_SEARCH_PAGE_SIZE = 100
 
 
 def _is_older_than(updated_at: str | None, *, days: int) -> bool:
@@ -57,14 +60,20 @@ async def _find_open_prs(
 ) -> list[dict[str, Any]]:
     """Return all open PRs for *repo* via the GitHub Search Issues API."""
     owner, name = repo.split("/", 1)
-    path = (
-        f"/search/issues"
-        f"?q=repo%3A{owner}%2F{name}+type%3Apr+state%3Aopen"
-        f"&per_page=100&sort=updated&order=asc"
-    )
-    data = await client.request(app_slug, "GET", path, repository=repo)
-    items = (data or {}).get("items") or []
-    return list(items)
+    prs: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        path = (
+            f"/search/issues"
+            f"?q=repo%3A{owner}%2F{name}+type%3Apr+state%3Aopen"
+            f"&per_page={_SEARCH_PAGE_SIZE}&sort=updated&order=asc&page={page}"
+        )
+        data = await client.request(app_slug, "GET", path, repository=repo)
+        items = list((data or {}).get("items") or [])
+        prs.extend(items)
+        if len(items) < _SEARCH_PAGE_SIZE:
+            return prs
+        page += 1
 
 
 async def _has_stale_label(pr: dict[str, Any]) -> bool:
@@ -121,6 +130,7 @@ async def run_stale_pr_triage(
     commented: list[int] = []
     already_labeled: list[int] = []
     skipped_fresh: list[int] = []
+    stale_label_ensured = False
 
     for pr in prs:
         number = pr.get("number")
@@ -136,6 +146,15 @@ async def run_stale_pr_triage(
         stale_label_present = await _has_stale_label(pr)
         if not stale_label_present:
             try:
+                if not stale_label_ensured:
+                    await client.ensure_label(
+                        app_slug,
+                        repo,
+                        STALE_LABEL,
+                        color=STALE_LABEL_COLOR,
+                        description=STALE_LABEL_DESCRIPTION,
+                    )
+                    stale_label_ensured = True
                 await client.add_labels(app_slug, repo, number, [STALE_LABEL])
                 labeled.append(number)
             except Exception:

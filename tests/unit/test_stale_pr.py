@@ -150,6 +150,33 @@ class TestFindOpenPrs:
             await async_client.aclose()
 
     @pytest.mark.asyncio
+    async def test_paginates_until_short_page(self) -> None:
+        first_page = [
+            {"number": number, "updated_at": "2026-06-01T00:00:00Z", "labels": []}
+            for number in range(1, 101)
+        ]
+        second_page = [{"number": 101, "updated_at": "2026-06-01T00:00:00Z", "labels": []}]
+        requested_pages: list[str | None] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requested_pages.append(request.url.params.get("page"))
+            page = request.url.params.get("page")
+            if page == "1":
+                return httpx.Response(200, json={"items": first_page, "total_count": 101})
+            if page == "2":
+                return httpx.Response(200, json={"items": second_page, "total_count": 101})
+            return httpx.Response(500, json={"message": "unexpected page"})
+
+        client, async_client, monkeypatch = _mock_client_and_transport(handler)
+        try:
+            result = await _find_open_prs(client, "test-bot", "iterwheel/voyager")
+            assert [pr["number"] for pr in result] == list(range(1, 102))
+            assert requested_pages == ["1", "2"]
+        finally:
+            monkeypatch.undo()
+            await async_client.aclose()
+
+    @pytest.mark.asyncio
     async def test_empty_response_returns_empty_list(self) -> None:
         def handler(_request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json={"items": [], "total_count": 0})
@@ -361,13 +388,18 @@ def _build_triage_mock_client(
 
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
-        captured.append({"method": request.method, "url": url})
+        path = request.url.path
+        captured.append({"method": request.method, "url": url, "path": path})
 
         if "/search/issues" in url:
             return httpx.Response(200, json=_search_response())
         if "/comments" in url and request.method == "GET":
             return httpx.Response(200, json=comments)
-        if "/labels" in url and request.method == "POST":
+        if path.endswith(f"/labels/{STALE_LABEL}") and request.method == "GET":
+            return httpx.Response(404, json={"message": "not found"})
+        if path == "/repos/iterwheel/voyager/labels" and request.method == "POST":
+            return httpx.Response(201, json={"name": STALE_LABEL})
+        if "/issues/" in path and path.endswith("/labels") and request.method == "POST":
             return httpx.Response(200, json={})
         if "/comments" in url and request.method == "POST":
             return httpx.Response(201, json={"id": 999, "body": "created"})
@@ -401,11 +433,31 @@ class TestRunStalePrTriage:
             assert _STALE_PR_NUMBER in summary["commented"]
             assert _ALREADY_STALE_PR_NUMBER in summary["commented"]
 
-            label_calls = [c for c in capture if c["method"] == "POST" and "/labels" in c["url"]]
+            repo_label_calls = [
+                c
+                for c in capture
+                if c["method"] == "POST" and c["path"] == "/repos/iterwheel/voyager/labels"
+            ]
+            issue_label_calls = [
+                c
+                for c in capture
+                if c["method"] == "POST"
+                and "/issues/" in c["path"]
+                and c["path"].endswith("/labels")
+            ]
             comment_calls = [
                 c for c in capture if c["method"] == "POST" and "/comments" in c["url"]
             ]
-            assert len(label_calls) == 1
+            label_lookup_index = next(
+                i
+                for i, call in enumerate(capture)
+                if call["method"] == "GET" and call["path"].endswith(f"/labels/{STALE_LABEL}")
+            )
+            repo_label_index = capture.index(repo_label_calls[0])
+            issue_label_index = capture.index(issue_label_calls[0])
+            assert label_lookup_index < repo_label_index < issue_label_index
+            assert len(repo_label_calls) == 1
+            assert len(issue_label_calls) == 1
             # Both stale PRs get a comment — #1 is newly labeled, #3 already
             # had the label (from a prior run) but no existing reminder comment
             assert len(comment_calls) == 2
