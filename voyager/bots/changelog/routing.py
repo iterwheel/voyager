@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from typing import Any
 
+from voyager.release_readiness import MergedPullRequest, is_shippable_pr
+
 from .constants import (
     CHANGELOG_AGENT_ID,
     CHANGELOG_AGENT_SLUG,
     CHANGELOG_BRANCH_PREFIX,
     CHANGELOG_DEFAULT_BASE,
     CHANGELOG_DYNAMIC,
+    CHANGELOG_SKIP_LABELS,
 )
 from .draft import build_changelog_bullet, is_changelog_relevant, label_names
 
@@ -32,6 +35,17 @@ def _is_self_generated_pr(pr: dict[str, Any]) -> bool:
     return title.startswith("chore(changelog):") or head_ref.startswith(CHANGELOG_BRANCH_PREFIX)
 
 
+def _is_shippable_pull_request_title(*, pr_number: int, title: str, head_ref: str) -> bool:
+    return is_shippable_pr(
+        MergedPullRequest(
+            number=pr_number,
+            title=title,
+            branch=head_ref,
+            sha="",
+        )
+    )
+
+
 def route_changelog_event(event: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
     """Return changelog draft routes for merged, changelog-relevant PRs."""
     if event != "pull_request":
@@ -50,16 +64,24 @@ def route_changelog_event(event: str, payload: dict[str, Any]) -> list[dict[str,
     if _is_self_generated_pr(pr):
         return []
 
-    labels = label_names(pr.get("labels") or [])
-    if not is_changelog_relevant(pr.get("labels") or []):
-        return []
-
     pr_number = int(pr.get("number") or payload.get("number") or 0)
     if pr_number <= 0:
         return []
 
     repository = _repository_name(payload)
     title = str(pr.get("title") or f"Pull request #{pr_number}")
+    head_ref = str((pr.get("head") or {}).get("ref") or "")
+    labels = label_names(pr.get("labels") or [])
+    normalized_labels = {name.strip().lower() for name in labels if name.strip()}
+    if normalized_labels & CHANGELOG_SKIP_LABELS:
+        return []
+    if not is_changelog_relevant(pr.get("labels") or []) and not _is_shippable_pull_request_title(
+        pr_number=pr_number,
+        title=title,
+        head_ref=head_ref,
+    ):
+        return []
+
     url = _pr_url(repository, pr, pr_number)
     bullet = build_changelog_bullet(pr_number=pr_number, pr_title=title, pr_url=url)
     branch_name = f"{CHANGELOG_BRANCH_PREFIX}{pr_number}-unreleased"
@@ -68,7 +90,7 @@ def route_changelog_event(event: str, payload: dict[str, Any]) -> list[dict[str,
         "pr_title": title,
         "pr_url": url,
         "base_ref": base_ref,
-        "head_ref": str((pr.get("head") or {}).get("ref") or ""),
+        "head_ref": head_ref,
         "labels": labels,
         "branch_name": branch_name,
         "bullet": bullet,

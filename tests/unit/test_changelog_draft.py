@@ -54,7 +54,7 @@ def test_route_changelog_event_for_merged_labeled_pr() -> None:
 
     assert len(routes) == 1
     route = routes[0]
-    assert route["agent"] == "iterwheel-assembly"
+    assert route["agent"] == "iterwheel-changelog"
     assert route["kind"] == "changelog_draft"
     assert route["validation"]["status"] == "changelog_ready"
     assert route["writeback"]["dynamic"] == "changelog_draft"
@@ -63,6 +63,26 @@ def test_route_changelog_event_for_merged_labeled_pr() -> None:
         route["writeback"]["draft"]["bullet"]
         == "- Add export workflow ([#123](https://github.com/iterwheel/voyager/pull/123))."
     )
+
+
+def test_route_changelog_event_allows_unlabeled_shippable_titles() -> None:
+    routes = route_changelog_event(
+        "pull_request",
+        _pull_request_payload(labels=[], title="[task]: Add export workflow"),
+    )
+
+    assert len(routes) == 1
+    assert routes[0]["agent"] == "iterwheel-changelog"
+    assert routes[0]["writeback"]["draft"]["labels"] == []
+
+
+def test_route_changelog_event_honors_skip_labels_for_shippable_titles() -> None:
+    routes = route_changelog_event(
+        "pull_request",
+        _pull_request_payload(labels=["changelog-skip"], title="[task]: Add export workflow"),
+    )
+
+    assert routes == []
 
 
 def test_route_changelog_event_ignores_unmerged_skip_and_self_generated_prs() -> None:
@@ -194,6 +214,44 @@ def test_append_unreleased_bullet_matches_source_pr_url_with_path_boundary() -> 
     result = append_unreleased_bullet(
         text,
         bullet="- Earlier work ([#12](https://github.com/iterwheel/voyager/pull/12)).",
+        source_pr_number=12,
+    )
+
+    assert result.changed is False
+    assert result.reason == "already_present"
+
+
+def test_append_unreleased_bullet_matches_manual_entry_by_title_with_issue_link() -> None:
+    text = """# Changelog
+
+## [Unreleased]
+
+- Add export workflow ([#12](https://github.com/iterwheel/voyager/issues/12)).
+
+## [0.1.0]
+"""
+    result = append_unreleased_bullet(
+        text,
+        bullet="- Add export workflow ([#12](https://github.com/iterwheel/voyager/pull/12)).",
+        source_pr_number=12,
+    )
+
+    assert result.changed is False
+    assert result.reason == "already_present"
+
+
+def test_append_unreleased_bullet_matches_manual_entry_by_title_without_link() -> None:
+    text = """# Changelog
+
+## [Unreleased]
+
+- Add export workflow.
+
+## [0.1.0]
+"""
+    result = append_unreleased_bullet(
+        text,
+        bullet="- Add export workflow ([#12](https://github.com/iterwheel/voyager/pull/12)).",
         source_pr_number=12,
     )
 

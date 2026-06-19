@@ -50,7 +50,8 @@ def test_wukong_env_example_preserves_production_safety_contract() -> None:
         "frankyxhl/alfred,frankyxhl/trinity,iterwheel/voyager"
     ) in text
     assert "BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_CLEARANCE=iterwheel/voyager" in text
-    assert "BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_ASSEMBLY=iterwheel/voyager" in text
+    assert "BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_CHANGELOG=iterwheel/voyager" in text
+    assert "BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_ASSEMBLY=" not in text
     assert "GITHUB_REPOSITORY_WEBHOOK_SECRET=replace-with-repository-webhook-secret" in text
     assert "GITHUB_WEBHOOK_SECRET=replace-with-repository-webhook-secret" not in text
 

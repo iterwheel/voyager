@@ -10,6 +10,7 @@ from .constants import CHANGELOG_RELEVANT_LABELS, CHANGELOG_SKIP_LABELS
 
 _CHANGELOG_HEADING_RE = re.compile(r"^## \[(?P<name>[^\]]+)\]")
 _CHANGELOG_SUBSECTION_RE = re.compile(r"^###\s+")
+_BULLET_LINK_SUFFIX_RE = re.compile(r"\s+\(\[#\d+\]\([^)]+\)\)\.?$")
 _SPACE_RE = re.compile(r"\s+")
 
 
@@ -54,10 +55,28 @@ def build_changelog_bullet(*, pr_number: int, pr_title: str, pr_url: str) -> str
     return f"- {title} ([#{pr_number}]({pr_url}))."
 
 
-def _has_source_pr_reference(section_text: str, source_pr_number: int) -> bool:
+def _normalized_bullet_summary(line: str) -> str:
+    summary = line.strip()
+    if summary.startswith("- "):
+        summary = summary[2:]
+    summary = _BULLET_LINK_SUFFIX_RE.sub("", summary)
+    summary = summary.rstrip(".")
+    return _SPACE_RE.sub(" ", summary).strip().casefold()
+
+
+def _has_source_entry(section_text: str, source_pr_number: int, bullet: str) -> bool:
     number = re.escape(str(source_pr_number))
     reference_re = re.compile(rf"/pull/{number}(?!\d)")
-    return reference_re.search(section_text) is not None
+    if reference_re.search(section_text):
+        return True
+
+    source_summary = _normalized_bullet_summary(bullet)
+    if not source_summary:
+        return False
+    for line in section_text.splitlines():
+        if line.lstrip().startswith("- ") and _normalized_bullet_summary(line) == source_summary:
+            return True
+    return False
 
 
 def append_unreleased_bullet(
@@ -85,7 +104,7 @@ def append_unreleased_bullet(
             break
 
     section_text = "\n".join(lines[header_idx + 1 : section_end_idx])
-    if _has_source_pr_reference(section_text, source_pr_number):
+    if _has_source_entry(section_text, source_pr_number, bullet):
         return ChangelogAppendResult(changelog_text, changed=False, reason="already_present")
 
     insert_boundary_idx = section_end_idx

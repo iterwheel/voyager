@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from voyager.bots.assembly.constants import ASSEMBLY_AGENT_SLUG
 
-CHANGELOG_AGENT_SLUG = ASSEMBLY_AGENT_SLUG
+CHANGELOG_AGENT_SLUG = "iterwheel-changelog"
 CHANGELOG_AGENT_ID = "github-changelog-agent"
 CHANGELOG_DYNAMIC = "changelog_draft"
 CHANGELOG_FILE = "CHANGELOG.md"
