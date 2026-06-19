@@ -49,6 +49,9 @@ class TestCiFailingOutcomes:
     def test_startup_failure_is_red(self) -> None:
         assert _is_failing_check({"conclusion": "startup_failure"}) is True
 
+    def test_stale_check_run_is_red(self) -> None:
+        assert _is_failing_check({"conclusion": "stale"}) is True
+
     def test_legacy_status_failure_is_red(self) -> None:
         assert _is_failing_check({"state": "failure", "type": "status_context"}) is True
 

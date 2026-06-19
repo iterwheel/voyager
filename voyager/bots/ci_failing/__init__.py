@@ -40,7 +40,15 @@ _SEARCH_PAGE_SIZE = 100
 
 # Check conclusion values that count as "red".
 _FAILING_CONCLUSIONS = frozenset(
-    {"failure", "error", "timed_out", "cancelled", "action_required", "startup_failure"}
+    {
+        "failure",
+        "error",
+        "timed_out",
+        "cancelled",
+        "action_required",
+        "startup_failure",
+        "stale",
+    }
 )
 _GREEN_CONCLUSIONS = frozenset({"success", "neutral", "skipped"})
 
