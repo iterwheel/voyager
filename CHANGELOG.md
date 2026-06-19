@@ -8,8 +8,22 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
-### Changed — Clearance known-limitation fingerprints ([#174](https://github.com/iterwheel/voyager/issues/174))
+## [0.6.0] — 2026-06-19
 
+### Added — Assembly loop safety and telemetry ([#157](https://github.com/iterwheel/voyager/issues/157), [#160](https://github.com/iterwheel/voyager/issues/160), [#161](https://github.com/iterwheel/voyager/issues/161))
+
+- Assembly now caps automated fix rounds with a circuit breaker and escalates
+  instead of continuing indefinitely after repeated bot-driven retry loops.
+- Assembly loop summaries now record rounds, commits, and estimated token usage
+  to local state/logs so operators can audit loop cost and behavior.
+- Gates now declare a maturity level (`L1`, `L2`, or `L3`), and newly added
+  gates default to advisory `L1` behavior before they are allowed to block or
+  act unattended.
+
+### Added — Known-limitation decision memory ([#159](https://github.com/iterwheel/voyager/issues/159), [#174](https://github.com/iterwheel/voyager/issues/174))
+
+- Clearance can persist accepted known limitations and suppress matching
+  future findings with a link back to the deciding issue.
 - Known-limitation fingerprints now use the stable finding identity
   `repo + path + line + rule/check id` instead of the Codex review comment body,
   with the current Clearance `finding_kind` and Codex finding title as
@@ -25,22 +39,37 @@ release note for the explicit migration path.
   legacy dual lookup when no stable rule candidate is available; new records
   are written with the stable finding-identity fingerprint.
 
-### Added — Changelog merge drafter ([#163](https://github.com/iterwheel/voyager/issues/163))
+### Added — Release and changelog automation ([#162](https://github.com/iterwheel/voyager/issues/162), [#163](https://github.com/iterwheel/voyager/issues/163))
 
+- The existing pytest CI job now runs a release-readiness gate that finds
+  shippable merged PRs since the latest `vX.Y.Z` tag and fails when
+  `CHANGELOG.md` has an empty `[Unreleased]` section.
+- The checker reports the merged PR numbers/titles that need changelog
+  coverage, emits a GitHub annotation line from the CLI, and has fixture-style
+  tests for empty and populated `[Unreleased]` sections.
 - Voyager now routes merged, changelog-relevant PR webhooks into an
   Assembly-backed changelog draft flow that opens a follow-up PR with an
   `[Unreleased]` bullet for the merged PR.
 - Changelog skip labels are ignored by the drafter, and duplicate source PR
   bullets are not re-added.
+- Production Wukong deployments must allow-list the changelog route with
+  `BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_CHANGELOG=iterwheel/voyager`; without
+  it, merged-PR changelog events are denied as `repository_not_allowed`.
 
-### Added — Release readiness checks ([#162](https://github.com/iterwheel/voyager/issues/162))
+### Added — Wukong production operations ([#164](https://github.com/iterwheel/voyager/issues/164), [#165](https://github.com/iterwheel/voyager/issues/165))
 
-- The existing pytest CI job now runs a release-readiness gate that finds
-  shippable merged PRs since the latest `vX.Y.Z` tag and fails when
-  `CHANGELOG.md` has an empty `[Unreleased]` section.
-- The checker reports the merged PR numbers/titles that need changelog coverage,
-  emits a GitHub annotation line from the CLI, and has fixture-style tests for
-  empty and populated `[Unreleased]` sections.
+- Wukong can now route merged same-repo PR events into a cleanup bot that
+  deletes non-protected head branches after merge while skipping forks,
+  protected branches, non-merged PRs, and non-allow-listed repositories.
+- Wukong can run a scheduled deployed-version drift check that compares the
+  highest stable SemVer GitHub Release tag with the version reported by the
+  bridge `/healthz` endpoint and creates a GitHub issue when production lags.
+- New Wukong env knobs are documented in `deploy/wukong/bridge.env.example`:
+  `BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_CHANGELOG`,
+  `BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_CLEANUP`,
+  `BRIDGE_DRIFT_ALERT_ENABLED`, `BRIDGE_DRIFT_ALERT_REPOSITORY`,
+  `BRIDGE_DRIFT_ALERT_BRIDGE_URL`, `BRIDGE_DRIFT_ALERT_INTERVAL_SECONDS`, and
+  `BRIDGE_DRIFT_ALERT_APP_SLUG`.
 
 ## [0.5.0] — 2026-06-17
 
@@ -601,7 +630,9 @@ auth, FastAPI webhook bridge, DeepSeek LLM adapter, rocket-factory
 pipeline state machine, SWM-1101 per-thread verdict pipeline. See
 `b2e4ca1` and prior history.
 
-[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.4.10...HEAD
+[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/iterwheel/voyager/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/iterwheel/voyager/compare/v0.4.10...v0.5.0
 [0.4.10]: https://github.com/iterwheel/voyager/compare/v0.4.9...v0.4.10
 [0.4.9]: https://github.com/iterwheel/voyager/compare/v0.4.8...v0.4.9
 [0.4.8]: https://github.com/iterwheel/voyager/compare/v0.4.7...v0.4.8
