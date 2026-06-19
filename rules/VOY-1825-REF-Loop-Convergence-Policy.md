@@ -93,12 +93,14 @@ human approval:
 3. An escalation comment is posted to the source issue and to the existing PR
    when one exists.
 
-A human may override the circuit breaker only by approving the current PR head.
-A plain comment such as "continue" is not a bypass. The bypass allows that
-approved head to proceed, but it does not automatically reset existing
-`assembly-fix-round-N` labels or the round counter. Operators who want a fresh
-counter must explicitly clean up the source issue's circuit-breaker/fix-round
-labels or start a new managed PR flow.
+A human approval bypass is evaluated only on a threshold-hit run before the
+`loop-circuit-broken` label has been applied. If the source issue already has
+that label, the loop halts before checking PR approval; to resume, an operator
+must remove the source issue's active breaker label and then rely on a current
+human approval for the PR head, or start a new managed PR flow. A plain comment
+such as "continue" is not a bypass. The bypass does not automatically reset
+existing `assembly-fix-round-N` labels or the round counter, so operators who
+want a fresh counter must also clean up the source issue's fix-round labels.
 
 **Rationale:** Before #157, a single PR could accumulate ~24 bot-driven fix
 commits (#152 → #154). Each round consumed tokens, review attention, and CI
@@ -121,7 +123,7 @@ The three rules form a decision table for any finding in the automated loop:
 | True positive (correct block) | Block publish, trigger auto-fix | Normal fix round; round counter increments |
 | False positive (over-block) | **Must fix** the check | Escalate as a check bug; investigate after the immediate workaround |
 | False negative (under-block) | **Accept** — fallback to review | Do not trigger auto-fix; do not increment round counter |
-| Round count exceeds threshold | **Halt** — no more auto-fix attempts | Apply `loop-circuit-broken` label to the source issue, post escalation comments; human must unblock |
+| Round count exceeds threshold | **Halt** — no more auto-fix attempts | Apply `loop-circuit-broken` label to the source issue, post escalation comments; human unblock requires current PR approval and removal of any active source-issue breaker label |
 
 Current gates encode advisory behavior through the finding source and gate
 status. For example, AC spot-check findings are token-level findings; when the
