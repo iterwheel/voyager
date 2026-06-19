@@ -8,6 +8,17 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+### Added — Scheduled stale-PR triage (L1 advisory) ([#166](https://github.com/iterwheel/voyager/issues/166))
+
+- Wukong can now run a scheduled stale-PR triage that finds open pull requests
+  with no activity for a configurable staleness window, defaulting to 7 days.
+- The triage is L1 advisory only: stale pull requests receive the `stale` label
+  and at most one reminder comment per staleness window, with no automatic
+  close, merge, or review-request mutation.
+- New Wukong env knobs configure the job: `BRIDGE_STALE_PR_ENABLED`,
+  `BRIDGE_STALE_PR_INTERVAL_SECONDS`, `BRIDGE_STALE_PR_DAYS`,
+  `BRIDGE_STALE_PR_REPOSITORY`, and `BRIDGE_STALE_PR_APP_SLUG`.
+
 ## [0.6.0] — 2026-06-19
 
 ### Added — Assembly loop safety and telemetry ([#157](https://github.com/iterwheel/voyager/issues/157), [#160](https://github.com/iterwheel/voyager/issues/160), [#161](https://github.com/iterwheel/voyager/issues/161))
