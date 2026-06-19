@@ -15,8 +15,9 @@ release note for the explicit migration path.
   Commit Status API contexts, and flags them with the `ci-failing` label.
 - The sweep comments at most once per failing check-run/status id, removes
   `ci-failing` after required checks return green, preserves the existing
-  signal while required checks are still pending, and respects the global
-  `DRY_RUN` and repository allow-list gates before making any GitHub calls.
+  signal while required checks are still pending or have not reported yet, and
+  respects the global `DRY_RUN` and repository allow-list gates before making
+  any GitHub calls.
 - New Wukong env knobs configure the job: `BRIDGE_CI_FAILING_ENABLED`,
   `BRIDGE_CI_FAILING_INTERVAL_SECONDS`, `BRIDGE_CI_FAILING_REPOSITORY`, and
   `BRIDGE_CI_FAILING_APP_SLUG`; the production allow-list uses the

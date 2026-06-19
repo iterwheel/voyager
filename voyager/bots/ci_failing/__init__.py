@@ -14,8 +14,10 @@ created — the comment body embeds a marker
 ``<!-- voyager:ci-failing-run-{run_id} -->`` so re-runs of the same check
 produce at most one comment.
 
-PRs whose latest required checks are all green (or have no required checks)
-have the ``ci-failing`` label removed if present.
+PRs whose latest required checks are all green have the ``ci-failing`` label
+removed if present. PRs with no reported required checks are left unchanged
+because that can also represent GitHub's expected/pending window before
+required checks have created rollup contexts.
 """
 
 from __future__ import annotations
@@ -160,14 +162,7 @@ async def run_ci_failing_sweep(
 
         has_ci_failing_label = await _has_ci_failing_label(pr)
         if not required_checks:
-            if has_ci_failing_label:
-                try:
-                    await client.remove_label(app_slug, repo, pr_number, CI_FAILING_LABEL)
-                    cleared.append(pr_number)
-                except Exception:
-                    _log.exception("Failed to remove ci-failing label from PR #%d", pr_number)
-            else:
-                skipped_no_checks.append(pr_number)
+            skipped_no_checks.append(pr_number)
             continue
 
         failing_runs = [check for check in required_checks if _is_failing_check(check)]

@@ -672,7 +672,7 @@ class TestRunCiFailingSweep:
 
     @pytest.mark.asyncio
     async def test_no_check_runs_skips_pr(self) -> None:
-        """PRs with no check runs are skipped."""
+        """PRs with no reported required checks are skipped."""
 
         def handler(request: httpx.Request) -> httpx.Response:
             url = str(request.url)
@@ -690,6 +690,33 @@ class TestRunCiFailingSweep:
             assert result["flagged"] == []
             assert result["cleared"] == []
             assert result["skipped_no_checks"] == [5]
+        finally:
+            monkeypatch.undo()
+            await async_client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_no_required_checks_does_not_clear_existing_label(self) -> None:
+        """Empty required-check rollups may still mean expected checks are pending."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+
+            if "/search/issues" in url:
+                return httpx.Response(
+                    200,
+                    json=_search_response([_pr_search_item(10, has_ci_failing=True)]),
+                )
+
+            return httpx.Response(404, json={"message": "unexpected"})
+
+        client, async_client, monkeypatch = _mock_client_and_transport(handler)
+        _install_required_checks(monkeypatch, client, {10: []})
+        try:
+            result = await run_ci_failing_sweep(client, "test-bot", "iterwheel/voyager")
+            assert result["checked"] == 1
+            assert result["flagged"] == []
+            assert result["cleared"] == []
+            assert result["skipped_no_checks"] == [10]
         finally:
             monkeypatch.undo()
             await async_client.aclose()
