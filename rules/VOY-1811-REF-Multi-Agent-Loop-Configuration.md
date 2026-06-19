@@ -114,9 +114,11 @@ After each push to the PR branch during Phase 8:
 5. **Loop** — Push the fixes, then return to step 1 (post `@codex review`
    again). Continue until Codex returns zero actionable findings.
 
-Use VOY-1825 for the fix/accept/stop decision when classifying loop findings:
-false positives are checker bugs to fix, tolerated false negatives fall back to
-normal review, and repeated non-convergence must hit the documented stop path.
+Use VOY-1825 for Assembly-managed source-issue fix loops: false positives are
+checker bugs to fix, tolerated false negatives fall back to normal review, and
+Assembly's `assembly-fix-round-*` circuit breaker remains source-issue scoped.
+This does not override VOY-1811's general multi-agent R-count cap of
+`<max-r-count>` 10 plus the 3-round extension, with hard stop at R13.
 
 This rule applies only to PR iteration. Issue-only workflows without a PR are
 exempt — no `@codex review` trigger is needed.
@@ -482,7 +484,7 @@ completion-gate blocker rather than proceeding.
 
 | Date | Change | By |
 |------|--------|----|
-| 2026-06-20 | Added an in-body VOY-1825 reference for Phase 8 fix/accept/stop decisions. | Codex |
+| 2026-06-20 | Scoped the in-body VOY-1825 reference to Assembly source-issue fix loops without overriding the VOY-1811 R-count cap. | Codex |
 | 2026-06-20 | Added VOY-1825 Loop-Convergence Policy as the convergence decision policy reference. | Codex |
 | 2026-05-23 | Added §Autonomous Operation: makes the loop-mode contract explicit, enumerates valid operator-pause points, and forbids "should I keep going?" prompts during Phase 8 polling. Session-independent guarantee so new sessions inherit the default. Surfaced by operator feedback during the #69 Phase 8 run. | Claude (via VOY-1811 #69) |
 | 2026-05-19 | Replaced launchd external-scheduler pattern with `task_create` self-bootstrapping chain. Removed `deploy/launchd/com.iterwheel.voyager.loop.plist` and `scripts/loop_continue.sh`. Rewrote §Durable Wakeup: DeepSeek TUI and updated Runtime Profile row. | DeepSeek (via VOY-1811 #59) |
