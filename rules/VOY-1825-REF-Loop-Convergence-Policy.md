@@ -24,6 +24,15 @@ VOY-1822 (Assembly-driven implementation loop), or VOY-1824 (failure
 diagnostics). It is the policy layer that those documents reference through
 their `Related` metadata for convergence decisions.
 
+Back-reference locations:
+
+- VOY-1811 lists `VOY-1825 (Loop-Convergence Policy)` in its `Related`
+  metadata.
+- VOY-1822 lists `VOY-1825` in its `Related` metadata and uses this policy in
+  its review-loop integration guidance.
+- VOY-1824 lists `VOY-1825` in its `Related` metadata for Assembly failure
+  diagnostics.
+
 ## The Three Rules
 
 ### Rule 1 — False Positive (Over-Block) = Must Fix
