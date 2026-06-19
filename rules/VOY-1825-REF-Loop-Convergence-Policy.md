@@ -89,15 +89,16 @@ escalates to a human instead of continuing indefinitely.
 **Policy:** When `ASSEMBLY_MAX_FIX_ROUNDS` (default 8) is exceeded without
 human approval:
 1. No further auto-fix commit is pushed.
-2. The `loop-circuit-broken` label is applied to the PR.
-3. Exactly one escalation comment is posted per PR.
+2. The `loop-circuit-broken` label is applied to the source issue.
+3. An escalation comment is posted to the source issue and to the existing PR
+   when one exists.
 
 A human may override the circuit breaker only by approving the current PR head.
 A plain comment such as "continue" is not a bypass. The bypass allows that
 approved head to proceed, but it does not automatically reset existing
 `assembly-fix-round-N` labels or the round counter. Operators who want a fresh
-counter must explicitly clean up the circuit-breaker/fix-round labels or start
-a new managed PR flow.
+counter must explicitly clean up the source issue's circuit-breaker/fix-round
+labels or start a new managed PR flow.
 
 **Rationale:** Before #157, a single PR could accumulate ~24 bot-driven fix
 commits (#152 → #154). Each round consumed tokens, review attention, and CI
@@ -120,14 +121,15 @@ The three rules form a decision table for any finding in the automated loop:
 | True positive (correct block) | Block publish, trigger auto-fix | Normal fix round; round counter increments |
 | False positive (over-block) | **Must fix** the check | Escalate as a check bug; investigate after the immediate workaround |
 | False negative (under-block) | **Accept** — fallback to review | Do not trigger auto-fix; do not increment round counter |
-| Round count exceeds threshold | **Halt** — no more auto-fix attempts | Apply `loop-circuit-broken` label, post escalation comment; human must unblock |
+| Round count exceeds threshold | **Halt** — no more auto-fix attempts | Apply `loop-circuit-broken` label to the source issue, post escalation comments; human must unblock |
 
-The direction-aware action task (#158) encodes Rules 1 and 2 structurally:
-findings carry a `direction` field (`block` or `advisory`). Only `block`
-findings drive automated action; `advisory` findings are recorded and
-commented but never start a fix loop or block publish. The `direction` is
-derived from the finding's source/type, not from prose patterns in the
-acceptance criteria.
+Current gates encode advisory behavior through the finding source and gate
+status. For example, AC spot-check findings are token-level findings; when the
+spot-check runs at L1 maturity, the adapter records
+`ac_spotcheck_maturity = "L1"` and treats the result as advisory rather than
+blocking. The direction-aware action task (#158) will make that policy explicit
+by adding a structural `direction` field (`block` or `advisory`) derived from a
+finding's source/type, not from prose patterns in the acceptance criteria.
 
 ---
 
