@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "iterwheel-voyager"
-version = "0.5.0"
+version = "0.6.0"
 description = "GitHub bot platform — Iterwheel's rocket factory pipeline"
 requires-python = ">=3.11"
 authors = [{ name = "Iterwheel" }]
