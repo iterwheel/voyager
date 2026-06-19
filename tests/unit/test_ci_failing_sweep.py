@@ -15,6 +15,7 @@ from voyager.bots.ci_failing import (
     _existing_ci_failing_comment,
     _find_open_prs,
     _has_ci_failing_label,
+    _is_failing_check,
     run_ci_failing_sweep,
 )
 from voyager.core.github_app import GitHubAppClient
@@ -40,6 +41,19 @@ class TestCiFailingMarker:
         assert marker.startswith("<!--")
         assert marker.endswith("-->")
         assert "99" in marker
+
+
+class TestCiFailingOutcomes:
+    """Outcome classification for required Checks API and Status API contexts."""
+
+    def test_startup_failure_is_red(self) -> None:
+        assert _is_failing_check({"conclusion": "startup_failure"}) is True
+
+    def test_legacy_status_failure_is_red(self) -> None:
+        assert _is_failing_check({"state": "failure", "type": "status_context"}) is True
+
+    def test_legacy_status_error_is_red(self) -> None:
+        assert _is_failing_check({"state": "error", "type": "status_context"}) is True
 
 
 class TestHasCiFailingLabel:
@@ -428,6 +442,58 @@ class TestRunCiFailingSweep:
             assert result["flagged"] == [1]
             assert result["cleared"] == []
             assert result["already_failing"] == []
+        finally:
+            monkeypatch.undo()
+            await async_client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_required_commit_status_failure_gets_labeled_and_commented(self) -> None:
+        """Legacy Commit Status API failures count as failing required checks."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+
+            if "/search/issues" in url:
+                return httpx.Response(200, json=_search_response([_pr_search_item(7)]))
+
+            if "/issues/7/comments" in url:
+                return httpx.Response(200, json=[])
+
+            if "/labels/ci-failing" in url:
+                return httpx.Response(404, json={"message": "Not Found"})
+
+            if "/labels" in url and request.method == "POST":
+                return httpx.Response(201, json={"name": CI_FAILING_LABEL})
+
+            if "/issues/7/labels" in url and request.method == "POST":
+                return httpx.Response(200, json={"labels": [CI_FAILING_LABEL]})
+
+            if "/issues/7/comments" in url and request.method == "POST":
+                return httpx.Response(201, json={"id": 700})
+
+            return httpx.Response(404, json={"message": "unexpected"})
+
+        client, async_client, monkeypatch = _mock_client_and_transport(handler)
+        _install_required_checks(
+            monkeypatch,
+            client,
+            {
+                7: [
+                    {
+                        "id": "status-context:legacy-ci",
+                        "name": "legacy-ci",
+                        "state": "failure",
+                        "html_url": "https://example.com/status",
+                        "type": "status_context",
+                    }
+                ]
+            },
+        )
+        try:
+            result = await run_ci_failing_sweep(client, "test-bot", "iterwheel/voyager")
+            assert result["checked"] == 1
+            assert result["flagged"] == [7]
+            assert result["cleared"] == []
         finally:
             monkeypatch.undo()
             await async_client.aclose()

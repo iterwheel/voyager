@@ -7,8 +7,10 @@ envelope — the server calls ``run_ci_failing_sweep`` directly within the
 background loop.
 
 Each open PR whose latest commit has a failing required check gets a
-``ci-failing`` label and a reminder comment.  At most one comment per
-failing run/status id is created — the comment body embeds a marker
+``ci-failing`` label and a reminder comment.  Required checks include
+GitHub Checks API runs and legacy Commit Status API contexts from the
+status-check rollup.  At most one comment per failing run/status id is
+created — the comment body embeds a marker
 ``<!-- voyager:ci-failing-run-{run_id} -->`` so re-runs of the same check
 produce at most one comment.
 
@@ -35,7 +37,9 @@ CI_FAILING_COMMENT_MARKER_PREFIX = "<!-- voyager:ci-failing-run-"
 _SEARCH_PAGE_SIZE = 100
 
 # Check conclusion values that count as "red".
-_FAILING_CONCLUSIONS = frozenset({"failure", "timed_out", "cancelled", "action_required"})
+_FAILING_CONCLUSIONS = frozenset(
+    {"failure", "error", "timed_out", "cancelled", "action_required", "startup_failure"}
+)
 _GREEN_CONCLUSIONS = frozenset({"success", "neutral", "skipped"})
 
 
@@ -45,14 +49,16 @@ def _ci_failing_marker(run_id: int | str) -> str:
     return f"{CI_FAILING_COMMENT_MARKER_PREFIX}{token} -->"
 
 
+def _check_outcome(check: dict[str, Any]) -> str:
+    return str(check.get("conclusion") or check.get("state") or "").lower()
+
+
 def _is_failing_check(check: dict[str, Any]) -> bool:
-    conclusion = str(check.get("conclusion") or "").lower()
-    return conclusion in _FAILING_CONCLUSIONS
+    return _check_outcome(check) in _FAILING_CONCLUSIONS
 
 
 def _is_green_check(check: dict[str, Any]) -> bool:
-    conclusion = str(check.get("conclusion") or "").lower()
-    return conclusion in _GREEN_CONCLUSIONS
+    return _check_outcome(check) in _GREEN_CONCLUSIONS
 
 
 async def _find_open_prs(
@@ -130,7 +136,8 @@ async def run_ci_failing_sweep(
         if not isinstance(pr_number, int):
             continue
 
-        # Fetch required status-check contexts for the latest PR commit.
+        # Fetch required rollup contexts for the latest PR commit. The rollup
+        # contains both Checks API runs and legacy Commit Status API contexts.
         try:
             required_checks = await client.pull_request_required_status_checks(
                 app_slug,

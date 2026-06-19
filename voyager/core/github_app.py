@@ -1011,7 +1011,12 @@ class GitHubAppClient:
         repo: str,
         pull_number: int,
     ) -> list[dict[str, Any]]:
-        """Fetch required status-check contexts for the PR's latest commit."""
+        """Fetch required status-check rollup contexts for the PR's latest commit.
+
+        GitHub's status-check rollup contains both Checks API ``CheckRun`` nodes
+        and legacy Commit Status API ``StatusContext`` nodes; ``isRequired``
+        filters both shapes against the pull request's branch-protection rules.
+        """
         owner, name = repo.split("/", 1)
         query = """
         query PullRequestRequiredStatusChecks(
