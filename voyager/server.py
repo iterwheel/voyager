@@ -39,6 +39,7 @@ _default_profile_name: Any = _SENTINEL
 _investigator: Any = _SENTINEL
 _drift_alert_task: asyncio.Task[None] | None = None
 _stale_pr_task: asyncio.Task[None] | None = None
+_ci_failing_task: asyncio.Task[None] | None = None
 
 
 def _get_config() -> Any:
@@ -348,13 +349,121 @@ async def _stop_stale_pr_schedule() -> None:
     _stale_pr_task = None
 
 
+def _ci_failing_enabled() -> bool:
+    return _truthy(os.environ.get("BRIDGE_CI_FAILING_ENABLED"))
+
+
+def _ci_failing_interval_seconds() -> int:
+    raw = os.environ.get("BRIDGE_CI_FAILING_INTERVAL_SECONDS", "86400")
+    try:
+        return max(60, int(raw))
+    except ValueError:
+        _log.warning("Invalid BRIDGE_CI_FAILING_INTERVAL_SECONDS=%r; using 86400", raw)
+        return 86400
+
+
+def _ci_failing_repository() -> str:
+    return os.environ.get("BRIDGE_CI_FAILING_REPOSITORY", "iterwheel/voyager")
+
+
+def _ci_failing_app_slug() -> str:
+    return os.environ.get("BRIDGE_CI_FAILING_APP_SLUG", "iterwheel-assembly")
+
+
+def _ci_failing_agent_slug() -> str:
+    from voyager.bots.ci_failing import CI_FAILING_AGENT_SLUG
+
+    return CI_FAILING_AGENT_SLUG
+
+
+async def _run_ci_failing_sweep() -> None:
+    target_repo = _ci_failing_repository()
+    app_slug = _ci_failing_app_slug()
+    agent_slug = _ci_failing_agent_slug()
+    cfg = _get_config()
+    if dry_run_enabled(cfg):
+        _log.info(
+            "DRY_RUN: would run ci_failing_sweep repo=%s app_slug=%s agent_slug=%s",
+            target_repo,
+            app_slug,
+            agent_slug,
+        )
+        return
+
+    if not _repository_allowed_for_agent(target_repo, agent_slug, cfg):
+        _log.warning(
+            "Skipping CI-failing sweep: repository %s is not allow-listed for %s",
+            target_repo,
+            agent_slug,
+        )
+        return
+
+    client = _get_client()
+    if client is None:
+        _log.warning("Skipping CI-failing sweep: no GitHub client available")
+        return
+
+    from voyager.bots.ci_failing import run_ci_failing_sweep as run_sweep
+
+    try:
+        summary = await run_sweep(client, app_slug, target_repo)
+        _log.info(
+            "ci_failing_sweep: repo=%s checked=%d flagged=%d cleared=%d "
+            "already_failing=%d skipped=%d",
+            target_repo,
+            summary["checked"],
+            len(summary["flagged"]),
+            len(summary["cleared"]),
+            len(summary["already_failing"]),
+            len(summary["skipped_no_checks"]),
+        )
+    except Exception:
+        _log.exception("ci_failing_sweep failed for %s", target_repo)
+
+
+async def _ci_failing_loop() -> None:
+    interval = _ci_failing_interval_seconds()
+    while True:
+        try:
+            await _run_ci_failing_sweep()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("Scheduled CI-failing sweep failed")
+        await asyncio.sleep(interval)
+
+
+async def _start_ci_failing_schedule() -> None:
+    global _ci_failing_task
+    if not _ci_failing_enabled():
+        return
+    if _ci_failing_task is not None and not _ci_failing_task.done():
+        return
+    _ci_failing_task = asyncio.create_task(
+        _ci_failing_loop(),
+        name="ci-failing-sweep",
+    )
+
+
+async def _stop_ci_failing_schedule() -> None:
+    global _ci_failing_task
+    if _ci_failing_task is None:
+        return
+    _ci_failing_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await _ci_failing_task
+    _ci_failing_task = None
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await _start_deployed_version_drift_schedule()
+    await _start_ci_failing_schedule()
     await _start_stale_pr_schedule()
     try:
         yield
     finally:
+        await _stop_ci_failing_schedule()
         await _stop_stale_pr_schedule()
         await _stop_deployed_version_drift_schedule()
 

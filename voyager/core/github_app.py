@@ -977,6 +977,134 @@ class GitHubAppClient:
         )
         return max(timestamps) if timestamps else None
 
+    async def commit_check_runs(
+        self,
+        app_slug: str,
+        repo: str,
+        commit_sha: str,
+    ) -> list[dict[str, Any]]:
+        """Fetch all check-run results for a commit via ``GET /commits/{sha}/check-runs``.
+
+        Paginates to collect every check run — the default page size is 100
+        and the limit is a single page fallthrough.  Each check run carries
+        ``name``, ``conclusion``, ``status``, ``id``, ``html_url``, etc.
+        """
+        owner, name = repo.split("/", 1)
+        all_runs: list[dict[str, Any]] = []
+        page = 1
+        per_page = 100
+        while True:
+            path = f"/repos/{owner}/{name}/commits/{commit_sha}/check-runs?per_page={per_page}&page={page}"
+            data = await self.request(app_slug, "GET", path, repository=repo)
+            items = list((data or {}).get("check_runs") or [])
+            all_runs.extend(items)
+            if len(items) < per_page:
+                break
+            page += 1
+            if page > 10:
+                break
+        return all_runs
+
+    async def pull_request_required_status_checks(
+        self,
+        app_slug: str,
+        repo: str,
+        pull_number: int,
+    ) -> list[dict[str, Any]]:
+        """Fetch required status-check rollup contexts for the PR's latest commit.
+
+        GitHub's status-check rollup contains both Checks API ``CheckRun`` nodes
+        and legacy Commit Status API ``StatusContext`` nodes; ``isRequired``
+        filters both shapes against the pull request's branch-protection rules.
+        """
+        owner, name = repo.split("/", 1)
+        query = """
+        query PullRequestRequiredStatusChecks(
+          $owner: String!,
+          $name: String!,
+          $number: Int!,
+          $cursor: String
+        ) {
+          repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+              commits(last: 1) {
+                nodes {
+                  commit {
+                    statusCheckRollup {
+                      contexts(first: 100, after: $cursor) {
+                        pageInfo { hasNextPage endCursor }
+                        nodes {
+                          __typename
+                          ... on CheckRun {
+                            databaseId
+                            name
+                            conclusion
+                            status
+                            detailsUrl
+                            isRequired(pullRequestNumber: $number)
+                          }
+                          ... on StatusContext {
+                            id
+                            context
+                            state
+                            targetUrl
+                            isRequired(pullRequestNumber: $number)
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """
+        required: list[dict[str, Any]] = []
+        cursor: str | None = None
+        while True:
+            data = await self.graphql(
+                app_slug,
+                repo,
+                query=query,
+                variables={"owner": owner, "name": name, "number": pull_number, "cursor": cursor},
+            )
+            pr = (((data or {}).get("repository") or {}).get("pullRequest")) or {}
+            commits = ((pr.get("commits") or {}).get("nodes")) or []
+            commit = ((commits[0] if commits else {}).get("commit")) or {}
+            contexts = ((commit.get("statusCheckRollup") or {}).get("contexts")) or {}
+            for node in contexts.get("nodes") or []:
+                if not node.get("isRequired"):
+                    continue
+                if node.get("__typename") == "CheckRun":
+                    required.append(
+                        {
+                            "id": node.get("databaseId") or node.get("id") or node.get("name"),
+                            "name": node.get("name"),
+                            "conclusion": node.get("conclusion"),
+                            "status": node.get("status"),
+                            "html_url": node.get("detailsUrl"),
+                            "type": "check_run",
+                        }
+                    )
+                elif node.get("__typename") == "StatusContext":
+                    required.append(
+                        {
+                            "id": node.get("id") or node.get("context"),
+                            "name": node.get("context"),
+                            "conclusion": node.get("state"),
+                            "status": node.get("state"),
+                            "html_url": node.get("targetUrl"),
+                            "type": "status_context",
+                        }
+                    )
+            page_info = contexts.get("pageInfo") or {}
+            if not page_info.get("hasNextPage"):
+                return required
+            cursor = str(page_info.get("endCursor") or "")
+            if not cursor:
+                return required
+
     async def create_pull_request(
         self,
         app_slug: str,
