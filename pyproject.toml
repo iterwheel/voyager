@@ -10,13 +10,14 @@ requires-python = ">=3.11"
 authors = [{ name = "Iterwheel" }]
 dependencies = [
     "fastapi>=0.136,<0.137.2",
+    "cryptography>=48.0.1",
     "httpx>=0.28",
     "idna>=3.15",
     "openai>=2.36",
-    "PyJWT[crypto]>=2.12",
+    "PyJWT[crypto]>=2.13",
     "python-dotenv>=1.0",
     "rich>=13.9",
-    "starlette>=1.0.1",
+    "starlette>=1.3.1",
     "typer>=0.15",
     "uvicorn[standard]>=0.46",
 ]

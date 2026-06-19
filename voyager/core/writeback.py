@@ -416,6 +416,15 @@ async def dispatch_route_writeback(
             repository=repository,
         )
 
+    if dynamic == "changelog_draft":
+        from voyager.bots.changelog.writeback import dispatch_changelog_writeback
+
+        return await dispatch_changelog_writeback(
+            client,
+            route,
+            repository=repository,
+        )
+
     if dynamic == "clearance_readiness":
         if not repository:
             return {
