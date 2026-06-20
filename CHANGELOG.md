@@ -8,6 +8,44 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-06-20
+
+### Added — Governed PR review-fix bot ([#187](https://github.com/iterwheel/voyager/issues/187))
+
+- Voyager now routes explicit `/review-fix` and `/pr-review-fix` PR comments
+  into a governed Assembly-backed review-fix loop, using the existing actor
+  authorization gate and the L3 governance envelope instead of an unattended
+  free-form repair path.
+- The bot refuses unsafe runs before mutation: review-fix must be explicitly
+  enabled in `[review_fix]`, must include an L3 envelope, must target a
+  same-repository non-default branch PR, and never approves, resolves threads,
+  merges, or rewrites the base/default branch.
+- Review-fix execution now carries the expected PR head SHA into each Assembly
+  adapter pass, refreshes that SHA after successful commits, checks for stale
+  heads before pushing, and uses force-with-lease semantics so concurrent
+  branch movement is escalated instead of overwritten.
+- Codex/Clearance thread polling for the loop uses the Assembly App identity,
+  ignores already-resolved/outdated or author-replied threads, treats backend
+  `dry_run` and `no_changes` as non-fixes, and re-fetches review threads after
+  each push before declaring a finding handled.
+- Public writeback now upserts a review-fix progress/refusal comment, while
+  private audit records keep per-round/per-finding attempt IDs for traceability.
+
+### Added — Review-fix enablement config ([#183](https://github.com/iterwheel/voyager/issues/183))
+
+- Voyager config now parses `[review_fix]` governance settings, including the
+  L3 envelope limits, kill switch path, verify command, and review-fix audit
+  directory documented in `config.example.toml`.
+
+### Added — Review-fix audit log ([#184](https://github.com/iterwheel/voyager/issues/184))
+
+- The review-fix governance layer now writes append-only JSONL audit records
+  for findings, classifications, fix attempts, verification outcomes, rollback
+  decisions, max-round escalation, kill-switch stops, and terminal loop status.
+- Audit validation rejects malformed or unsafe records instead of silently
+  accepting bare strings, missing safety fields, duplicate fixes, non-bool
+  classifications, or invalid envelope state.
+
 ### Added — Bounded review-fix loop runner ([#186](https://github.com/iterwheel/voyager/issues/186))
 
 - Governance now exposes an offline-testable bounded review-fix loop runner
@@ -21,6 +59,18 @@ release note for the explicit migration path.
   commits: passing verification audits `kept`, failing verification creates a
   local `git revert` and audits `rolled_back`, and rollback failures are
   preserved as `revert_failed` audit records for operator follow-up.
+
+### Fixed — Assembly finding-direction gate ([#158](https://github.com/iterwheel/voyager/issues/158))
+
+- Assembly auto-action is now gated on blocking-direction findings, so tolerated
+  false negatives and non-blocking review signals do not accidentally drive
+  automated fix behavior.
+
+### Changed — Assembly loop convergence policy ([#168](https://github.com/iterwheel/voyager/issues/168))
+
+- Assembly SOPs now reference the VOY-1825 convergence policy directly, making
+  the operator path explicit for false-positive fixes, false-negative
+  acceptance, and circuit-breaker stop conditions during multi-bot loops.
 
 ### Added — Scheduled CI-failure sweep (L1 advisory) ([#167](https://github.com/iterwheel/voyager/issues/167))
 
@@ -671,7 +721,8 @@ auth, FastAPI webhook bridge, DeepSeek LLM adapter, rocket-factory
 pipeline state machine, SWM-1101 per-thread verdict pipeline. See
 `b2e4ca1` and prior history.
 
-[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/iterwheel/voyager/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/iterwheel/voyager/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/iterwheel/voyager/compare/v0.4.10...v0.5.0
 [0.4.10]: https://github.com/iterwheel/voyager/compare/v0.4.9...v0.4.10
