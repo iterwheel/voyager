@@ -69,6 +69,18 @@ default_profile = "flash_no_thinking"
 # authorized_actors = ["frankyxhl", "ryosaeba1985"]
 # authorized_associations = []
 
+# Governed review-fix enablement. L1/L2 may omit the envelope. L3 must provide
+# the full safety envelope before unattended automation is allowed to run.
+# [review_fix]
+# Autonomy = "L1"
+#
+# [review_fix.envelope]
+# max_rounds = 3
+# max_fixes_per_round = 2
+# kill_switch_path = "~/.voyager/review-fix.disabled"
+# escalation = "request-human-review"
+# verify_command = "pytest tests/unit"
+
 
 # --- GitHub Apps ---------------------------------------------------------
 # One [[apps]] block per installed App. Webhook secrets are NOT stored
