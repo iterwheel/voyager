@@ -251,6 +251,11 @@ class ReviewFixLoopRunner:
             if kill_switch_path.exists():
                 return fixes, True
             classification = self.seams.classify(finding, status)
+            if not isinstance(classification.fixable, bool):
+                raise ReviewFixLoopRunnerError(
+                    "classification.fixable must be a bool, "
+                    f"got {type(classification.fixable).__name__}"
+                )
             if not classification.fixable:
                 _append_audit(
                     self.audit_log,
