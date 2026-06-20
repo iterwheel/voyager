@@ -126,6 +126,52 @@ def test_runner_escalates_at_max_rounds_when_findings_never_converge(tmp_path) -
     assert [record.verdict for record in records].count("round_fixed") == 3
 
 
+def test_runner_escalates_later_gather_failure_after_prior_fix(tmp_path) -> None:
+    audit_path = tmp_path / "review-fix.jsonl"
+    fixed: list[str] = []
+
+    def gather(status: ReviewFixLoopStatus) -> list[ReviewFixFinding]:
+        if status.round_number == 2:
+            raise RuntimeError("github fetch failed")
+        return [ReviewFixFinding(finding_id="codex:finding-1", category="codex-review")]
+
+    def fix(
+        work: ReviewFixLoopWork,
+        status: ReviewFixLoopStatus,
+    ) -> ReviewFixLoopFixResult:
+        fixed.append(work.finding.finding_id)
+        return ReviewFixLoopFixResult(commit="abc123", verdict="kept", tests=("pytest",))
+
+    outcome = ReviewFixLoopRunner(
+        enablement=_enablement(tmp_path, max_rounds=3, escalation="page-human-reviewer"),
+        audit_log=ReviewFixAuditLog(audit_path),
+        seams=ReviewFixLoopSeams(
+            gather=gather,
+            classify=lambda finding, status: ReviewFixClassification(fixable=True),
+            fix=fix,
+        ),
+        root_path=tmp_path,
+        now=lambda: _NOW,
+    ).run()
+
+    assert outcome.status is ReviewFixLoopOutcomeStatus.ESCALATED
+    assert outcome.rounds_run == 2
+    assert outcome.escalation == "page-human-reviewer"
+    assert fixed == ["codex:finding-1"]
+
+    records = ReviewFixAuditLog(audit_path).read_all()
+    assert [(record.round, record.finding_id, record.verdict) for record in records] == [
+        (1, "codex:finding-1", "kept"),
+        (1, "round:1", "round_fixed"),
+        (2, "round:2", "round_open"),
+        (2, "loop", "escalated"),
+    ]
+    assert records[-1].tests == (
+        "page-human-reviewer",
+        "fix_error=RuntimeError: github fetch failed",
+    )
+
+
 def test_runner_honors_kill_switch_before_next_round(tmp_path) -> None:
     audit_path = tmp_path / "review-fix.jsonl"
     kill_switch = tmp_path / ".voyager" / "review-fix.disabled"

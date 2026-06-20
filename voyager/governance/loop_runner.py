@@ -156,7 +156,32 @@ class ReviewFixLoopRunner:
                 )
 
             rounds_run = round_number
-            findings = tuple(self.seams.gather(status))
+            try:
+                findings = tuple(self.seams.gather(status))
+            except Exception as exc:
+                gather_error = _fix_error_test(exc)
+                _append_round_audit(
+                    self.audit_log,
+                    round_number=round_number,
+                    ts=self.now(),
+                    verdict="round_open",
+                    findings=0,
+                    fixes=0,
+                )
+                _append_audit(
+                    self.audit_log,
+                    round_number=round_number,
+                    ts=self.now(),
+                    finding_id="loop",
+                    verdict=ReviewFixLoopOutcomeStatus.ESCALATED.value,
+                    tests=(envelope.escalation, gather_error),
+                )
+                return ReviewFixLoopOutcome(
+                    status=ReviewFixLoopOutcomeStatus.ESCALATED,
+                    rounds_run=rounds_run,
+                    clean_rounds=clean_rounds,
+                    escalation=envelope.escalation,
+                )
             if kill_switch_path.exists():
                 _append_audit(
                     self.audit_log,
