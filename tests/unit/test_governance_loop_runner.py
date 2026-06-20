@@ -556,6 +556,45 @@ def test_runner_escalates_when_fix_seam_raises_after_rollback_audit(tmp_path) ->
     assert records[-1].tests == ("page-human-reviewer", "fix_error=RuntimeError: rollback failed")
 
 
+def test_runner_escalates_when_fix_result_audit_payload_is_invalid(tmp_path) -> None:
+    audit_path = tmp_path / "review-fix.jsonl"
+
+    def gather(status: ReviewFixLoopStatus) -> list[ReviewFixFinding]:
+        return [ReviewFixFinding(finding_id="codex:finding-1", category="codex-review")]
+
+    def fix(
+        work: ReviewFixLoopWork,
+        status: ReviewFixLoopStatus,
+    ) -> ReviewFixLoopFixResult:
+        return ReviewFixLoopFixResult(commit="   ", verdict="kept", tests=("pytest",))
+
+    outcome = ReviewFixLoopRunner(
+        enablement=_enablement(tmp_path, max_rounds=3, escalation="page-human-reviewer"),
+        audit_log=ReviewFixAuditLog(audit_path),
+        seams=ReviewFixLoopSeams(
+            gather=gather,
+            classify=lambda finding, status: ReviewFixClassification(fixable=True),
+            fix=fix,
+        ),
+        root_path=tmp_path,
+        now=lambda: _NOW,
+    ).run()
+
+    assert outcome.status is ReviewFixLoopOutcomeStatus.ESCALATED
+    assert outcome.rounds_run == 1
+    assert outcome.escalation == "page-human-reviewer"
+
+    records = ReviewFixAuditLog(audit_path).read_all()
+    assert [(record.finding_id, record.verdict) for record in records] == [
+        ("round:1", "round_fixed"),
+        ("loop", "escalated"),
+    ]
+    assert records[-1].tests == (
+        "page-human-reviewer",
+        "fix_error=ReviewFixLoopRunnerError: commit must be a non-empty string",
+    )
+
+
 def test_runner_audits_not_fixable_without_calling_fix(tmp_path) -> None:
     audit_path = tmp_path / "review-fix.jsonl"
     fixed: list[str] = []

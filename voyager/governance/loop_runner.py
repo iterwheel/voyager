@@ -311,19 +311,22 @@ class ReviewFixLoopRunner:
             except Exception as exc:
                 return fixes + 1, False, _fix_error_test(exc)
             fixes += 1
-            if result.audit_recorded is not True:
-                _append_audit(
-                    self.audit_log,
-                    round_number=status.round_number,
-                    ts=self.now(),
-                    commit=result.commit,
-                    finding_id=finding.finding_id,
-                    category=finding.category,
-                    verdict=result.verdict,
-                    tests=_result_tests(
-                        result.tests, fallback_verify_command=envelope.verify_command
-                    ),
-                )
+            try:
+                if result.audit_recorded is not True:
+                    _append_audit(
+                        self.audit_log,
+                        round_number=status.round_number,
+                        ts=self.now(),
+                        commit=result.commit,
+                        finding_id=finding.finding_id,
+                        category=finding.category,
+                        verdict=result.verdict,
+                        tests=_result_tests(
+                            result.tests, fallback_verify_command=envelope.verify_command
+                        ),
+                    )
+            except Exception as exc:
+                return fixes, False, _fix_error_test(exc)
             if kill_switch_path.exists():
                 return fixes, True, None
         return fixes, False, None
