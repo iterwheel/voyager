@@ -131,10 +131,15 @@ The three rules form a decision table for any finding in the automated loop:
 
 | Finding classification | Action | Loop behavior |
 |------------------------|--------|---------------|
-| True positive (correct block) | Block publish, trigger auto-fix | Normal fix round; source issue round counter increments |
+| True positive (correct block) | Block the current step; pre-publish gates return a blocked adapter result | No auto-fix or source-issue counter increment before PR publish; the counter increments only after a later successful PR update enters writeback |
 | False positive (over-block) | **Must fix** the check | Escalate as a check bug; investigate after the immediate workaround |
 | False negative (under-block) | **Accept** — fallback to review | Do not trigger auto-fix; do not increment round counter |
 | Round count exceeds threshold | **Halt** — no more auto-fix attempts | Apply `loop-circuit-broken` label to the source issue, post escalation comments; human unblock requires current PR approval and removal of any active source-issue breaker label |
+
+AC spot-check true positives are pre-publish adapter blocks today. They do not
+enqueue an automatic Assembly fix round, and they do not write
+`assembly-fix-round-*` labels before a PR branch update succeeds. An operator or
+later implementation pass must fix the missing requirement and rerun Assembly.
 
 Current gates encode advisory behavior through configured gate maturity and gate
 status, not by searching prose patterns in the acceptance criteria. The AC
@@ -193,3 +198,4 @@ Do not apply these rules to:
 | 2026-06-20 | Aligned circuit-breaker recovery with current approval, source-issue label, and round-counter behavior | Codex |
 | 2026-06-20 | Clarified current AC spot-check maturity as L3/blocking and preserved L1 advisory behavior as an adapter capability | Codex |
 | 2026-06-20 | Clarified that VOY-1811, VOY-1822, and VOY-1824 reference this policy through `Related` metadata | Codex |
+| 2026-06-20 | Aligned AC spot-check true-positive action with pre-publish blocked adapter behavior | Codex |
