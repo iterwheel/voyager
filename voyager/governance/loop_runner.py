@@ -172,6 +172,7 @@ class ReviewFixLoopRunner:
                     clean_rounds=clean_rounds,
                     kill_switch_path=kill_switch_path,
                 )
+            findings = tuple(_validated_finding(finding) for finding in findings)
             if not findings:
                 clean_rounds += 1
                 _append_round_audit(
