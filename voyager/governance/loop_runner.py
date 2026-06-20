@@ -9,7 +9,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from .audit_log import ReviewFixAuditLog, ReviewFixAuditRecord
-from .enablement import EnablementConfig, SafetyEnvelope
+from .enablement import Autonomy, EnablementConfig, SafetyEnvelope
 
 _RUNNER_COMMIT = "loop-runner"
 _RUNNER_CATEGORY = "loop-runner"
@@ -257,6 +257,8 @@ class ReviewFixLoopRunner:
                     tests=(f"max_fixes_per_round={envelope.max_fixes_per_round}",),
                 )
                 continue
+            if kill_switch_path.exists():
+                return fixes, True
 
             result = self.seams.fix(
                 ReviewFixLoopWork(finding=finding, classification=classification),
@@ -320,6 +322,11 @@ def _append_audit(
 
 
 def _require_envelope(enablement: EnablementConfig) -> SafetyEnvelope:
+    if enablement.autonomy is not Autonomy.L3:
+        raise ReviewFixLoopRunnerError(
+            f"review-fix loop runner requires autonomy {Autonomy.L3.value}, "
+            f"got {enablement.autonomy.value}"
+        )
     if enablement.envelope is None:
         raise ReviewFixLoopRunnerError("review-fix loop runner requires a safety envelope")
     return enablement.envelope

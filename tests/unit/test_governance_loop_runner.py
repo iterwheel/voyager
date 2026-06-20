@@ -218,6 +218,42 @@ def test_runner_honors_kill_switch_between_findings(tmp_path) -> None:
     assert records[-1].verdict == "kill_switch"
 
 
+def test_runner_rechecks_kill_switch_after_classification_before_fix(tmp_path) -> None:
+    audit_path = tmp_path / "review-fix.jsonl"
+    kill_switch = tmp_path / ".voyager" / "review-fix.disabled"
+    fixed: list[str] = []
+
+    def gather(status: ReviewFixLoopStatus) -> list[ReviewFixFinding]:
+        return [ReviewFixFinding(finding_id="codex:finding-1", category="codex-review")]
+
+    def classify(
+        finding: ReviewFixFinding,
+        status: ReviewFixLoopStatus,
+    ) -> ReviewFixClassification:
+        kill_switch.parent.mkdir(parents=True)
+        kill_switch.write_text("stop\n", encoding="utf-8")
+        return ReviewFixClassification(fixable=True)
+
+    def fix(
+        work: ReviewFixLoopWork,
+        status: ReviewFixLoopStatus,
+    ) -> ReviewFixLoopFixResult:
+        fixed.append(work.finding.finding_id)
+        return ReviewFixLoopFixResult(commit="unused", verdict="kept", tests=("pytest",))
+
+    outcome = ReviewFixLoopRunner(
+        enablement=_enablement(tmp_path, max_rounds=3),
+        audit_log=ReviewFixAuditLog(audit_path),
+        seams=ReviewFixLoopSeams(gather=gather, classify=classify, fix=fix),
+        root_path=tmp_path,
+        now=lambda: _NOW,
+    ).run()
+
+    assert outcome.status is ReviewFixLoopOutcomeStatus.KILL_SWITCH
+    assert fixed == []
+    assert ReviewFixAuditLog(audit_path).read_all()[-1].verdict == "kill_switch"
+
+
 def test_runner_defers_findings_past_max_fixes_per_round(tmp_path) -> None:
     audit_path = tmp_path / "review-fix.jsonl"
     fixed: list[str] = []
@@ -417,6 +453,41 @@ def test_runner_rejects_impossible_clean_round_requirement(tmp_path) -> None:
         runner.run()
 
 
+def test_runner_requires_l3_autonomy(tmp_path) -> None:
+    fixed: list[str] = []
+    seams = ReviewFixLoopSeams(
+        gather=lambda status: [ReviewFixFinding(finding_id="codex:finding", category="codex")],
+        classify=lambda finding, status: ReviewFixClassification(fixable=True),
+        fix=lambda work, status: (
+            fixed.append(work.finding.finding_id)
+            or ReviewFixLoopFixResult(
+                commit="unused",
+                verdict="kept",
+                tests=("pytest",),
+            )
+        ),
+    )
+
+    with pytest.raises(ReviewFixLoopRunnerError, match="requires autonomy L3"):
+        ReviewFixLoopRunner(
+            enablement=EnablementConfig(
+                autonomy=Autonomy.L2,
+                envelope=SafetyEnvelope(
+                    max_rounds=1,
+                    max_fixes_per_round=1,
+                    kill_switch_path=Path(".voyager/review-fix.disabled"),
+                    escalation="request-human-review",
+                    verify_command="pytest",
+                ),
+            ),
+            audit_log=ReviewFixAuditLog(tmp_path / "review-fix.jsonl"),
+            seams=seams,
+            root_path=tmp_path,
+        ).run()
+
+    assert fixed == []
+
+
 def test_runner_requires_safety_envelope(tmp_path) -> None:
     seams = ReviewFixLoopSeams(
         gather=lambda status: [],
@@ -430,7 +501,7 @@ def test_runner_requires_safety_envelope(tmp_path) -> None:
 
     with pytest.raises(ReviewFixLoopRunnerError, match="requires a safety envelope"):
         ReviewFixLoopRunner(
-            enablement=EnablementConfig(autonomy=Autonomy.L1),
+            enablement=EnablementConfig(autonomy=Autonomy.L3),
             audit_log=ReviewFixAuditLog(tmp_path / "review-fix.jsonl"),
             seams=seams,
             root_path=tmp_path,
