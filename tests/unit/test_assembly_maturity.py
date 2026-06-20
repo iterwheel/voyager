@@ -4,8 +4,18 @@ from __future__ import annotations
 
 from typing import Any
 
-from voyager.bots.assembly.ac_spotcheck import check_acceptance_exact_tokens
-from voyager.bots.assembly.adapters import _AC_SPOTCHECK_MATURITY
+from voyager.bots.assembly.ac_spotcheck import (
+    ADVISORY_FINDING_DIRECTION,
+    BLOCKING_FINDING_DIRECTION,
+    AcceptanceSpotCheckFinding,
+    AcceptanceSpotCheckResult,
+    check_acceptance_exact_tokens,
+)
+from voyager.bots.assembly.adapters import (
+    _AC_SPOTCHECK_MATURITY,
+    _spotcheck_has_blocking_findings,
+    _spotcheck_result_for_maturity,
+)
 from voyager.bots.assembly.maturity import DEFAULT_GATE_MATURITY, GateMaturity
 
 
@@ -39,36 +49,68 @@ def test_l1_gate_does_not_block_on_finding() -> None:
     ac = ["Must declare `mandatory-bind` scope"]
 
     # The check produces findings (would block at L3)
-    result = check_acceptance_exact_tokens(
+    base_result = check_acceptance_exact_tokens(
         issue_body=issue_body,
         changed_text=body,
         acceptance_criteria=ac,
     )
-    assert not result.ok
-    assert len(result.findings) > 0
+    assert not base_result.ok
+    assert len(base_result.findings) > 0
 
     # ---- L1 branch: record findings but do not block ----
     details: dict[str, Any] = {}
+    result = _spotcheck_result_for_maturity(base_result, GateMaturity.L1)
     details["ac_spotcheck"] = result.to_dict()
     maturity = GateMaturity.L1
     blocked = False
     if not result.ok:
         if maturity == GateMaturity.L1:
             details["ac_spotcheck_maturity"] = "L1"
-        else:
+        elif _spotcheck_has_blocking_findings(result):
             blocked = True
     assert not blocked
     assert details["ac_spotcheck_maturity"] == "L1"
+    assert details["ac_spotcheck"]["findings"][0]["direction"] == ADVISORY_FINDING_DIRECTION
 
     # ---- L3 branch (comparison): findings block publish ----
     details = {}
+    result = _spotcheck_result_for_maturity(base_result, GateMaturity.L3)
     details["ac_spotcheck"] = result.to_dict()
     maturity = GateMaturity.L3
     blocked = False
     if not result.ok:
         if maturity == GateMaturity.L1:
             details["ac_spotcheck_maturity"] = "L1"
-        else:
+        elif _spotcheck_has_blocking_findings(result):
             blocked = True
     assert blocked
     assert "ac_spotcheck_maturity" not in details
+    assert details["ac_spotcheck"]["findings"][0]["direction"] == BLOCKING_FINDING_DIRECTION
+
+
+def test_spotcheck_direction_controls_automatic_blocking() -> None:
+    block_result = AcceptanceSpotCheckResult(
+        (
+            AcceptanceSpotCheckFinding(
+                source="acceptance_criterion",
+                criterion="Add value `mandatory-bind`",
+                required_tokens=("mandatory-bind",),
+                missing_tokens=("mandatory-bind",),
+                direction=BLOCKING_FINDING_DIRECTION,
+            ),
+        )
+    )
+    advisory_result = AcceptanceSpotCheckResult(
+        (
+            AcceptanceSpotCheckFinding(
+                source="l1_advisory_gate",
+                criterion="Add value `mandatory-bind`",
+                required_tokens=("mandatory-bind",),
+                missing_tokens=("mandatory-bind",),
+                direction=ADVISORY_FINDING_DIRECTION,
+            ),
+        )
+    )
+
+    assert _spotcheck_has_blocking_findings(block_result)
+    assert not _spotcheck_has_blocking_findings(advisory_result)

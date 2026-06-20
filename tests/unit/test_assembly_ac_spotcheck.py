@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from voyager.bots.assembly.ac_spotcheck import check_acceptance_exact_tokens
+from voyager.bots.assembly.ac_spotcheck import (
+    BLOCKING_FINDING_DIRECTION,
+    check_acceptance_exact_tokens,
+)
 
 
 def test_spotcheck_catches_alfred_204_disposition_value_mismatch() -> None:
@@ -47,6 +50,37 @@ The `**Instantiates:**` and `**Overlays:**` fields use `COR-NNNN`.
         "inherit-only",
     )
     assert value_group.missing_tokens == ("mandatory-bind", "inherit-only")
+    assert value_group.direction == BLOCKING_FINDING_DIRECTION
+
+
+def test_spotcheck_required_token_missing_finding_is_blocking() -> None:
+    result = check_acceptance_exact_tokens(
+        issue_body="## Acceptance Criteria\n\n- [ ] Add value `mandatory-bind`\n",
+        acceptance_criteria=["Add value `mandatory-bind`"],
+        changed_text='SUPPORTED_VALUE = "optional-overlay"\n',
+    )
+
+    assert not result.ok
+    assert result.findings[0].direction == BLOCKING_FINDING_DIRECTION
+    assert result.to_dict()["findings"][0]["direction"] == BLOCKING_FINDING_DIRECTION
+
+
+def test_spotcheck_direction_does_not_follow_blocking_prose_keywords() -> None:
+    result = check_acceptance_exact_tokens(
+        issue_body=(
+            "## Acceptance Criteria\n\n"
+            "- [ ] Must document false negative under-blocking guard that lets "
+            "`new-mode` through\n"
+        ),
+        acceptance_criteria=[
+            "Must document false negative under-blocking guard that lets `new-mode` through"
+        ],
+        changed_text="No matching exact token is present.\n",
+    )
+
+    assert not result.ok
+    assert result.findings[0].missing_tokens == ("new-mode",)
+    assert result.findings[0].direction == BLOCKING_FINDING_DIRECTION
 
 
 def test_spotcheck_ignores_value_groups_outside_acceptance_criteria() -> None:

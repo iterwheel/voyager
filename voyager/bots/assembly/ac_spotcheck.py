@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass
-from typing import Any
+from dataclasses import asdict, dataclass, replace
+from typing import Any, Literal
 
 _INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]*[A-Za-z0-9]$")
@@ -99,6 +99,11 @@ _REMOVAL_SUFFIX_RE = re.compile(
     re.I,
 )
 
+FindingDirection = Literal["block", "advisory"]
+BLOCKING_FINDING_DIRECTION: FindingDirection = "block"
+ADVISORY_FINDING_DIRECTION: FindingDirection = "advisory"
+_VALID_FINDING_DIRECTIONS = frozenset({BLOCKING_FINDING_DIRECTION, ADVISORY_FINDING_DIRECTION})
+
 
 @dataclass(frozen=True)
 class AcceptanceSpotCheckFinding:
@@ -108,9 +113,17 @@ class AcceptanceSpotCheckFinding:
     criterion: str
     required_tokens: tuple[str, ...]
     missing_tokens: tuple[str, ...]
+    direction: FindingDirection = BLOCKING_FINDING_DIRECTION
+
+    def __post_init__(self) -> None:
+        if self.direction not in _VALID_FINDING_DIRECTIONS:
+            raise ValueError(f"invalid finding direction: {self.direction!r}")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    def with_direction(self, direction: FindingDirection) -> AcceptanceSpotCheckFinding:
+        return replace(self, direction=direction)
 
 
 @dataclass(frozen=True)
@@ -129,6 +142,13 @@ class AcceptanceSpotCheckResult:
         first = self.findings[0]
         missing = ", ".join(first.missing_tokens)
         return f"Acceptance spot-check failed: missing exact token(s): {missing}"
+
+    def with_direction(self, direction: FindingDirection) -> AcceptanceSpotCheckResult:
+        if self.ok:
+            return self
+        return AcceptanceSpotCheckResult(
+            tuple(finding.with_direction(direction) for finding in self.findings)
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {

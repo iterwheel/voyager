@@ -26,6 +26,7 @@ import httpx
 
 from voyager.core.writeback import build_writeback_failure, dry_run_enabled
 
+from .ac_spotcheck import ADVISORY_FINDING_DIRECTION
 from .adapters import AdapterExecutionContext, AdapterResult, select_execution_adapter
 from .audit import (
     AssemblyAuditManifest,
@@ -580,7 +581,7 @@ def _advisory_gate_findings_from_details(details: dict[str, Any]) -> list[dict[s
                 "criterion": finding.get("criterion"),
                 "required_values": finding.get("required_tokens") or [],
                 "missing_values": finding.get("missing_tokens") or [],
-                "direction": finding.get("direction"),
+                "direction": ADVISORY_FINDING_DIRECTION,
             }
         )
     return normalized

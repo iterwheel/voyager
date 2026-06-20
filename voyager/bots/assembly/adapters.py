@@ -25,7 +25,12 @@ from typing import Any, Protocol
 
 from voyager.core.redaction import sanitize_public_text
 
-from .ac_spotcheck import AcceptanceSpotCheckResult, check_acceptance_exact_tokens
+from .ac_spotcheck import (
+    ADVISORY_FINDING_DIRECTION,
+    BLOCKING_FINDING_DIRECTION,
+    AcceptanceSpotCheckResult,
+    check_acceptance_exact_tokens,
+)
 from .constants import (
     ASSEMBLY_AC_SPOTCHECK_ENV,
     ASSEMBLY_BACKEND_DRY_RUN,
@@ -534,11 +539,15 @@ class PiOhMyPiDeepSeekAdapter:
                     secret=token,
                 )
                 if not ac_spotcheck.ok:
+                    ac_spotcheck = _spotcheck_result_for_maturity(
+                        ac_spotcheck,
+                        _AC_SPOTCHECK_MATURITY,
+                    )
                     details["ac_spotcheck"] = ac_spotcheck.to_dict()
                     if _AC_SPOTCHECK_MATURITY == GateMaturity.L1:
                         # L1: advisory — record findings but do not block.
                         details["ac_spotcheck_maturity"] = "L1"
-                    else:
+                    elif _spotcheck_has_blocking_findings(ac_spotcheck):
                         return _failed_pi_result(
                             ac_spotcheck.summary(),
                             token,
@@ -895,6 +904,19 @@ async def _run_acceptance_spotcheck(
         acceptance_criteria_items=contract.acceptance_criteria_items,
         changed_text=changed_text,
     )
+
+
+def _spotcheck_result_for_maturity(
+    result: AcceptanceSpotCheckResult,
+    maturity: GateMaturity,
+) -> AcceptanceSpotCheckResult:
+    if maturity == GateMaturity.L1:
+        return result.with_direction(ADVISORY_FINDING_DIRECTION)
+    return result
+
+
+def _spotcheck_has_blocking_findings(result: AcceptanceSpotCheckResult) -> bool:
+    return any(finding.direction == BLOCKING_FINDING_DIRECTION for finding in result.findings)
 
 
 def _spotcheck_excerpt(result: AcceptanceSpotCheckResult) -> str:

@@ -20,6 +20,10 @@ import pytest
 
 from voyager.bots.assembly import adapters as adapters_module
 from voyager.bots.assembly import writeback as writeback_module
+from voyager.bots.assembly.ac_spotcheck import (
+    ADVISORY_FINDING_DIRECTION,
+    BLOCKING_FINDING_DIRECTION,
+)
 from voyager.bots.assembly.adapters import (
     AdapterExecutionContext,
     PiOhMyPiDeepSeekAdapter,
@@ -673,6 +677,7 @@ async def test_pi_adapter_ac_spotcheck_blocks_publish_and_retains_bundle(
         "mandatory-bind",
         "inherit-only",
     ]
+    assert spotcheck["findings"][0]["direction"] == BLOCKING_FINDING_DIRECTION
     bundle_path = Path(result.details["failure_debug_bundle_path"])
     assert (bundle_path / "repo").exists()
     metadata = json.loads((bundle_path / "assembly-failure.json").read_text(encoding="utf-8"))
@@ -727,6 +732,7 @@ async def test_pi_adapter_l1_ac_spotcheck_surfaces_advisory_before_publish(
     assert recorder.git_calls("push"), "L1 spot-check findings must not block publish"
     assert result.details["ac_spotcheck_maturity"] == "L1"
     assert result.details["ac_spotcheck"]["ok"] is False
+    assert result.details["ac_spotcheck"]["findings"][0]["direction"] == ADVISORY_FINDING_DIRECTION
 
 
 @pytest.mark.asyncio

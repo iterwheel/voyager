@@ -350,6 +350,7 @@ def test_l1_gate_findings_reach_progress_comment_and_manifest(
     manifest = load_audit_manifest(manifest_path)
     findings = manifest.extra["advisory_gate_findings"]
     assert findings[0]["missing_values"] == ["mandatory-bind"]
+    assert findings[0]["direction"] == "advisory"
 
 
 def test_adapter_non_mapping_failure_diagnostic_does_not_break_manifest(
