@@ -8,6 +8,13 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+### Added — Review-fix verify rollback step ([#185](https://github.com/iterwheel/voyager/issues/185))
+
+- Governance now exposes a local verify-and-rollback primitive for review-fix
+  commits: passing verification audits `kept`, failing verification creates a
+  local `git revert` and audits `rolled_back`, and rollback failures are
+  preserved as `revert_failed` audit records for operator follow-up.
+
 ### Added — Scheduled CI-failure sweep (L1 advisory) ([#167](https://github.com/iterwheel/voyager/issues/167))
 
 - Wukong can now run a scheduled CI-failure sweep that scans open pull

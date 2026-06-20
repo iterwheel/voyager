@@ -8,6 +8,12 @@ from .enablement import (
     SafetyEnvelope,
     parse_enablement_config,
 )
+from .verify_rollback import (
+    VerifyRollbackError,
+    VerifyRollbackResult,
+    VerifyRollbackVerdict,
+    verify_commit_or_rollback,
+)
 
 __all__ = [
     "Autonomy",
@@ -17,5 +23,9 @@ __all__ = [
     "ReviewFixAuditLogError",
     "ReviewFixAuditRecord",
     "SafetyEnvelope",
+    "VerifyRollbackError",
+    "VerifyRollbackResult",
+    "VerifyRollbackVerdict",
     "parse_enablement_config",
+    "verify_commit_or_rollback",
 ]
