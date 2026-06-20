@@ -86,6 +86,7 @@ class AdapterExecutionContext:
     resume_session_id: str | None = None
     audit_id: str | None = None
     phase: str = "implementer"
+    expected_remote_sha: str | None = None
 
     def to_safe_dict(self) -> dict[str, Any]:
         return {
@@ -97,6 +98,7 @@ class AdapterExecutionContext:
             "session_mode": self.session_mode,
             "audit_id": self.audit_id,
             "phase": self.phase,
+            "expected_remote_sha": self.expected_remote_sha,
         }
 
 
@@ -571,6 +573,7 @@ class PiOhMyPiDeepSeekAdapter:
                 installation_token=token,
                 checkout_dir=checkout_dir,
                 timeout_seconds=timeout_seconds,
+                expected_remote_sha=context.expected_remote_sha,
             )
             if not publish_result.success:
                 return _failed_pi_result(

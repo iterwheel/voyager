@@ -24,6 +24,7 @@ from voyager.bots.blueprint import route_blueprint_event
 from voyager.bots.changelog import route_changelog_event
 from voyager.bots.cleanup import route_pr_merge_cleanup
 from voyager.bots.clearance import route_clearance_event
+from voyager.bots.review_fix import route_review_fix_event
 from voyager.bots.stack import route_stack_event
 from voyager.build_info import BUILD_COMMIT, VERSION
 from voyager.core.security import match_signature
@@ -626,6 +627,7 @@ async def _process_route_writebacks(
     repository: str | None = (payload.get("repository") or {}).get("full_name")
     default_profile_name = _get_default_profile_name()
     investigator = _get_investigator()
+    cfg = _get_config()
     # Codex GH-bot PR #15 P1: include pr_number + ts at the top level of every
     # writeback record so consumers (the e2e harness in particular) can match
     # records to the PR they created without spelunking through nested route
@@ -641,6 +643,7 @@ async def _process_route_writebacks(
                 store=store,
                 default_profile_name=default_profile_name,
                 investigator=investigator,
+                cfg=cfg,
             )
             _recent_writebacks.append(
                 {
@@ -796,6 +799,7 @@ async def github_webhook(
         *route_clearance_event(x_github_event, payload),
         *route_changelog_event(x_github_event, payload),
         *route_assembly_event(x_github_event, payload, cfg=cfg),
+        *route_review_fix_event(x_github_event, payload, cfg=cfg),
         *route_pr_merge_cleanup(x_github_event, payload),
     ]
     routes, denied_routes = _filter_routes_by_repository(candidate_routes, repository, cfg)

@@ -45,12 +45,14 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 _log = logging.getLogger(__name__)
+_COMMIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
 
 @dataclass(frozen=True)
@@ -203,6 +205,7 @@ async def publish_branch(
     installation_token: str,
     checkout_dir: Path,
     timeout_seconds: int = 300,
+    expected_remote_sha: str | None = None,
 ) -> PublishResult:
     """Push ``HEAD:refs/heads/<branch_name>`` to the target repository.
 
@@ -223,6 +226,9 @@ async def publish_branch(
         installation_token: GitHub App installation token.
         checkout_dir: Existing git checkout to push from.
         timeout_seconds: Per-push timeout (default 300).
+        expected_remote_sha: Optional explicit remote branch SHA for
+            ``--force-with-lease=refs/heads/<branch>:<sha>``. Use this when
+            updating a live PR branch whose reviewed head must be preserved.
 
     Returns:
         ``PublishResult`` with ``success=True`` on clean push.
@@ -232,6 +238,14 @@ async def publish_branch(
     timeout).
     """
     remote_url = _github_safe_remote(repository)
+    expected_sha = _expected_remote_sha(expected_remote_sha)
+    if expected_remote_sha is not None and expected_sha is None:
+        return PublishResult(
+            success=False,
+            message="expected_remote_sha must be a 40-character commit SHA",
+            phase="git_publish_expected_remote_sha",
+            command="validate expected remote sha",
+        )
     remote_name: str | None = None
     remote_created = False
     askpass: Path | None = None
@@ -299,17 +313,36 @@ async def publish_branch(
                     phase="git_publish_fetch",
                     command="git fetch",
                 )
+            if expected_sha is not None:
+                return PublishResult(
+                    success=False,
+                    message=(
+                        f"Expected remote branch {branch_name} at {expected_sha}, "
+                        "but the branch was not found."
+                    ),
+                    returncode=rc_fetch,
+                    stdout=_stdout_fetch,
+                    stderr=stderr_fetch,
+                    timed_out=fetch_timed_out,
+                    phase="git_publish_fetch",
+                    command="git fetch",
+                )
 
         # ---- Step 3: push via named remote ----
         # --force-with-lease now has a remote-tracking ref to check because
         # the fetch above (when the branch already exists on the remote)
         # populated refs/remotes/<remote_name>/<branch_name>.
         target_ref = f"HEAD:refs/heads/{branch_name}"
+        lease_arg = (
+            f"--force-with-lease=refs/heads/{branch_name}:{expected_sha}"
+            if expected_sha is not None
+            else "--force-with-lease"
+        )
         returncode, _stdout, stderr, push_timed_out = await _run_git_push(
             [
                 "git",
                 "push",
-                "--force-with-lease",
+                lease_arg,
                 "--no-verify",
                 remote_name,
                 target_ref,
@@ -362,3 +395,14 @@ async def publish_branch(
             askpass.unlink(missing_ok=True)
         if temp_dir is not None:
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def _expected_remote_sha(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if not _COMMIT_SHA_RE.fullmatch(normalized):
+        return None
+    return normalized.lower()

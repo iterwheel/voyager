@@ -381,6 +381,7 @@ async def dispatch_route_writeback(
     store: Any = None,
     default_profile_name: str | None = None,
     investigator: ThreadInvestigator | None = None,
+    cfg: Any | None = None,
 ) -> dict[str, Any]:
     """Dispatch a route to the right writeback path.
 
@@ -432,6 +433,16 @@ async def dispatch_route_writeback(
             client,
             route,
             repository=repository,
+        )
+
+    if dynamic == "review_fix_loop":
+        from voyager.bots.review_fix.writeback import dispatch_review_fix_writeback
+
+        return await dispatch_review_fix_writeback(
+            client,
+            route,
+            repository=repository,
+            cfg=cfg,
         )
 
     if dynamic == "clearance_readiness":

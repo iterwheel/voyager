@@ -66,6 +66,7 @@ def _context(
     resume_session_id: str | None = None,
     audit_id: str = "asmb-0123456789abcdef",
     phase: str = "implementer",
+    expected_remote_sha: str | None = None,
 ) -> AdapterExecutionContext:
     return AdapterExecutionContext(
         repository="iterwheel/voyager-sandbox",
@@ -78,6 +79,7 @@ def _context(
         resume_session_id=resume_session_id,
         audit_id=audit_id,
         phase=phase,
+        expected_remote_sha=expected_remote_sha,
     )
 
 
@@ -856,6 +858,32 @@ async def test_pi_adapter_ac_spotcheck_uses_repository_base_ref_for_existing_bra
 
     assert result.status == "executed"
     assert seen_refs == ["origin/main"]
+
+
+@pytest.mark.asyncio
+async def test_pi_adapter_passes_expected_remote_sha_to_publish(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    recorder = _CommandRecorder(status_porcelain="M voyager/example.py\n")
+    _install_command_fakes(monkeypatch, recorder)
+    expected = "b" * 40
+    captured: dict[str, Any] = {}
+
+    async def fake_publish_branch(**kwargs: Any) -> PublishResult:
+        captured.update(kwargs)
+        return PublishResult(success=True, message="pushed")
+
+    monkeypatch.setattr(adapters_module, "publish_branch", fake_publish_branch)
+    adapter = PiOhMyPiDeepSeekAdapter()
+
+    result = await adapter.execute(
+        _contract(),
+        _context(tmp_path, expected_remote_sha=expected),
+    )
+
+    assert result.status == "executed"
+    assert captured["expected_remote_sha"] == expected
 
 
 @pytest.mark.asyncio

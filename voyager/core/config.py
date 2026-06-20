@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from voyager.governance.enablement import EnablementConfig, parse_enablement_config
+
 ROOT_DIR = Path(__file__).resolve().parents[2]
 
 _VALID_REASONING_EFFORTS = frozenset({"low", "medium", "high", "max"})
@@ -90,6 +92,14 @@ class AssemblyConfig:
 
 
 @dataclass(frozen=True, kw_only=True)
+class ReviewFixConfig:
+    """Governed PR review-fix loop settings loaded from ``[review_fix]``."""
+
+    enablement: EnablementConfig | None = None
+    audit_dir: Path | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
 class VoyagerConfig:
     """Top-level voyager configuration.
 
@@ -105,6 +115,7 @@ class VoyagerConfig:
     deepseek_api_key: str | None = None
     bridge: BridgeConfig = field(default_factory=BridgeConfig)
     assembly: AssemblyConfig = field(default_factory=AssemblyConfig)
+    review_fix: ReviewFixConfig = field(default_factory=ReviewFixConfig)
 
 
 def _parse_app(item: dict[str, Any]) -> AppConfig:
@@ -378,6 +389,18 @@ def _parse_assembly(raw: dict[str, Any]) -> AssemblyConfig:
     )
 
 
+def _parse_review_fix(raw: dict[str, Any]) -> ReviewFixConfig:
+    section = raw.get("review_fix")
+    if section is None:
+        return ReviewFixConfig()
+    section = _optional_table(section, "[review_fix]")
+    audit_dir_raw = _optional_string(section, "audit_dir", "[review_fix]")
+    return ReviewFixConfig(
+        enablement=parse_enablement_config(section, section_name="[review_fix]"),
+        audit_dir=Path(audit_dir_raw).expanduser() if audit_dir_raw is not None else None,
+    )
+
+
 def load_config(path: str | Path | None = None) -> VoyagerConfig:
     if path is None:
         env_path = os.environ.get("VOYAGER_CONFIG_PATH")
@@ -454,6 +477,7 @@ def load_config(path: str | Path | None = None) -> VoyagerConfig:
 
     bridge = _parse_bridge(raw)
     assembly = _parse_assembly(raw)
+    review_fix = _parse_review_fix(raw)
 
     return VoyagerConfig(
         apps=apps,
@@ -463,6 +487,7 @@ def load_config(path: str | Path | None = None) -> VoyagerConfig:
         deepseek_api_key=deepseek_api_key,
         bridge=bridge,
         assembly=assembly,
+        review_fix=review_fix,
     )
 
 

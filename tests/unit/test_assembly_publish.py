@@ -341,6 +341,34 @@ class TestPublishBranch:
         assert "--no-verify" in push_argv
 
     @pytest.mark.asyncio
+    async def test_push_uses_explicit_expected_remote_sha_lease(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        recorder = _CommandRecorder()
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", recorder.create_subprocess_exec)
+        monkeypatch.setattr(
+            "voyager.bots.assembly.publish.shutil.rmtree",
+            lambda _dir, **kw: None,
+        )
+        expected = "a" * 40
+
+        result = await publish_branch(
+            repository=TEST_REPOSITORY,
+            branch_name=TEST_BRANCH,
+            installation_token=TEST_TOKEN,
+            checkout_dir=tmp_path,
+            timeout_seconds=30,
+            expected_remote_sha=expected,
+        )
+
+        assert result.success
+        push_calls = [call for call in recorder.calls if "push" in " ".join(call["argv"])]
+        assert push_calls
+        push_argv = " ".join(push_calls[0]["argv"])
+        assert f"--force-with-lease=refs/heads/{TEST_BRANCH}:{expected}" in push_argv
+        assert "--no-verify" in push_argv
+
+    @pytest.mark.asyncio
     async def test_remote_add_failure_does_not_remove_existing_remote(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:

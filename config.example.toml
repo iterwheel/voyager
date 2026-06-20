@@ -69,17 +69,19 @@ default_profile = "flash_no_thinking"
 # authorized_actors = ["frankyxhl", "ryosaeba1985"]
 # authorized_associations = []
 
-# Governed review-fix enablement. L1/L2 may omit the envelope. L3 must provide
-# the full safety envelope before unattended automation is allowed to run.
-# [review_fix]
-# Autonomy = "L1"
-#
-# [review_fix.envelope]
-# max_rounds = 3
-# max_fixes_per_round = 2
-# kill_switch_path = "~/.voyager/review-fix.disabled"
-# escalation = "request-human-review"
-# verify_command = "pytest tests/unit"
+# Governed review-fix enablement. This records the L3 envelope required before
+# unattended PR review-fix automation may run. DRY_RUN and repository allow-list
+# gates still control whether any GitHub mutation can happen.
+[review_fix]
+Autonomy = "L3"
+audit_dir = "~/.voyager/state/review-fix/audit"
+
+[review_fix.envelope]
+max_rounds = 3
+max_fixes_per_round = 2
+kill_switch_path = "~/.voyager/review-fix.disabled"
+escalation = "request-human-review"
+verify_command = "pytest tests/unit"
 
 
 # --- GitHub Apps ---------------------------------------------------------
