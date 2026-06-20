@@ -354,7 +354,22 @@ def _require_envelope(enablement: EnablementConfig) -> SafetyEnvelope:
         )
     if enablement.envelope is None:
         raise ReviewFixLoopRunnerError("review-fix loop runner requires a safety envelope")
-    return enablement.envelope
+    envelope = enablement.envelope
+    if not isinstance(envelope.kill_switch_path, Path):
+        raise ReviewFixLoopRunnerError(
+            "kill_switch_path must be a pathlib.Path, "
+            f"got {type(envelope.kill_switch_path).__name__}"
+        )
+    return SafetyEnvelope(
+        max_rounds=_positive_int(envelope.max_rounds, "max_rounds"),
+        max_fixes_per_round=_positive_int(
+            envelope.max_fixes_per_round,
+            "max_fixes_per_round",
+        ),
+        kill_switch_path=envelope.kill_switch_path,
+        escalation=_non_empty(envelope.escalation, "escalation"),
+        verify_command=_non_empty(envelope.verify_command, "verify_command"),
+    )
 
 
 def _resolve_kill_switch(root: Path, configured: Path) -> Path:

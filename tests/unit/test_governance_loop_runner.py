@@ -694,6 +694,67 @@ def test_runner_requires_safety_envelope(tmp_path) -> None:
         ).run()
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("max_rounds", 0, "max_rounds must be >= 1"),
+        ("max_fixes_per_round", 0, "max_fixes_per_round must be >= 1"),
+        (
+            "kill_switch_path",
+            ".voyager/review-fix.disabled",
+            "kill_switch_path must be a pathlib.Path",
+        ),
+        ("escalation", "   ", "escalation must be a non-empty string"),
+        ("verify_command", "   ", "verify_command must be a non-empty string"),
+    ],
+)
+def test_runner_validates_programmatic_envelope_before_seams(
+    tmp_path,
+    field: str,
+    value: object,
+    match: str,
+) -> None:
+    audit_path = tmp_path / "review-fix.jsonl"
+    calls: list[str] = []
+    envelope = {
+        "max_rounds": 1,
+        "max_fixes_per_round": 1,
+        "kill_switch_path": Path(".voyager/review-fix.disabled"),
+        "escalation": "request-human-review",
+        "verify_command": "pytest",
+    }
+    envelope[field] = value
+
+    def gather(status: ReviewFixLoopStatus) -> list[ReviewFixFinding]:
+        calls.append("gather")
+        return [ReviewFixFinding(finding_id="codex:finding", category="codex")]
+
+    def fix(
+        work: ReviewFixLoopWork,
+        status: ReviewFixLoopStatus,
+    ) -> ReviewFixLoopFixResult:
+        calls.append("fix")
+        return ReviewFixLoopFixResult(commit="unused", verdict="kept", tests=("pytest",))
+
+    with pytest.raises(ReviewFixLoopRunnerError, match=match):
+        ReviewFixLoopRunner(
+            enablement=EnablementConfig(
+                autonomy=Autonomy.L3,
+                envelope=SafetyEnvelope(**envelope),
+            ),
+            audit_log=ReviewFixAuditLog(audit_path),
+            seams=ReviewFixLoopSeams(
+                gather=gather,
+                classify=lambda finding, status: ReviewFixClassification(fixable=True),
+                fix=fix,
+            ),
+            root_path=tmp_path,
+        ).run()
+
+    assert calls == []
+    assert ReviewFixAuditLog(audit_path).read_all() == []
+
+
 def _enablement(
     tmp_path: Path,
     *,
