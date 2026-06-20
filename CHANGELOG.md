@@ -8,6 +8,13 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+### Added — Bounded review-fix loop runner ([#186](https://github.com/iterwheel/voyager/issues/186))
+
+- Governance now exposes an offline-testable bounded review-fix loop runner
+  with injectable gather/classify/fix seams, max-round escalation, per-round
+  fix caps, convergence detection, kill-switch halting, and append-only audit
+  records for each round and terminal outcome.
+
 ### Added — Review-fix verify rollback step ([#185](https://github.com/iterwheel/voyager/issues/185))
 
 - Governance now exposes a local verify-and-rollback primitive for review-fix

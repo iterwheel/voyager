@@ -1,0 +1,351 @@
+"""Bounded review-fix loop runner with kill-switch and escalation auditing."""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from enum import StrEnum
+from pathlib import Path
+
+from .audit_log import ReviewFixAuditLog, ReviewFixAuditRecord
+from .enablement import EnablementConfig, SafetyEnvelope
+
+_RUNNER_COMMIT = "loop-runner"
+_RUNNER_CATEGORY = "loop-runner"
+
+
+class ReviewFixLoopRunnerError(ValueError):
+    """Raised when the review-fix loop runner is configured unsafely."""
+
+
+class ReviewFixLoopOutcomeStatus(StrEnum):
+    """Terminal outcome for one bounded review-fix loop run."""
+
+    CONVERGED = "converged"
+    ESCALATED = "escalated"
+    KILL_SWITCH = "kill_switch"
+
+
+@dataclass(frozen=True, kw_only=True)
+class ReviewFixFinding:
+    """One review finding visible to the governed loop."""
+
+    finding_id: str
+    category: str
+
+
+@dataclass(frozen=True, kw_only=True)
+class ReviewFixClassification:
+    """Classifier decision for one finding."""
+
+    fixable: bool
+    reason: str = ""
+
+
+@dataclass(frozen=True, kw_only=True)
+class ReviewFixLoopFixResult:
+    """Result returned by the injected fix seam after verification/rollback."""
+
+    commit: str
+    verdict: str
+    tests: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, kw_only=True)
+class ReviewFixLoopWork:
+    """One fix attempt handed to the injected fix seam."""
+
+    finding: ReviewFixFinding
+    classification: ReviewFixClassification
+
+
+@dataclass(frozen=True, kw_only=True)
+class ReviewFixLoopStatus:
+    """Current loop position passed to injected seams."""
+
+    round_number: int
+    clean_rounds: int
+    max_rounds: int
+    max_fixes_per_round: int
+
+
+@dataclass(frozen=True, kw_only=True)
+class ReviewFixLoopOutcome:
+    """Summary returned after the loop reaches a terminal state."""
+
+    status: ReviewFixLoopOutcomeStatus
+    rounds_run: int
+    clean_rounds: int
+    escalation: str | None = None
+    kill_switch_path: Path | None = None
+
+
+GatherFindings = Callable[[ReviewFixLoopStatus], Sequence[ReviewFixFinding]]
+ClassifyFinding = Callable[[ReviewFixFinding, ReviewFixLoopStatus], ReviewFixClassification]
+FixFinding = Callable[[ReviewFixLoopWork, ReviewFixLoopStatus], ReviewFixLoopFixResult]
+NowFactory = Callable[[], datetime]
+
+
+@dataclass(frozen=True, kw_only=True)
+class ReviewFixLoopSeams:
+    """Injected seams that keep the runner offline-testable."""
+
+    gather: GatherFindings
+    classify: ClassifyFinding
+    fix: FixFinding
+
+
+class ReviewFixLoopRunner:
+    """Run a bounded review-fix loop under a recorded safety envelope."""
+
+    def __init__(
+        self,
+        *,
+        enablement: EnablementConfig,
+        audit_log: ReviewFixAuditLog,
+        seams: ReviewFixLoopSeams,
+        root_path: str | Path = ".",
+        now: NowFactory | None = None,
+        clean_rounds_required: int = 1,
+    ) -> None:
+        self.enablement = enablement
+        self.audit_log = audit_log
+        self.seams = seams
+        self.root_path = Path(root_path)
+        self.now = now or _utcnow
+        self.clean_rounds_required = _positive_int(
+            clean_rounds_required,
+            "clean_rounds_required",
+        )
+
+    def run(self) -> ReviewFixLoopOutcome:
+        envelope = _require_envelope(self.enablement)
+        kill_switch_path = _resolve_kill_switch(self.root_path, envelope.kill_switch_path)
+        clean_rounds = 0
+        rounds_run = 0
+
+        for round_number in range(1, envelope.max_rounds + 1):
+            status = ReviewFixLoopStatus(
+                round_number=round_number,
+                clean_rounds=clean_rounds,
+                max_rounds=envelope.max_rounds,
+                max_fixes_per_round=envelope.max_fixes_per_round,
+            )
+
+            if kill_switch_path.exists():
+                _append_audit(
+                    self.audit_log,
+                    round_number=round_number,
+                    ts=self.now(),
+                    finding_id="kill-switch",
+                    verdict=ReviewFixLoopOutcomeStatus.KILL_SWITCH.value,
+                    tests=(str(kill_switch_path),),
+                )
+                return ReviewFixLoopOutcome(
+                    status=ReviewFixLoopOutcomeStatus.KILL_SWITCH,
+                    rounds_run=rounds_run,
+                    clean_rounds=clean_rounds,
+                    kill_switch_path=kill_switch_path,
+                )
+
+            findings = tuple(self.seams.gather(status))
+            rounds_run = round_number
+            if not findings:
+                clean_rounds += 1
+                _append_round_audit(
+                    self.audit_log,
+                    round_number=round_number,
+                    ts=self.now(),
+                    verdict="round_clean",
+                    findings=0,
+                    fixes=0,
+                )
+                if clean_rounds >= self.clean_rounds_required:
+                    _append_audit(
+                        self.audit_log,
+                        round_number=round_number,
+                        ts=self.now(),
+                        finding_id="loop",
+                        verdict=ReviewFixLoopOutcomeStatus.CONVERGED.value,
+                        tests=(f"clean_rounds={clean_rounds}",),
+                    )
+                    return ReviewFixLoopOutcome(
+                        status=ReviewFixLoopOutcomeStatus.CONVERGED,
+                        rounds_run=rounds_run,
+                        clean_rounds=clean_rounds,
+                    )
+                continue
+
+            clean_rounds = 0
+            fixes, killed = self._process_findings(findings, status, envelope, kill_switch_path)
+            _append_round_audit(
+                self.audit_log,
+                round_number=round_number,
+                ts=self.now(),
+                verdict="round_fixed" if fixes else "round_open",
+                findings=len(findings),
+                fixes=fixes,
+            )
+            if killed:
+                _append_audit(
+                    self.audit_log,
+                    round_number=round_number,
+                    ts=self.now(),
+                    finding_id="kill-switch",
+                    verdict=ReviewFixLoopOutcomeStatus.KILL_SWITCH.value,
+                    tests=(str(kill_switch_path),),
+                )
+                return ReviewFixLoopOutcome(
+                    status=ReviewFixLoopOutcomeStatus.KILL_SWITCH,
+                    rounds_run=rounds_run,
+                    clean_rounds=clean_rounds,
+                    kill_switch_path=kill_switch_path,
+                )
+
+        _append_audit(
+            self.audit_log,
+            round_number=envelope.max_rounds,
+            ts=self.now(),
+            finding_id="loop",
+            verdict=ReviewFixLoopOutcomeStatus.ESCALATED.value,
+            tests=(envelope.escalation, f"max_rounds={envelope.max_rounds}"),
+        )
+        return ReviewFixLoopOutcome(
+            status=ReviewFixLoopOutcomeStatus.ESCALATED,
+            rounds_run=rounds_run,
+            clean_rounds=clean_rounds,
+            escalation=envelope.escalation,
+        )
+
+    def _process_findings(
+        self,
+        findings: Sequence[ReviewFixFinding],
+        status: ReviewFixLoopStatus,
+        envelope: SafetyEnvelope,
+        kill_switch_path: Path,
+    ) -> tuple[int, bool]:
+        fixes = 0
+        for finding in findings:
+            if kill_switch_path.exists():
+                return fixes, True
+            classification = self.seams.classify(finding, status)
+            if not classification.fixable:
+                _append_audit(
+                    self.audit_log,
+                    round_number=status.round_number,
+                    ts=self.now(),
+                    finding_id=finding.finding_id,
+                    category=finding.category,
+                    verdict="not_fixable",
+                    tests=(classification.reason or "not_fixable",),
+                )
+                continue
+            if fixes >= envelope.max_fixes_per_round:
+                _append_audit(
+                    self.audit_log,
+                    round_number=status.round_number,
+                    ts=self.now(),
+                    finding_id=finding.finding_id,
+                    category=finding.category,
+                    verdict="fix_cap_deferred",
+                    tests=(f"max_fixes_per_round={envelope.max_fixes_per_round}",),
+                )
+                continue
+
+            result = self.seams.fix(
+                ReviewFixLoopWork(finding=finding, classification=classification),
+                status,
+            )
+            fixes += 1
+            _append_audit(
+                self.audit_log,
+                round_number=status.round_number,
+                ts=self.now(),
+                commit=result.commit,
+                finding_id=finding.finding_id,
+                category=finding.category,
+                verdict=result.verdict,
+                tests=result.tests or ("verify_command=" + envelope.verify_command,),
+            )
+        return fixes, False
+
+
+def _append_round_audit(
+    audit_log: ReviewFixAuditLog,
+    *,
+    round_number: int,
+    ts: datetime,
+    verdict: str,
+    findings: int,
+    fixes: int,
+) -> None:
+    _append_audit(
+        audit_log,
+        round_number=round_number,
+        ts=ts,
+        finding_id=f"round:{round_number}",
+        verdict=verdict,
+        tests=(f"findings={findings}", f"fixes={fixes}"),
+    )
+
+
+def _append_audit(
+    audit_log: ReviewFixAuditLog,
+    *,
+    round_number: int,
+    ts: datetime,
+    finding_id: str,
+    verdict: str,
+    tests: tuple[str, ...],
+    commit: str = _RUNNER_COMMIT,
+    category: str = _RUNNER_CATEGORY,
+) -> None:
+    audit_log.append(
+        ReviewFixAuditRecord(
+            round=_positive_int(round_number, "round_number"),
+            ts=ts,
+            commit=_non_empty(commit, "commit"),
+            finding_id=_non_empty(finding_id, "finding_id"),
+            category=_non_empty(category, "category"),
+            verdict=_non_empty(verdict, "verdict"),
+            tests=_tests_tuple(tests),
+        )
+    )
+
+
+def _require_envelope(enablement: EnablementConfig) -> SafetyEnvelope:
+    if enablement.envelope is None:
+        raise ReviewFixLoopRunnerError("review-fix loop runner requires a safety envelope")
+    return enablement.envelope
+
+
+def _resolve_kill_switch(root: Path, configured: Path) -> Path:
+    if configured.is_absolute():
+        return configured
+    return root / configured
+
+
+def _positive_int(value: int, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ReviewFixLoopRunnerError(f"{name} must be an integer, got {type(value).__name__}")
+    if value < 1:
+        raise ReviewFixLoopRunnerError(f"{name} must be >= 1, got {value!r}")
+    return value
+
+
+def _non_empty(value: str, name: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise ReviewFixLoopRunnerError(f"{name} must be a non-empty string")
+    return normalized
+
+
+def _tests_tuple(value: tuple[str, ...]) -> tuple[str, ...]:
+    if not value:
+        raise ReviewFixLoopRunnerError("tests must contain at least one entry")
+    return tuple(_non_empty(item, "tests item") for item in value)
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
