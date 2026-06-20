@@ -1,13 +1,13 @@
 # SOP-1822: Assembly-Driven Implementation Loop
 
 **Applies to:** Voyager Assembly bot and managed repositories
-**Last updated:** 2026-05-24
-**Last reviewed:** 2026-05-24
+**Last updated:** 2026-06-20
+**Last reviewed:** 2026-06-20
 **Status:** Active
 **Date:** 2026-05-24
 **Requested by:** Frank Xu (via issue #94)
 **Priority:** P2
-**Related:** VOY-1811, VOY-1817, VOY-1818, VOY-1821, VOY-1823, #92, #93, #98, #99, #109
+**Related:** VOY-1811, VOY-1817, VOY-1818, VOY-1821, VOY-1823, VOY-1825, #92, #93, #98, #99, #109
 
 ---
 
@@ -27,6 +27,10 @@ Assembly now has a concrete runtime shape:
 5. Assembly pushes a branch, opens or updates a PR, and triggers Codex.
 6. CI, Codex, and Clearance converge.
 7. A human reviewer approves and merges.
+
+During the convergence step, use VOY-1825 for Assembly fix/accept/stop
+decisions: fix false-positive blockers, accept tolerated false negatives through
+normal review, and stop bounded loops at the documented circuit breaker.
 
 ## Why
 
@@ -905,6 +909,7 @@ only the public issue/PR IDs.
 - **VOY-1818:** actor authorization gate.
 - **VOY-1821:** fake subprocess backend and real OMP canary history.
 - **VOY-1823:** private Assembly OMP audit lookup procedure.
+- **VOY-1825:** loop-convergence policy for fix/accept/stop decisions.
 - **#92:** future private audit manifests and public trace IDs.
 - **#93:** future failure diagnostics, debug retention, and failure-inspection
   SOP.
@@ -918,6 +923,8 @@ this SOP by name: `VOY-1822 Assembly-Driven Implementation Loop`.
 
 | Date | Change | By |
 |------|--------|----|
+| 2026-06-20 | Added an in-body VOY-1825 reference for the Assembly convergence step. | Codex |
+| 2026-06-20 | Added VOY-1825 as the loop-convergence policy reference for Assembly fix/accept/stop decisions. | Codex |
 | 2026-05-24 | Initial SOP for issue #94, derived from VOY-1811 and specialized for Assembly's issue-to-PR implementation loop. | Codex |
 | 2026-05-24 | Added Codex review settle gate and final ready-for-approval checklist for issue #98. | Codex |
 | 2026-05-24 | Added PR source precondition, fork PR caveats, and code-level `headRepository == baseRepository` gate for issue #99. | Codex |

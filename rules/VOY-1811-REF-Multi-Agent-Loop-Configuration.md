@@ -1,10 +1,10 @@
 # REF-1811: Multi-Agent Loop Configuration
 
 **Applies to:** VOY project (`iterwheel/voyager`)
-**Last updated:** 2026-05-18
-**Last reviewed:** 2026-05-18
+**Last updated:** 2026-06-20
+**Last reviewed:** 2026-06-20
 **Status:** Active
-**Related:** COR-1617 (Multi-Agent Workflow Loop), COR-1618 (Out-of-Band Consent Auto-Pick), COR-1622 (Multi-Agent Loop Project Configuration), VOY-1805 (GitHub Bot Accounts), VOY-1807 (GitHub App Registry), VOY-1810 (Release Process)
+**Related:** COR-1617 (Multi-Agent Workflow Loop), COR-1618 (Out-of-Band Consent Auto-Pick), COR-1622 (Multi-Agent Loop Project Configuration), VOY-1805 (GitHub Bot Accounts), VOY-1807 (GitHub App Registry), VOY-1810 (Release Process), VOY-1825 (Loop-Convergence Policy)
 
 ---
 
@@ -113,6 +113,12 @@ After each push to the PR branch during Phase 8:
 4. **Address** — Apply fixes for any actionable findings (P0/P1/P2).
 5. **Loop** — Push the fixes, then return to step 1 (post `@codex review`
    again). Continue until Codex returns zero actionable findings.
+
+Use VOY-1825 for Assembly-managed source-issue fix loops: false positives are
+checker bugs to fix, tolerated false negatives fall back to normal review, and
+Assembly's `assembly-fix-round-*` circuit breaker remains source-issue scoped.
+This does not override VOY-1811's general multi-agent R-count cap of
+`<max-r-count>` 10 plus the 3-round extension, with hard stop at R13.
 
 This rule applies only to PR iteration. Issue-only workflows without a PR are
 exempt — no `@codex review` trigger is needed.
@@ -478,6 +484,8 @@ completion-gate blocker rather than proceeding.
 
 | Date | Change | By |
 |------|--------|----|
+| 2026-06-20 | Scoped the in-body VOY-1825 reference to Assembly source-issue fix loops without overriding the VOY-1811 R-count cap. | Codex |
+| 2026-06-20 | Added VOY-1825 Loop-Convergence Policy as the convergence decision policy reference. | Codex |
 | 2026-05-23 | Added §Autonomous Operation: makes the loop-mode contract explicit, enumerates valid operator-pause points, and forbids "should I keep going?" prompts during Phase 8 polling. Session-independent guarantee so new sessions inherit the default. Surfaced by operator feedback during the #69 Phase 8 run. | Claude (via VOY-1811 #69) |
 | 2026-05-19 | Replaced launchd external-scheduler pattern with `task_create` self-bootstrapping chain. Removed `deploy/launchd/com.iterwheel.voyager.loop.plist` and `scripts/loop_continue.sh`. Rewrote §Durable Wakeup: DeepSeek TUI and updated Runtime Profile row. | DeepSeek (via VOY-1811 #59) |
 | 2026-05-18 | Added §Durable Wakeup: DeepSeek TUI (launchd timer pattern, superseded). | DeepSeek (via VOY-1811 #59) |
