@@ -8,6 +8,7 @@ from voyager.bots.clearance.close_reason import (
     build_delegated_close_reason_comment,
     build_manual_close_required_comment,
     build_thread_conclusion_comment,
+    manual_close_marker,
 )
 from voyager.bots.clearance.models import (
     Evidence,
@@ -109,11 +110,20 @@ def test_manual_close_required_comment_distinguishes_verified_from_closed() -> N
     body = build_manual_close_required_comment(thread, snapshot, head_sha="1716c0062a37abcdef")
 
     assert body.startswith("<!-- clearance-close-reason:PRRT_compact:1716c0062a37 -->")
+    assert "<!-- clearance-manual-close:PRRT_compact:1716c0062a37 -->" in body
     assert "✅ **Clearance: resolved**" in body
     assert "⚠️ Action: verified resolved" in body
     assert "does not allow Clearance" in body
     assert "resolve it manually" in body
     assert "✅ Action: conversation resolved" not in body
+
+
+def test_manual_close_marker_encodes_thread_id_and_head_sha_prefix() -> None:
+    thread = _thread(Verdict.RESOLVED)
+
+    assert manual_close_marker(thread, head_sha="1716c0062a37abcdef") == (
+        "clearance-manual-close:PRRT_compact:1716c0062a37"
+    )
 
 
 def test_delegated_close_reason_comment_names_resolver_identity() -> None:

@@ -75,6 +75,10 @@ def close_reason_marker(thread: Thread, *, head_sha: str) -> str:
     return f"clearance-close-reason:{thread.id}:{head_sha[:12]}"
 
 
+def manual_close_marker(thread: Thread, *, head_sha: str) -> str:
+    return f"clearance-manual-close:{thread.id}:{head_sha[:12]}"
+
+
 def existing_conclusion_markers(thread: Thread, *, head_sha: str) -> list[str]:
     if _verdict_value(thread) == "RESOLVED":
         return [close_reason_marker(thread, head_sha=head_sha)]
@@ -246,7 +250,7 @@ def build_manual_close_required_comment(
     model: str | None = None,
 ) -> str:
     """Build a RESOLVED verification reply when GitHub cannot auto-close it."""
-    return build_thread_conclusion_comment(
+    body = build_thread_conclusion_comment(
         thread,
         snapshot,
         head_sha=head_sha,
@@ -255,4 +259,9 @@ def build_manual_close_required_comment(
             "⚠️ Action: verified resolved, but GitHub does not allow Clearance "
             "to close this conversation. A human or permitted actor must resolve it manually."
         ),
+    )
+    return body.replace(
+        "\n",
+        f"\n<!-- {manual_close_marker(thread, head_sha=head_sha)} -->\n",
+        1,
     )

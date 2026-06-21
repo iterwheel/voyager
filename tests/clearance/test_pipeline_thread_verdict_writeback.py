@@ -16,6 +16,7 @@ from voyager.bots.clearance.models import (
 from voyager.bots.clearance.pipeline import (
     _has_current_head_final_verdict_comment,
     _has_current_head_verdict_comment,
+    _latest_manual_close_relevant_state,
     _maybe_post_thread_verdict_comments,
     _maybe_sync_stage_15,
 )
@@ -26,6 +27,7 @@ class _WritebackClient:
         self.reply_calls: list[tuple[str, str, int, int, str]] = []
         self.resolve_calls: list[tuple[str, str, str]] = []
         self.thread_comments: list[dict[str, Any]] = []
+        self.fail_pull_request_review_threads = False
         self.resolver_viewer_can_resolve_by_app: dict[str, bool] = {
             "iterwheel-assembly": True,
         }
@@ -40,10 +42,13 @@ class _WritebackClient:
         body: str,
     ) -> dict[str, Any]:
         self.reply_calls.append((app_slug, repository, pull_number, comment_id, body))
+        database_id = 100100 + len(self.thread_comments)
         self.thread_comments.append(
             {
+                "databaseId": database_id,
                 "author": {"login": "iterwheel-clearance"},
                 "body": body,
+                "createdAt": f"2026-05-11T12:{45 + len(self.thread_comments):02d}:00Z",
             }
         )
         return {"html_url": "https://example/reply"}
@@ -51,6 +56,8 @@ class _WritebackClient:
     async def pull_request_review_threads(
         self, app_slug: str, repository: str, pull_number: int
     ) -> list[dict[str, Any]]:
+        if self.fail_pull_request_review_threads:
+            raise RuntimeError("simulated review thread fetch failure")
         return [
             {
                 "id": "PRRT_alpha",
@@ -153,6 +160,46 @@ def test_current_head_verdict_comment_dedupe_is_verdict_specific() -> None:
         head_sha="new-head-sha5678",
         verdict=Verdict.OPEN,
     )
+
+
+def test_latest_manual_close_state_uses_created_at_not_array_order() -> None:
+    comments = [
+        {
+            "databaseId": 2,
+            "author": {"login": "iterwheel-clearance"},
+            "createdAt": "2026-05-11T12:10:00Z",
+            "body": (
+                "<!-- clearance-thread-conclusion:PRRT_alpha:new-head-sha -->\n- Verdict: `OPEN`"
+            ),
+        },
+        {
+            "databaseId": 1,
+            "author": {"login": "iterwheel-clearance"},
+            "createdAt": "2026-05-11T12:00:00Z",
+            "body": (
+                "<!-- clearance-close-reason:PRRT_alpha:old-head-sha -->\n"
+                "<!-- clearance-manual-close:PRRT_alpha:old-head-sha -->\n"
+                "- Verdict: `RESOLVED`"
+            ),
+        },
+    ]
+
+    assert _latest_manual_close_relevant_state(comments, thread_id="PRRT_alpha") == "open"
+
+
+def test_latest_manual_close_state_ignores_normal_close_reason() -> None:
+    comments = [
+        {
+            "databaseId": 1,
+            "author": {"login": "iterwheel-clearance"},
+            "createdAt": "2026-05-11T12:00:00Z",
+            "body": (
+                "<!-- clearance-close-reason:PRRT_alpha:old-head-sha -->\n- Verdict: `RESOLVED`"
+            ),
+        }
+    ]
+
+    assert _latest_manual_close_relevant_state(comments, thread_id="PRRT_alpha") is None
 
 
 @pytest.mark.asyncio
@@ -325,3 +372,135 @@ async def test_assembly_fallback_success_suppresses_later_manual_close_reply() -
     assert second_actions[0].result["in_thread_reply"]["skipped"] == (
         "existing resolved verdict reply for current head after refresh"
     )
+
+
+@pytest.mark.asyncio
+async def test_manual_close_reply_is_deduped_across_heads_while_resolved() -> None:
+    client = _WritebackClient()
+    client.resolver_viewer_can_resolve_by_app["iterwheel-assembly"] = False
+
+    await _maybe_sync_stage_15(
+        client=client,  # type: ignore[arg-type]
+        repository="iterwheel/sandbox",
+        threads=[_thread(Verdict.RESOLVED)],
+        snapshots=[_snapshot(viewer_can_resolve=False)],
+        pr=49,
+        head_sha="head-sha-abc1234",
+        dry_run=False,
+        now=datetime.now(UTC).replace(microsecond=0),
+        pr_author_login="iterwheel-assembly[bot]",
+    )
+    second_actions = await _maybe_sync_stage_15(
+        client=client,  # type: ignore[arg-type]
+        repository="iterwheel/sandbox",
+        threads=[_thread(Verdict.RESOLVED)],
+        snapshots=[_snapshot(viewer_can_resolve=False)],
+        pr=49,
+        head_sha="new-head-sha5678",
+        dry_run=False,
+        now=datetime.now(UTC).replace(microsecond=0),
+        pr_author_login="iterwheel-assembly[bot]",
+    )
+
+    assert len(client.reply_calls) == 1
+    assert "<!-- clearance-manual-close:PRRT_alpha:head-sha-abc -->" in client.reply_calls[0][4]
+    assert second_actions[0].result["in_thread_reply"]["skipped"] == (
+        "existing manual-close resolved reply after refresh"
+    )
+
+
+@pytest.mark.asyncio
+async def test_manual_close_reply_posts_again_after_later_open_state() -> None:
+    client = _WritebackClient()
+    client.resolver_viewer_can_resolve_by_app["iterwheel-assembly"] = False
+    client.thread_comments.extend(
+        [
+            {
+                "databaseId": 2,
+                "author": {"login": "iterwheel-clearance"},
+                "createdAt": "2026-05-11T12:10:00Z",
+                "body": (
+                    "<!-- clearance-thread-conclusion:PRRT_alpha:head-bbb22222 -->\n"
+                    "- Verdict: `OPEN`"
+                ),
+            },
+            {
+                "databaseId": 1,
+                "author": {"login": "iterwheel-clearance"},
+                "createdAt": "2026-05-11T12:00:00Z",
+                "body": (
+                    "<!-- clearance-close-reason:PRRT_alpha:head-aaa11111 -->\n"
+                    "<!-- clearance-manual-close:PRRT_alpha:head-aaa11111 -->\n"
+                    "- Verdict: `RESOLVED`"
+                ),
+            },
+        ]
+    )
+
+    actions = await _maybe_sync_stage_15(
+        client=client,  # type: ignore[arg-type]
+        repository="iterwheel/sandbox",
+        threads=[_thread(Verdict.RESOLVED)],
+        snapshots=[_snapshot(viewer_can_resolve=False)],
+        pr=49,
+        head_sha="head-ccc33333",
+        dry_run=False,
+        now=datetime.now(UTC).replace(microsecond=0),
+        pr_author_login="iterwheel-assembly[bot]",
+    )
+
+    assert len(client.reply_calls) == 1
+    assert actions[0].result["in_thread_reply"]["posted"] is True
+
+
+@pytest.mark.asyncio
+async def test_normal_close_reason_does_not_suppress_later_manual_close_reply() -> None:
+    client = _WritebackClient()
+    client.resolver_viewer_can_resolve_by_app["iterwheel-assembly"] = False
+    client.thread_comments.append(
+        {
+            "databaseId": 1,
+            "author": {"login": "iterwheel-clearance"},
+            "createdAt": "2026-05-11T12:00:00Z",
+            "body": (
+                "<!-- clearance-close-reason:PRRT_alpha:head-aaa11111 -->\n- Verdict: `RESOLVED`"
+            ),
+        }
+    )
+
+    actions = await _maybe_sync_stage_15(
+        client=client,  # type: ignore[arg-type]
+        repository="iterwheel/sandbox",
+        threads=[_thread(Verdict.RESOLVED)],
+        snapshots=[_snapshot(viewer_can_resolve=False)],
+        pr=49,
+        head_sha="head-bbb22222",
+        dry_run=False,
+        now=datetime.now(UTC).replace(microsecond=0),
+        pr_author_login="iterwheel-assembly[bot]",
+    )
+
+    assert len(client.reply_calls) == 1
+    assert actions[0].result["in_thread_reply"]["posted"] is True
+
+
+@pytest.mark.asyncio
+async def test_manual_close_dedupe_fetch_failure_fails_open() -> None:
+    client = _WritebackClient()
+    client.resolver_viewer_can_resolve_by_app["iterwheel-assembly"] = False
+    client.fail_pull_request_review_threads = True
+
+    actions = await _maybe_sync_stage_15(
+        client=client,  # type: ignore[arg-type]
+        repository="iterwheel/sandbox",
+        threads=[_thread(Verdict.RESOLVED)],
+        snapshots=[_snapshot(viewer_can_resolve=False)],
+        pr=49,
+        head_sha="head-sha-abc1234",
+        dry_run=False,
+        now=datetime.now(UTC).replace(microsecond=0),
+        pr_author_login="iterwheel-assembly[bot]",
+    )
+
+    assert len(client.reply_calls) == 1
+    assert actions[0].result["in_thread_reply"]["posted"] is True
