@@ -436,6 +436,19 @@ async def _current_head_verdict_reply_skip_reason(
             if thread.existing_close_reason_marker and not thread.existing_manual_close_marker:
                 return "existing resolved verdict reply for current head"
 
+            latest_current_head_marker = await _fresh_current_head_final_marker_state(
+                client=client,
+                repository=repository,
+                pr=pr,
+                thread_id=thread.id,
+                head_sha=head_sha,
+                cache=cache,
+            )
+            if latest_current_head_marker == "thread-conclusion":
+                return None
+            if latest_current_head_marker:
+                return "existing resolved verdict reply for current head after refresh"
+
             latest_manual_close_state = await _fresh_latest_manual_close_relevant_state(
                 client=client,
                 repository=repository,
