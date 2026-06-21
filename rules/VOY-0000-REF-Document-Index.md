@@ -1,8 +1,8 @@
 # REF-0000: Document Index
 
 **Applies to:** VOY project
-**Last updated:** 2026-06-20
-**Last reviewed:** 2026-06-20
+**Last updated:** 2026-06-21
+**Last reviewed:** 2026-06-21
 **Status:** Active
 
 ---
@@ -36,7 +36,7 @@
 | 1823 | SOP | Assembly OMP Audit Lookup |
 | 1824 | SOP | Assembly Failure Diagnostics |
 | 1825 | REF | Loop-Convergence Policy |
-| 1826 | CHG | Clearance Manual-Close Dedupe (Proposed) |
+| 1826 | CHG | Clearance Manual-Close Dedupe (Completed) |
 
 ---
 
@@ -50,4 +50,5 @@
 | 2026-05-25 | Added VOY-1824 Assembly Failure Diagnostics SOP | Codex |
 | 2026-06-20 | Added VOY-1825 Loop-Convergence Policy | Assembly |
 | 2026-06-20 | Corrected generated index titles to match source document H1 titles | Codex |
-| 2026-06-21 | Added VOY-1826 Clearance Manual-Close Dedupe CHG | Moth |
+| 2026-06-21 | Added VOY-1826 Clearance Manual-Close Dedupe CHG | Codex |
+| 2026-06-21 | Marked VOY-1826 Clearance Manual-Close Dedupe CHG completed | Codex |

@@ -3,7 +3,7 @@
 **Applies to:** VOY project
 **Last updated:** 2026-06-21
 **Last reviewed:** 2026-06-21
-**Status:** Proposed
+**Status:** Completed
 **Date:** 2026-06-21
 **Requested by:** Frank Xu via issue #197
 **Priority:** P2
@@ -125,23 +125,23 @@ to parser logic.
 
 ## Acceptance Criteria
 
-- [ ] Existing `clearance-close-reason` semantics remain head-scoped and are not
+- [x] Existing `clearance-close-reason` semantics remain head-scoped and are not
       repurposed as the manual-close dedupe key.
-- [ ] Manual-close comments include a dedicated
+- [x] Manual-close comments include a dedicated
       `clearance-manual-close:{thread_id}:{head_sha[:12]}` marker while
       preserving same-head `clearance-close-reason` behavior.
-- [ ] Manual-close fallback replies are deduplicated across heads while the
+- [x] Manual-close fallback replies are deduplicated across heads while the
       latest relevant Clearance state remains manual-close RESOLVED.
-- [ ] RESOLVED -> OPEN -> RESOLVED emits a second manual-close reply.
-- [ ] Dedupe uses reliable comment chronology such as `createdAt`, not array
+- [x] RESOLVED -> OPEN -> RESOLVED emits a second manual-close reply.
+- [x] Dedupe uses reliable comment chronology such as `createdAt`, not array
       order.
-- [ ] Prior normal `clearance-close-reason` evidence from true resolve paths does
+- [x] Prior normal `clearance-close-reason` evidence from true resolve paths does
       not suppress later manual-close reminders after a thread reopens.
-- [ ] Cross-head manual-close dedupe failure fails open and does not hide
+- [x] Cross-head manual-close dedupe failure fails open and does not hide
       feedback.
-- [ ] OPEN and NEEDS_HUMAN_JUDGMENT review feedback is never hidden by the
+- [x] OPEN and NEEDS_HUMAN_JUDGMENT review feedback is never hidden by the
       manual-close dedupe.
-- [ ] Focused tests and project validation pass.
+- [x] Focused tests and project validation pass.
 
 ---
 
@@ -149,4 +149,5 @@ to parser logic.
 
 | Date | Change | By |
 |------|--------|----|
-| 2026-06-21 | Initial proposed CHG for issue #197 | Moth |
+| 2026-06-21 | Initial proposed CHG for issue #197 | Codex |
+| 2026-06-21 | Marked CHG completed after PR #198 validation | Codex |
