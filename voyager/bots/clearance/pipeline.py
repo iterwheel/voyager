@@ -325,21 +325,22 @@ async def _fresh_current_head_final_marker_state(
     return state
 
 
-async def _has_fresh_latest_manual_close_resolved_state(
+async def _fresh_latest_manual_close_relevant_state(
     *,
     client: GitHubAppClient,
     repository: str,
     pr: int,
     thread_id: str,
     cache: dict[str, Any],
-) -> bool:
-    """Return true when the latest relevant fresh thread state is manual-close RESOLVED."""
+) -> str | None:
+    """Return the latest fresh thread state relevant to manual-close dedupe."""
     key = f"manual-close-latest:{thread_id}"
     marker_cache = cache.setdefault("markers", {})
     if key in marker_cache:
-        return bool(marker_cache[key])
+        cached = marker_cache[key]
+        return str(cached) if cached is not None else None
 
-    found = False
+    state: str | None = None
     if "fresh_threads" not in cache:
         try:
             cache["fresh_threads"] = await client.pull_request_review_threads(
@@ -355,21 +356,18 @@ async def _has_fresh_latest_manual_close_resolved_state(
                 safe["error_class"],
                 safe["status"],
             )
-            marker_cache[key] = False
-            return False
+            marker_cache[key] = None
+            return None
 
     for item in cache["fresh_threads"]:
         if item.get("id") != thread_id:
             continue
         comments = (item.get("comments") or {}).get("nodes") or []
-        found = (
-            _latest_manual_close_relevant_state(comments, thread_id=thread_id)
-            == "manual-close-resolved"
-        )
+        state = _latest_manual_close_relevant_state(comments, thread_id=thread_id)
         break
 
-    marker_cache[key] = found
-    return found
+    marker_cache[key] = state
+    return state
 
 
 async def _has_fresh_current_head_resolved_comment(
@@ -434,6 +432,35 @@ async def _current_head_verdict_reply_skip_reason(
     manual_close: bool = False,
 ) -> str | None:
     if thread.verdict == Verdict.RESOLVED:
+        if manual_close:
+            if thread.existing_close_reason_marker and not thread.existing_manual_close_marker:
+                return "existing resolved verdict reply for current head"
+
+            latest_manual_close_state = await _fresh_latest_manual_close_relevant_state(
+                client=client,
+                repository=repository,
+                pr=pr,
+                thread_id=thread.id,
+                cache=cache,
+            )
+            if latest_manual_close_state == "manual-close-resolved":
+                return "existing manual-close resolved reply after refresh"
+            if latest_manual_close_state in {"open", "needs-human-judgment"}:
+                return None
+            if thread.existing_manual_close_marker:
+                return None
+
+            if await _has_fresh_current_head_resolved_comment(
+                client=client,
+                repository=repository,
+                pr=pr,
+                thread_id=thread.id,
+                head_sha=head_sha,
+                cache=cache,
+            ):
+                return "existing resolved verdict reply for current head after refresh"
+            return None
+
         if thread.existing_close_reason_marker:
             return "existing resolved verdict reply for current head"
         if await _has_fresh_current_head_resolved_comment(
@@ -445,14 +472,6 @@ async def _current_head_verdict_reply_skip_reason(
             cache=cache,
         ):
             return "existing resolved verdict reply for current head after refresh"
-        if manual_close and await _has_fresh_latest_manual_close_resolved_state(
-            client=client,
-            repository=repository,
-            pr=pr,
-            thread_id=thread.id,
-            cache=cache,
-        ):
-            return "existing manual-close resolved reply after refresh"
         return None
 
     if thread.existing_thread_conclusion_marker:

@@ -665,6 +665,57 @@ async def test_manual_close_reply_posts_again_after_later_open_state() -> None:
 
 
 @pytest.mark.asyncio
+async def test_manual_close_reply_posts_again_after_same_head_open_state() -> None:
+    client = _WritebackClient()
+    client.resolver_viewer_can_resolve_by_app["iterwheel-assembly"] = False
+    client.thread_comments.extend(
+        [
+            {
+                "databaseId": 1,
+                "author": {"login": "iterwheel-clearance"},
+                "createdAt": "2026-05-11T12:00:00Z",
+                "body": (
+                    "<!-- clearance-close-reason:PRRT_alpha:head-sha-abc -->\n"
+                    "<!-- clearance-manual-close:PRRT_alpha:head-sha-abc -->\n"
+                    "- Verdict: `RESOLVED`"
+                ),
+            },
+            {
+                "databaseId": 2,
+                "author": {"login": "iterwheel-clearance"},
+                "createdAt": "2026-05-11T12:10:00Z",
+                "body": (
+                    "<!-- clearance-thread-conclusion:PRRT_alpha:head-sha-abc -->\n"
+                    "- Verdict: `OPEN`"
+                ),
+            },
+        ]
+    )
+
+    actions = await _maybe_sync_stage_15(
+        client=client,  # type: ignore[arg-type]
+        repository="iterwheel/sandbox",
+        threads=[
+            _thread(
+                Verdict.RESOLVED,
+                existing_close_reason_marker=True,
+                existing_manual_close_marker=True,
+            )
+        ],
+        snapshots=[_snapshot(viewer_can_resolve=False, verdict=Verdict.RESOLVED)],
+        pr=49,
+        head_sha="head-sha-abc1234",
+        dry_run=False,
+        now=datetime.now(UTC).replace(microsecond=0),
+        pr_author_login="iterwheel-assembly[bot]",
+    )
+
+    assert len(client.reply_calls) == 1
+    assert "<!-- clearance-manual-close:PRRT_alpha:head-sha-abc -->" in client.reply_calls[0][4]
+    assert actions[0].result["in_thread_reply"]["posted"] is True
+
+
+@pytest.mark.asyncio
 async def test_normal_close_reason_does_not_suppress_later_manual_close_reply() -> None:
     client = _WritebackClient()
     client.resolver_viewer_can_resolve_by_app["iterwheel-assembly"] = False
