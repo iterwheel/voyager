@@ -8,6 +8,8 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-06-21
+
 ### Fixed — Clearance manual-close reply dedupe ([#197](https://github.com/iterwheel/voyager/issues/197))
 
 - Clearance now adds a dedicated manual-close marker when it verifies a review
@@ -732,7 +734,8 @@ auth, FastAPI webhook bridge, DeepSeek LLM adapter, rocket-factory
 pipeline state machine, SWM-1101 per-thread verdict pipeline. See
 `b2e4ca1` and prior history.
 
-[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/iterwheel/voyager/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/iterwheel/voyager/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/iterwheel/voyager/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/iterwheel/voyager/compare/v0.4.10...v0.5.0

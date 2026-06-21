@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "iterwheel-voyager"
-version = "0.7.0"
+version = "0.7.1"
 description = "GitHub bot platform — Iterwheel's rocket factory pipeline"
 requires-python = ">=3.11"
 authors = [{ name = "Iterwheel" }]
@@ -33,6 +33,7 @@ dev = [
     "mypy>=2.0",
     "bandit[toml]>=1.9",
     "pip-audit>=2.7",
+    "msgpack>=1.2.1",
     "pre-commit>=4.6",
 ]
 
