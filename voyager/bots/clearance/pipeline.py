@@ -172,6 +172,46 @@ def _has_current_head_manual_close_comment(
     return False
 
 
+def _latest_current_head_final_marker_state(
+    comments: list[dict[str, Any]],
+    *,
+    thread_id: str,
+    head_sha: str,
+) -> str | None:
+    """Return the latest same-head final marker state by GitHub chronology."""
+    head_prefix = head_sha[:12]
+    manual_close_marker = f"<!-- clearance-manual-close:{thread_id}:{head_prefix}"
+    close_reason_prefix = f"<!-- clearance-close-reason:{thread_id}:{head_prefix}"
+    conclusion_prefix = f"<!-- clearance-thread-conclusion:{thread_id}:{head_prefix}"
+    candidates: list[tuple[datetime, int, str]] = []
+
+    for comment in comments:
+        if not _is_clearance_comment(comment):
+            continue
+        body = str(comment.get("body") or "")
+        state: str | None = None
+        if manual_close_marker in body:
+            state = "manual-close"
+        elif body.startswith(conclusion_prefix):
+            state = "thread-conclusion"
+        elif body.startswith(close_reason_prefix):
+            state = "close-reason"
+        if state is not None:
+            candidates.append((_comment_created_at(comment), _comment_database_id(comment), state))
+
+    if not candidates:
+        return None
+    latest_key = max((created_at, database_id) for created_at, database_id, _ in candidates)
+    latest_states = {
+        state
+        for created_at, database_id, state in candidates
+        if (created_at, database_id) == latest_key
+    }
+    if len(latest_states) != 1:
+        return "ambiguous"
+    return latest_states.pop()
+
+
 def _comment_created_at(comment: dict[str, Any]) -> datetime:
     raw = str(comment.get("createdAt") or "")
     if not raw:
@@ -235,7 +275,7 @@ def _latest_manual_close_relevant_state(
     return latest_states.pop()
 
 
-async def _has_fresh_current_head_final_verdict_comment(
+async def _fresh_current_head_final_marker_state(
     *,
     client: GitHubAppClient,
     repository: str,
@@ -243,14 +283,14 @@ async def _has_fresh_current_head_final_verdict_comment(
     thread_id: str,
     head_sha: str,
     cache: dict[str, Any],
-) -> bool:
-    """Re-fetch thread comments before writeback to suppress stale-snapshot duplicates."""
-    key = f"{thread_id}:{head_sha[:12]}"
+) -> str | None:
+    key = f"latest-current-final:{thread_id}:{head_sha[:12]}"
     marker_cache = cache.setdefault("markers", {})
     if key in marker_cache:
-        return bool(marker_cache[key])
+        cached = marker_cache[key]
+        return str(cached) if cached is not None else None
 
-    found = False
+    state: str | None = None
     if "fresh_threads" not in cache:
         try:
             cache["fresh_threads"] = await client.pull_request_review_threads(
@@ -259,130 +299,30 @@ async def _has_fresh_current_head_final_verdict_comment(
         except Exception as exc:
             safe = _safe_exception_fields(exc)
             _log.warning(
-                "fresh verdict-comment dedupe check failed for thread %s on %s#%s: "
-                "class=%s status=%s",
+                "fresh latest current-head final marker check failed for thread %s "
+                "on %s#%s: class=%s status=%s",
                 thread_id,
                 repository,
                 pr,
                 safe["error_class"],
                 safe["status"],
             )
-            marker_cache[key] = False
-            return False
+            marker_cache[key] = None
+            return None
 
     for item in cache["fresh_threads"]:
         if item.get("id") != thread_id:
             continue
         comments = (item.get("comments") or {}).get("nodes") or []
-        found = _has_current_head_final_verdict_comment(
+        state = _latest_current_head_final_marker_state(
             comments,
             thread_id=thread_id,
             head_sha=head_sha,
         )
         break
 
-    marker_cache[key] = found
-    return found
-
-
-async def _has_fresh_current_head_verdict_comment(
-    *,
-    client: GitHubAppClient,
-    repository: str,
-    pr: int,
-    thread_id: str,
-    head_sha: str,
-    verdict: Verdict,
-    cache: dict[str, Any],
-) -> bool:
-    key = f"verdict:{thread_id}:{head_sha[:12]}:{verdict.value}"
-    marker_cache = cache.setdefault("markers", {})
-    if key in marker_cache:
-        return bool(marker_cache[key])
-
-    found = False
-    if "fresh_threads" not in cache:
-        try:
-            cache["fresh_threads"] = await client.pull_request_review_threads(
-                CLEARANCE_AGENT_SLUG, repository, pr
-            )
-        except Exception as exc:
-            safe = _safe_exception_fields(exc)
-            _log.warning(
-                "fresh verdict-specific dedupe check failed for thread %s on %s#%s: "
-                "class=%s status=%s",
-                thread_id,
-                repository,
-                pr,
-                safe["error_class"],
-                safe["status"],
-            )
-            marker_cache[key] = False
-            return False
-
-    for item in cache["fresh_threads"]:
-        if item.get("id") != thread_id:
-            continue
-        comments = (item.get("comments") or {}).get("nodes") or []
-        found = _has_current_head_verdict_comment(
-            comments,
-            thread_id=thread_id,
-            head_sha=head_sha,
-            verdict=verdict,
-        )
-        break
-
-    marker_cache[key] = found
-    return found
-
-
-async def _has_fresh_current_head_manual_close_comment(
-    *,
-    client: GitHubAppClient,
-    repository: str,
-    pr: int,
-    thread_id: str,
-    head_sha: str,
-    cache: dict[str, Any],
-) -> bool:
-    key = f"manual-close-current:{thread_id}:{head_sha[:12]}"
-    marker_cache = cache.setdefault("markers", {})
-    if key in marker_cache:
-        return bool(marker_cache[key])
-
-    found = False
-    if "fresh_threads" not in cache:
-        try:
-            cache["fresh_threads"] = await client.pull_request_review_threads(
-                CLEARANCE_AGENT_SLUG, repository, pr
-            )
-        except Exception as exc:
-            safe = _safe_exception_fields(exc)
-            _log.warning(
-                "fresh manual-close current-head check failed for thread %s on %s#%s: "
-                "class=%s status=%s",
-                thread_id,
-                repository,
-                pr,
-                safe["error_class"],
-                safe["status"],
-            )
-            marker_cache[key] = False
-            return False
-
-    for item in cache["fresh_threads"]:
-        if item.get("id") != thread_id:
-            continue
-        comments = (item.get("comments") or {}).get("nodes") or []
-        found = _has_current_head_manual_close_comment(
-            comments,
-            thread_id=thread_id,
-            head_sha=head_sha,
-        )
-        break
-
-    marker_cache[key] = found
-    return found
+    marker_cache[key] = state
+    return state
 
 
 async def _has_fresh_latest_manual_close_resolved_state(
@@ -524,32 +464,16 @@ async def _current_head_verdict_reply_skip_reason(
     ):
         return "existing final verdict reply for current head"
 
-    if await _has_fresh_current_head_final_verdict_comment(
+    latest_fresh_final_marker = await _fresh_current_head_final_marker_state(
         client=client,
         repository=repository,
         pr=pr,
         thread_id=thread.id,
         head_sha=head_sha,
         cache=cache,
-    ):
-        if await _has_fresh_current_head_manual_close_comment(
-            client=client,
-            repository=repository,
-            pr=pr,
-            thread_id=thread.id,
-            head_sha=head_sha,
-            cache=cache,
-        ):
-            if await _has_fresh_current_head_verdict_comment(
-                client=client,
-                repository=repository,
-                pr=pr,
-                thread_id=thread.id,
-                head_sha=head_sha,
-                verdict=thread.verdict,
-                cache=cache,
-            ):
-                return "existing final verdict reply for current head after refresh"
+    )
+    if latest_fresh_final_marker:
+        if latest_fresh_final_marker == "manual-close":
             return None
         return "existing final verdict reply for current head after refresh"
 

@@ -16,6 +16,7 @@ from voyager.bots.clearance.models import (
 from voyager.bots.clearance.pipeline import (
     _has_current_head_final_verdict_comment,
     _has_current_head_verdict_comment,
+    _latest_current_head_final_marker_state,
     _latest_manual_close_relevant_state,
     _maybe_post_thread_verdict_comments,
     _maybe_sync_stage_15,
@@ -210,6 +211,38 @@ def test_latest_manual_close_state_ignores_normal_close_reason() -> None:
     assert _latest_manual_close_relevant_state(comments, thread_id="PRRT_alpha") is None
 
 
+def test_latest_current_head_final_marker_state_uses_created_at() -> None:
+    comments = [
+        {
+            "databaseId": 2,
+            "author": {"login": "iterwheel-clearance"},
+            "createdAt": "2026-05-11T12:10:00Z",
+            "body": (
+                "<!-- clearance-thread-conclusion:PRRT_alpha:head-sha-abc -->\n- Verdict: `OPEN`"
+            ),
+        },
+        {
+            "databaseId": 1,
+            "author": {"login": "iterwheel-clearance"},
+            "createdAt": "2026-05-11T12:00:00Z",
+            "body": (
+                "<!-- clearance-close-reason:PRRT_alpha:head-sha-abc -->\n"
+                "<!-- clearance-manual-close:PRRT_alpha:head-sha-abc -->\n"
+                "- Verdict: `RESOLVED`"
+            ),
+        },
+    ]
+
+    assert (
+        _latest_current_head_final_marker_state(
+            comments,
+            thread_id="PRRT_alpha",
+            head_sha="head-sha-abc1234",
+        )
+        == "thread-conclusion"
+    )
+
+
 @pytest.mark.asyncio
 async def test_thread_verdict_comment_skips_existing_current_head_verdict() -> None:
     client = _WritebackClient()
@@ -305,6 +338,50 @@ async def test_open_verdict_skips_fresh_same_head_conclusion_after_manual_close(
         repository="iterwheel/sandbox",
         threads=[_thread(Verdict.OPEN)],
         snapshots=[_snapshot()],
+        pr=49,
+        head_sha="head-sha-abc1234",
+        dry_run=False,
+    )
+
+    assert client.reply_calls == []
+    assert actions[0]["skipped"] is True
+    assert actions[0]["skip_reason"] == (
+        "existing final verdict reply for current head after refresh"
+    )
+
+
+@pytest.mark.asyncio
+async def test_different_open_verdict_skips_fresh_same_head_conclusion_after_manual_close() -> None:
+    client = _WritebackClient()
+    client.thread_comments.extend(
+        [
+            {
+                "databaseId": 1,
+                "author": {"login": "iterwheel-clearance"},
+                "createdAt": "2026-05-11T12:00:00Z",
+                "body": (
+                    "<!-- clearance-close-reason:PRRT_alpha:head-sha-abc -->\n"
+                    "<!-- clearance-manual-close:PRRT_alpha:head-sha-abc -->\n"
+                    "- Verdict: `RESOLVED`"
+                ),
+            },
+            {
+                "databaseId": 2,
+                "author": {"login": "iterwheel-clearance"},
+                "createdAt": "2026-05-11T12:10:00Z",
+                "body": (
+                    "<!-- clearance-thread-conclusion:PRRT_alpha:head-sha-abc -->\n"
+                    "- Verdict: `OPEN`"
+                ),
+            },
+        ]
+    )
+
+    actions = await _maybe_post_thread_verdict_comments(
+        client=client,  # type: ignore[arg-type]
+        repository="iterwheel/sandbox",
+        threads=[_thread(Verdict.NEEDS_HUMAN_JUDGMENT)],
+        snapshots=[_snapshot(verdict=Verdict.NEEDS_HUMAN_JUDGMENT)],
         pr=49,
         head_sha="head-sha-abc1234",
         dry_run=False,
