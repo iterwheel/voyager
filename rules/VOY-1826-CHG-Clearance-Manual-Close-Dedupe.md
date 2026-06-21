@@ -52,8 +52,8 @@ idempotency rule.
 
 | # | Surface | Change |
 |---|---------|--------|
-| 1 | `voyager/bots/clearance/close_reason.py` | Add a dedicated manual-close marker helper that is distinct from `clearance-close-reason`. |
-| 2 | `voyager/bots/clearance/pipeline.py` | In the `viewerCanResolve=false` manual-close branch, suppress duplicate thread replies only when the latest relevant Clearance semantic state is still manual-close RESOLVED. |
+| 1 | `voyager/bots/clearance/close_reason.py` | Add a dedicated manual-close marker helper that is distinct from `clearance-close-reason`, and render it in manual-close replies. |
+| 2 | `voyager/bots/clearance/pipeline.py` | In the `viewerCanResolve=false` manual-close branch, suppress duplicate thread replies only when the latest relevant Clearance semantic state is still manual-close RESOLVED. Reuse the fresh thread-comment fetch/cache already used by current-head verdict dedupe. |
 | 3 | Tests | Add regression coverage for unchanged RESOLVED across heads, RESOLVED -> OPEN -> RESOLVED, and out-of-order comment arrays ordered by `createdAt`. |
 
 ## Decisions
@@ -63,19 +63,41 @@ idempotency rule.
 | D1 | Use a dedicated manual-close marker instead of broadening `clearance-close-reason`. | `clearance-close-reason` also appears in true resolve/delegated evidence. Reusing it for cross-head manual-close dedupe risks confusing successful resolution evidence with unsupported-capability guidance. |
 | D2 | Dedupe by latest relevant Clearance semantic state, not by "thread ever had a manual-close marker." | A review thread can reopen with new feedback. RESOLVED -> OPEN -> RESOLVED must allow a fresh manual-close reply. |
 | D3 | Use GitHub comment chronology such as `createdAt` to determine latest state. | Fixture array order is not a durable contract. The implementation must not pass only because test data happened to arrive sorted. |
+| D4 | Manual-close replies should keep the existing current-head `clearance-close-reason` marker and add a second `clearance-manual-close:{thread_id}:{head}` marker. | Keeping the current marker preserves same-head duplicate suppression. The new marker is the only cross-head manual-close dedupe key. |
+| D5 | The cross-head scanner must ignore `clearance-close-reason`. | Normal self-resolve and delegated-resolve comments use that marker too. Treating it as manual-close evidence could suppress a later manual-close reminder after a thread reopens. |
+| D6 | Do not add backwards-compatible scanning for old manual-close comments that lack `clearance-manual-close`. | A one-time duplicate after deploy is acceptable and safer than interpreting historical true-resolution evidence as manual-close evidence. |
 
 ## Implementation Plan
 
-1. Add a manual-close marker helper, for example
-   `clearance-manual-close:{thread_id}:...`, without changing the existing
-   `clearance-close-reason:{thread_id}:{head}` marker contract.
-2. Add a helper that scans Clearance-authored review-thread comments for
-   relevant state markers and determines the latest state by `createdAt`.
-3. In the manual-close fallback branch, suppress the reply only when the latest
-   relevant state is the same manual-close `RESOLVED` state.
-4. Ensure any later OPEN or NEEDS_HUMAN_JUDGMENT Clearance marker resets the
+1. Add a manual-close marker helper with the concrete format
+   `clearance-manual-close:{thread_id}:{head_sha[:12]}`.
+2. Render manual-close replies with both markers:
+   `clearance-close-reason:{thread_id}:{head_sha[:12]}` for the existing
+   current-head RESOLVED guard, and
+   `clearance-manual-close:{thread_id}:{head_sha[:12]}` for cross-head
+   manual-close dedupe.
+3. Add a helper that scans only Clearance-authored review-thread comments for
+   relevant state markers:
+   - `clearance-manual-close:{thread_id}:*` means manual-close `RESOLVED`.
+   - `clearance-thread-conclusion:{thread_id}:*` plus OPEN or
+     NEEDS_HUMAN_JUDGMENT body evidence means a later non-resolved state.
+   - `clearance-close-reason:{thread_id}:*` is ignored by this cross-head
+     scanner.
+4. Determine the latest relevant state by GitHub `createdAt`, not by comment
+   array order. Missing or invalid timestamps should make that comment less
+   authoritative than timestamped evidence rather than inventing order from the
+   array.
+5. Reuse the fresh `pull_request_review_threads` fetch/cache that backs
+   `_current_head_verdict_reply_skip_reason`; do not add another network fetch
+   for the same PR pass.
+6. In the manual-close fallback branch, suppress the reply only when the latest
+   relevant state is manual-close `RESOLVED`.
+7. If the fresh thread fetch or scanner fails, fail open by posting the
+   manual-close reply and logging the dedupe failure. This preserves real review
+   feedback at the cost of possible noise.
+8. Ensure any later OPEN or NEEDS_HUMAN_JUDGMENT Clearance marker resets the
    suppression so a subsequent RESOLVED state can post again.
-5. Keep PR-level Clearance summary updates unchanged.
+9. Keep PR-level Clearance summary updates unchanged.
 
 ## Testing / Verification
 
@@ -86,6 +108,11 @@ idempotency rule.
   manual-close reply is posted.
 - Add coverage where comment array order is deliberately scrambled while
   `createdAt` preserves the true chronological order.
+- Add coverage proving a normal prior `clearance-close-reason` comment from a
+  self-resolve or delegated-resolve path does not suppress a later manual-close
+  reply after the thread has reopened.
+- Add coverage proving fresh thread-comment fetch/scanner failure fails open and
+  posts the manual-close reply.
 - Run the focused Clearance test subset.
 - Run the project validation stack required by the implementation run.
 
@@ -100,11 +127,18 @@ to parser logic.
 
 - [ ] Existing `clearance-close-reason` semantics remain head-scoped and are not
       repurposed as the manual-close dedupe key.
+- [ ] Manual-close comments include a dedicated
+      `clearance-manual-close:{thread_id}:{head_sha[:12]}` marker while
+      preserving same-head `clearance-close-reason` behavior.
 - [ ] Manual-close fallback replies are deduplicated across heads while the
       latest relevant Clearance state remains manual-close RESOLVED.
 - [ ] RESOLVED -> OPEN -> RESOLVED emits a second manual-close reply.
 - [ ] Dedupe uses reliable comment chronology such as `createdAt`, not array
       order.
+- [ ] Prior normal `clearance-close-reason` evidence from true resolve paths does
+      not suppress later manual-close reminders after a thread reopens.
+- [ ] Cross-head manual-close dedupe failure fails open and does not hide
+      feedback.
 - [ ] OPEN and NEEDS_HUMAN_JUDGMENT review feedback is never hidden by the
       manual-close dedupe.
 - [ ] Focused tests and project validation pass.
