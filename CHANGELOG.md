@@ -8,6 +8,17 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+### Fixed — Clearance manual-close reply dedupe ([#197](https://github.com/iterwheel/voyager/issues/197))
+
+- Clearance now adds a dedicated manual-close marker when it verifies a review
+  thread as resolved but lacks permission to call `resolveReviewThread`, so the
+  same unresolved GitHub thread does not receive a fresh manual-close reminder
+  on every new PR head while its semantic state is unchanged.
+- The dedupe guard uses fresh review-thread comments and `createdAt`
+  chronology, ignores normal `clearance-close-reason` evidence from true
+  resolve paths, and allows a new manual-close reply after a
+  RESOLVED -> OPEN -> RESOLVED state transition.
+
 ## [0.7.0] — 2026-06-20
 
 ### Added — Governed PR review-fix bot ([#187](https://github.com/iterwheel/voyager/issues/187))
