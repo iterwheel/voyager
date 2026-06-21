@@ -285,6 +285,57 @@ async def _has_fresh_current_head_final_verdict_comment(
     return found
 
 
+async def _has_fresh_current_head_verdict_comment(
+    *,
+    client: GitHubAppClient,
+    repository: str,
+    pr: int,
+    thread_id: str,
+    head_sha: str,
+    verdict: Verdict,
+    cache: dict[str, Any],
+) -> bool:
+    key = f"verdict:{thread_id}:{head_sha[:12]}:{verdict.value}"
+    marker_cache = cache.setdefault("markers", {})
+    if key in marker_cache:
+        return bool(marker_cache[key])
+
+    found = False
+    if "fresh_threads" not in cache:
+        try:
+            cache["fresh_threads"] = await client.pull_request_review_threads(
+                CLEARANCE_AGENT_SLUG, repository, pr
+            )
+        except Exception as exc:
+            safe = _safe_exception_fields(exc)
+            _log.warning(
+                "fresh verdict-specific dedupe check failed for thread %s on %s#%s: "
+                "class=%s status=%s",
+                thread_id,
+                repository,
+                pr,
+                safe["error_class"],
+                safe["status"],
+            )
+            marker_cache[key] = False
+            return False
+
+    for item in cache["fresh_threads"]:
+        if item.get("id") != thread_id:
+            continue
+        comments = (item.get("comments") or {}).get("nodes") or []
+        found = _has_current_head_verdict_comment(
+            comments,
+            thread_id=thread_id,
+            head_sha=head_sha,
+            verdict=verdict,
+        )
+        break
+
+    marker_cache[key] = found
+    return found
+
+
 async def _has_fresh_current_head_manual_close_comment(
     *,
     client: GitHubAppClient,
@@ -489,6 +540,16 @@ async def _current_head_verdict_reply_skip_reason(
             head_sha=head_sha,
             cache=cache,
         ):
+            if await _has_fresh_current_head_verdict_comment(
+                client=client,
+                repository=repository,
+                pr=pr,
+                thread_id=thread.id,
+                head_sha=head_sha,
+                verdict=thread.verdict,
+                cache=cache,
+            ):
+                return "existing final verdict reply for current head after refresh"
             return None
         return "existing final verdict reply for current head after refresh"
 

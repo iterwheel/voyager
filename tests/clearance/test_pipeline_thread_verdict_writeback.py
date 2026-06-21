@@ -274,6 +274,50 @@ async def test_open_verdict_still_skips_same_head_normal_close_reason_marker() -
 
 
 @pytest.mark.asyncio
+async def test_open_verdict_skips_fresh_same_head_conclusion_after_manual_close() -> None:
+    client = _WritebackClient()
+    client.thread_comments.extend(
+        [
+            {
+                "databaseId": 1,
+                "author": {"login": "iterwheel-clearance"},
+                "createdAt": "2026-05-11T12:00:00Z",
+                "body": (
+                    "<!-- clearance-close-reason:PRRT_alpha:head-sha-abc -->\n"
+                    "<!-- clearance-manual-close:PRRT_alpha:head-sha-abc -->\n"
+                    "- Verdict: `RESOLVED`"
+                ),
+            },
+            {
+                "databaseId": 2,
+                "author": {"login": "iterwheel-clearance"},
+                "createdAt": "2026-05-11T12:10:00Z",
+                "body": (
+                    "<!-- clearance-thread-conclusion:PRRT_alpha:head-sha-abc -->\n"
+                    "- Verdict: `OPEN`"
+                ),
+            },
+        ]
+    )
+
+    actions = await _maybe_post_thread_verdict_comments(
+        client=client,  # type: ignore[arg-type]
+        repository="iterwheel/sandbox",
+        threads=[_thread(Verdict.OPEN)],
+        snapshots=[_snapshot()],
+        pr=49,
+        head_sha="head-sha-abc1234",
+        dry_run=False,
+    )
+
+    assert client.reply_calls == []
+    assert actions[0]["skipped"] is True
+    assert actions[0]["skip_reason"] == (
+        "existing final verdict reply for current head after refresh"
+    )
+
+
+@pytest.mark.asyncio
 async def test_thread_verdict_comment_skips_conflicting_head_after_refresh() -> None:
     client = _WritebackClient()
     client.thread_comments.append(
