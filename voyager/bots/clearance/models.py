@@ -88,6 +88,7 @@ class Thread(BaseModel):
     clean_codex_signal_source: str | None = None
     existing_head_verdict_marker: bool = False
     existing_close_reason_marker: bool = False
+    existing_manual_close_marker: bool = False
     existing_thread_conclusion_marker: bool = False
     known_limitation_link: str | None = None
 

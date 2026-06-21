@@ -83,7 +83,13 @@ class _WritebackClient:
         }
 
 
-def _thread(verdict: Verdict, *, existing_marker: bool = False) -> Thread:
+def _thread(
+    verdict: Verdict,
+    *,
+    existing_marker: bool = False,
+    existing_close_reason_marker: bool = False,
+    existing_manual_close_marker: bool = False,
+) -> Thread:
     return Thread(
         id="PRRT_alpha",
         comment_id=100001,
@@ -95,7 +101,9 @@ def _thread(verdict: Verdict, *, existing_marker: bool = False) -> Thread:
         verdict_reason="unit-test verdict",
         github_isResolved=False,
         existing_thread_conclusion_marker=existing_marker,
-        existing_head_verdict_marker=existing_marker,
+        existing_head_verdict_marker=existing_marker or existing_close_reason_marker,
+        existing_close_reason_marker=existing_close_reason_marker,
+        existing_manual_close_marker=existing_manual_close_marker,
     )
 
 
@@ -210,6 +218,50 @@ async def test_thread_verdict_comment_skips_existing_current_head_verdict() -> N
         client=client,  # type: ignore[arg-type]
         repository="iterwheel/sandbox",
         threads=[_thread(Verdict.OPEN, existing_marker=True)],
+        snapshots=[_snapshot()],
+        pr=49,
+        head_sha="head-sha-abc1234",
+        dry_run=False,
+    )
+
+    assert client.reply_calls == []
+    assert actions[0]["skipped"] is True
+    assert actions[0]["skip_reason"] == "existing final verdict reply for current head"
+
+
+@pytest.mark.asyncio
+async def test_open_verdict_can_supersede_same_head_manual_close_marker() -> None:
+    client = _WritebackClient()
+
+    actions = await _maybe_post_thread_verdict_comments(
+        client=client,  # type: ignore[arg-type]
+        repository="iterwheel/sandbox",
+        threads=[
+            _thread(
+                Verdict.OPEN,
+                existing_close_reason_marker=True,
+                existing_manual_close_marker=True,
+            )
+        ],
+        snapshots=[_snapshot()],
+        pr=49,
+        head_sha="head-sha-abc1234",
+        dry_run=False,
+    )
+
+    assert len(client.reply_calls) == 1
+    assert actions[0]["posted"] is True
+    assert "Clearance: still open" in client.reply_calls[0][4]
+
+
+@pytest.mark.asyncio
+async def test_open_verdict_still_skips_same_head_normal_close_reason_marker() -> None:
+    client = _WritebackClient()
+
+    actions = await _maybe_post_thread_verdict_comments(
+        client=client,  # type: ignore[arg-type]
+        repository="iterwheel/sandbox",
+        threads=[_thread(Verdict.OPEN, existing_close_reason_marker=True)],
         snapshots=[_snapshot()],
         pr=49,
         head_sha="head-sha-abc1234",
