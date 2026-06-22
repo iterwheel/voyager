@@ -65,6 +65,9 @@ async def request_device_code(
         )
         response.raise_for_status()
         data = response.json()
+        if data.get("error"):
+            error = data.get("error")
+            raise RuntimeError(f"GitHub device authorization failed: {error}")
         return DeviceCodeResponse(
             device_code=str(data["device_code"]),
             user_code=str(data["user_code"]),
