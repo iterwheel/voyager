@@ -8,6 +8,20 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+## [0.7.2] — 2026-06-23
+
+### Added — Countdown user token tooling ([#204](https://github.com/iterwheel/voyager/issues/204), [#205](https://github.com/iterwheel/voyager/pull/205))
+
+- Added safe CLI helpers for GitHub App user Device Flow authorization,
+  including expected-viewer validation before storing the first refresh token
+  and safe JSON metadata that reports only whether the viewer login is present
+  and matches the expected operator.
+- Extended the Device Flow token exchange to carry the target repository ID and
+  updated the Countdown app documentation/config examples for the operator-run
+  authorization path.
+- Hardened refresh-token persistence to fail closed when `secret-store` is
+  unavailable instead of writing a plaintext recovery fallback.
+
 ## [0.7.1] — 2026-06-21
 
 ### Fixed — Clearance manual-close reply dedupe ([#197](https://github.com/iterwheel/voyager/issues/197))
@@ -734,7 +748,8 @@ auth, FastAPI webhook bridge, DeepSeek LLM adapter, rocket-factory
 pipeline state machine, SWM-1101 per-thread verdict pipeline. See
 `b2e4ca1` and prior history.
 
-[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/iterwheel/voyager/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/iterwheel/voyager/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/iterwheel/voyager/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/iterwheel/voyager/compare/v0.5.0...v0.6.0
