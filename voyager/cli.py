@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import click
 import typer
@@ -184,6 +184,11 @@ def review_thread_diagnostic(
     _echo_thread_capabilities(public_result["threads"])
 
 
+def _exit_with_error(message: str) -> NoReturn:
+    typer.echo(f"ERROR: {message}", err=True)
+    raise typer.Exit(code=1)
+
+
 def _echo_thread_capabilities(threads: list[dict[str, Any]]) -> None:
     for thread in threads:
         typer.echo(
@@ -251,7 +256,10 @@ def user_device_code(
         result["refresh_token_stored"] = bool(token_response.refresh_token)
         return result
 
-    public_result = asyncio.run(_run())
+    try:
+        public_result = asyncio.run(_run())
+    except click.ClickException as exc:
+        _exit_with_error(exc.message)
     if json_output:
         typer.echo(json.dumps(public_result, sort_keys=True))
         return
@@ -316,7 +324,10 @@ def user_refresh_check(
             result["viewer_login"] = redacted
         return result
 
-    public_result = asyncio.run(_run())
+    try:
+        public_result = asyncio.run(_run())
+    except click.ClickException as exc:
+        _exit_with_error(exc.message)
     if json_output:
         typer.echo(json.dumps(public_result, indent=2, sort_keys=True))
         return
