@@ -159,3 +159,38 @@ async def test_query_viewer_login_returns_actor_without_public_token() -> None:
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         assert await query_viewer_login("ghu_access", client=client) == "maintainer"
+
+
+@pytest.mark.asyncio
+async def test_query_viewer_login_normalizes_http_status_errors() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/graphql"
+        return httpx.Response(
+            401,
+            request=request,
+            json={"message": "bad viewer token", "token": "ghu_access"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(RuntimeError) as exc_info:
+            await query_viewer_login("ghu_access", client=client)
+
+    message = str(exc_info.value)
+    assert message == "GitHub GraphQL viewer query failed: HTTP 401"
+    assert "ghu_access" not in message
+    assert "bad viewer token" not in message
+
+
+@pytest.mark.asyncio
+async def test_query_viewer_login_normalizes_request_errors() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("could not connect with ghu_access", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(RuntimeError) as exc_info:
+            await query_viewer_login("ghu_access", client=client)
+
+    message = str(exc_info.value)
+    assert message == "GitHub GraphQL viewer query failed: HTTP request error"
+    assert "ghu_access" not in message
+    assert "could not connect" not in message
