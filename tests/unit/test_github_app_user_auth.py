@@ -125,6 +125,35 @@ async def test_exchange_device_code_reports_safe_metadata() -> None:
 
 
 @pytest.mark.asyncio
+async def test_exchange_device_code_sends_repository_id_when_provided() -> None:
+    seen_body = b""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_body
+        seen_body = request.content
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "ghu_secret_access",
+                "token_type": "bearer",
+                "expires_in": 28800,
+                "refresh_token": "ghr_secret_refresh",
+                "refresh_token_expires_in": 15897600,
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await exchange_device_code(
+            "client-id",
+            "device-code",
+            repository_id=12345,
+            client=client,
+        )
+
+    assert b"repository_id=12345" in seen_body
+
+
+@pytest.mark.asyncio
 async def test_exchange_device_code_normalizes_http_status_errors() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/login/oauth/access_token"
