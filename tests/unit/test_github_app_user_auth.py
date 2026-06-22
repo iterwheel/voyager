@@ -189,6 +189,22 @@ async def test_exchange_device_code_normalizes_request_errors() -> None:
 
 
 @pytest.mark.asyncio
+async def test_exchange_device_code_normalizes_malformed_success_response() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/login/oauth/access_token"
+        return httpx.Response(200, content=b"not-json secret-device")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(RuntimeError) as exc_info:
+            await exchange_device_code("client-id", "secret-device", client=client)
+
+    message = str(exc_info.value)
+    assert message == "GitHub device authorization not complete: malformed response"
+    assert "secret-device" not in message
+    assert "not-json" not in message
+
+
+@pytest.mark.asyncio
 async def test_refresh_user_access_token_uses_refresh_grant() -> None:
     seen_body = b""
 
@@ -248,6 +264,40 @@ async def test_refresh_user_access_token_normalizes_request_errors() -> None:
     assert message == "GitHub refresh failed: HTTP request error"
     assert "old-refresh" not in message
     assert "could not connect" not in message
+
+
+@pytest.mark.asyncio
+async def test_refresh_user_access_token_normalizes_malformed_json_success_response() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/login/oauth/access_token"
+        return httpx.Response(200, content=b"not-json old-refresh")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(RuntimeError) as exc_info:
+            await refresh_user_access_token("client-id", "old-refresh", client=client)
+
+    message = str(exc_info.value)
+    assert message == "GitHub refresh failed: malformed response"
+    assert "old-refresh" not in message
+    assert "not-json" not in message
+
+
+@pytest.mark.asyncio
+async def test_refresh_user_access_token_normalizes_missing_token_fields() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/login/oauth/access_token"
+        return httpx.Response(
+            200,
+            json={"token_type": "bearer", "message": "old-refresh"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(RuntimeError) as exc_info:
+            await refresh_user_access_token("client-id", "old-refresh", client=client)
+
+    message = str(exc_info.value)
+    assert message == "GitHub refresh failed: malformed response"
+    assert "old-refresh" not in message
 
 
 @pytest.mark.asyncio
