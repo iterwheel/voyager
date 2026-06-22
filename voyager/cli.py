@@ -204,7 +204,7 @@ def user_device_code(
             "The command is split with shlex and is not run through a shell."
         ),
     ),
-    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON Lines."),
 ) -> None:
     """Start a GitHub App user-to-server device flow without printing token material."""
     import asyncio
@@ -216,7 +216,8 @@ def user_device_code(
         response = await request_device_code(client_id)
         public_result = response.to_public_dict()
         if json_output:
-            typer.echo(json.dumps(public_result, indent=2, sort_keys=True))
+            public_result["event"] = "device_code"
+            typer.echo(json.dumps(public_result, sort_keys=True))
         else:
             typer.echo("Countdown GitHub App user authorization")
             typer.echo(f"verification_uri: {public_result['verification_uri']}")
@@ -243,11 +244,13 @@ def user_device_code(
 
         _store_refresh_token(store_refresh_token_command, token_response.refresh_token)
         result = token_response.to_public_dict()
+        result["event"] = "authorization_complete"
         result["refresh_token_stored"] = bool(token_response.refresh_token)
         return result
 
     public_result = asyncio.run(_run())
     if json_output:
+        typer.echo(json.dumps(public_result, sort_keys=True))
         return
 
     typer.echo(f"token_type: {public_result['token_type']}")

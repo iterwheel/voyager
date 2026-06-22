@@ -6,6 +6,7 @@ guard on the uvicorn serve test so the runner never blocks.
 
 from __future__ import annotations
 
+import json
 import sys
 from typing import Any
 
@@ -13,6 +14,7 @@ import pytest
 from typer.testing import CliRunner
 
 from voyager.cli import _store_refresh_token, app
+from voyager.core.github_app_user_auth import DeviceCodeResponse, UserAccessTokenResponse
 
 # Force a wide terminal in tests so Typer/Rich does not wrap `--host`
 # across lines (CI defaults to ~80 cols and the help table breaks the
@@ -96,6 +98,83 @@ def test_store_refresh_token_suppresses_child_output(capsys: pytest.CaptureFixtu
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == ""
+
+
+def test_vyg_countdown_user_device_code_json_emits_completion_event(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    token_path = tmp_path / "refresh-token.txt"
+
+    async def fake_request_device_code(client_id: str) -> DeviceCodeResponse:
+        assert client_id == "Iv1.test"
+        return DeviceCodeResponse(
+            device_code="secret-device",
+            user_code="ABCD-1234",
+            verification_uri="https://github.com/login/device",
+            expires_in=900,
+            interval=1,
+        )
+
+    async def fake_exchange_device_code(
+        client_id: str, device_code: str
+    ) -> UserAccessTokenResponse:
+        assert client_id == "Iv1.test"
+        assert device_code == "secret-device"
+        return UserAccessTokenResponse(
+            access_token="secret-access",
+            token_type="bearer",
+            expires_in=28800,
+            refresh_token="secret-refresh",
+            refresh_token_expires_in=15897600,
+        )
+
+    monkeypatch.setattr(
+        "voyager.core.github_app_user_auth.request_device_code", fake_request_device_code
+    )
+    monkeypatch.setattr(
+        "voyager.core.github_app_user_auth.exchange_device_code", fake_exchange_device_code
+    )
+    store_command = (
+        f'{sys.executable} -c "import pathlib, sys; '
+        "pathlib.Path(sys.argv[1]).write_text(sys.stdin.read(), encoding='utf-8')\" "
+        f"{token_path}"
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "countdown",
+            "user-device-code",
+            "--client-id",
+            "Iv1.test",
+            "--store-refresh-token-command",
+            store_command,
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    lines = [json.loads(line) for line in result.stdout.splitlines()]
+    assert lines == [
+        {
+            "event": "device_code",
+            "expires_in": 900,
+            "interval": 1,
+            "user_code": "ABCD-1234",
+            "verification_uri": "https://github.com/login/device",
+        },
+        {
+            "event": "authorization_complete",
+            "expires_in": 28800,
+            "refresh_token_expires_in": 15897600,
+            "refresh_token_present": True,
+            "refresh_token_stored": True,
+            "scope": None,
+            "token_type": "bearer",
+        },
+    ]
+    assert "secret" not in result.stdout
+    assert token_path.read_text(encoding="utf-8") == "secret-refresh"
 
 
 def test_vyg_bridge_serve_help_lists_flags() -> None:
