@@ -212,6 +212,8 @@ def user_device_code(
 
     from voyager.core.github_app_user_auth import exchange_device_code, request_device_code
 
+    _preflight_store_refresh_token_command(store_refresh_token_command)
+
     async def _run() -> dict[str, Any]:
         response = await request_device_code(client_id)
         public_result = response.to_public_dict()
@@ -295,6 +297,7 @@ def user_refresh_check(
     if not store_refresh_token_command:
         typer.echo("ERROR: --store-refresh-token-command is required", err=True)
         raise typer.Exit(code=1)
+    _preflight_store_refresh_token_command(store_refresh_token_command)
 
     async def _run() -> dict[str, Any]:
         response = await refresh_user_access_token(client_id, refresh_token)
@@ -340,18 +343,64 @@ def _store_refresh_token(command: str, refresh_token: str | None) -> None:
     if not refresh_token:
         raise RuntimeError("GitHub response did not include a replacement refresh token")
 
-    import shlex
     import subprocess  # nosec B404
 
+    argv = _store_refresh_token_argv(command)
     # Operator-provided secret-store command: shlex-split argv, no shell.
-    subprocess.run(  # nosec B603
-        shlex.split(command),
-        input=refresh_token,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        text=True,
-        check=True,
+    try:
+        subprocess.run(  # nosec B603
+            argv,
+            input=refresh_token,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        recovery_path = _write_refresh_token_recovery_file(refresh_token)
+        raise RuntimeError(
+            f"Secret-store command failed; replacement refresh token was saved to {recovery_path}"
+        ) from exc
+
+
+def _preflight_store_refresh_token_command(command: str) -> None:
+    _store_refresh_token_argv(command)
+
+
+def _store_refresh_token_argv(command: str) -> list[str]:
+    import shlex
+    import shutil
+
+    argv = shlex.split(command)
+    if not argv:
+        raise RuntimeError("--store-refresh-token-command must not be empty")
+
+    executable = argv[0]
+    if os.sep in executable or (os.altsep and os.altsep in executable):
+        executable_path = Path(executable)
+        if not executable_path.is_file() or not os.access(executable_path, os.X_OK):
+            raise RuntimeError(f"secret-store command is not executable: {executable}")
+        return argv
+
+    resolved = shutil.which(executable)
+    if not resolved:
+        raise RuntimeError(f"secret-store command executable not found: {executable}")
+    return [resolved, *argv[1:]]
+
+
+def _write_refresh_token_recovery_file(refresh_token: str) -> Path:
+    import time
+
+    recovery_root = Path(
+        os.environ.get("VOYAGER_REFRESH_TOKEN_RECOVERY_DIR", Path.home() / ".voyager" / "recovery")
     )
+    recovery_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(recovery_root, 0o700)
+    recovery_path = recovery_root / f"countdown-refresh-token-{time.time_ns()}.txt"
+    fd = os.open(recovery_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(refresh_token)
+    return recovery_path
 
 
 def main() -> None:

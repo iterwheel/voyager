@@ -100,6 +100,67 @@ def test_store_refresh_token_suppresses_child_output(capsys: pytest.CaptureFixtu
     assert captured.err == ""
 
 
+def test_vyg_countdown_user_refresh_check_preflights_store_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    refresh_called = False
+
+    async def fake_refresh_user_access_token(
+        client_id: str, refresh_token: str
+    ) -> UserAccessTokenResponse:
+        nonlocal refresh_called
+        refresh_called = True
+        return UserAccessTokenResponse(
+            access_token="secret-access",
+            token_type="bearer",
+            expires_in=28800,
+            refresh_token="secret-refresh",
+            refresh_token_expires_in=15897600,
+        )
+
+    monkeypatch.setattr(
+        "voyager.core.github_app_user_auth.refresh_user_access_token",
+        fake_refresh_user_access_token,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "countdown",
+            "user-refresh-check",
+            "--client-id",
+            "Iv1.test",
+            "--refresh-token-env",
+            "VOYAGER_TEST_REFRESH_TOKEN",
+            "--store-refresh-token-command",
+            "voyager-missing-secret-store-command",
+        ],
+        env={"VOYAGER_TEST_REFRESH_TOKEN": "old-refresh"},
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, RuntimeError)
+    assert "secret-store command executable not found" in str(result.exception)
+    assert not refresh_called
+
+
+def test_store_refresh_token_writes_recovery_file_when_child_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    monkeypatch.setenv("VOYAGER_REFRESH_TOKEN_RECOVERY_DIR", str(tmp_path))
+    command = f'{sys.executable} -c "import sys; sys.exit(7)"'
+
+    with pytest.raises(RuntimeError, match="replacement refresh token was saved") as exc_info:
+        _store_refresh_token(command, "secret-refresh")
+
+    recovery_paths = list(tmp_path.glob("countdown-refresh-token-*.txt"))
+    assert len(recovery_paths) == 1
+    recovery_path = recovery_paths[0]
+    assert str(recovery_path) in str(exc_info.value)
+    assert recovery_path.read_text(encoding="utf-8") == "secret-refresh"
+    assert recovery_path.stat().st_mode & 0o777 == 0o600
+
+
 def test_vyg_countdown_user_device_code_json_emits_completion_event(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
