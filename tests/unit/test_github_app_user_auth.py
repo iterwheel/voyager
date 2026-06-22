@@ -61,6 +61,41 @@ async def test_request_device_code_reports_oauth_errors_before_success_parsing()
 
 
 @pytest.mark.asyncio
+async def test_request_device_code_normalizes_http_status_errors() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/login/device/code"
+        return httpx.Response(
+            503,
+            request=request,
+            json={"message": "service unavailable for client-id"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(RuntimeError) as exc_info:
+            await request_device_code("client-id", client=client)
+
+    message = str(exc_info.value)
+    assert message == "GitHub device authorization failed: HTTP 503"
+    assert "client-id" not in message
+    assert "service unavailable" not in message
+
+
+@pytest.mark.asyncio
+async def test_request_device_code_normalizes_request_errors() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("could not connect with client-id", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(RuntimeError) as exc_info:
+            await request_device_code("client-id", client=client)
+
+    message = str(exc_info.value)
+    assert message == "GitHub device authorization failed: HTTP request error"
+    assert "client-id" not in message
+    assert "could not connect" not in message
+
+
+@pytest.mark.asyncio
 async def test_exchange_device_code_reports_safe_metadata() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/login/oauth/access_token"
@@ -87,6 +122,41 @@ async def test_exchange_device_code_reports_safe_metadata() -> None:
         "refresh_token_expires_in": 15897600,
         "scope": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_exchange_device_code_normalizes_http_status_errors() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/login/oauth/access_token"
+        return httpx.Response(
+            429,
+            request=request,
+            json={"message": "rate limited", "device_code": "secret-device"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(RuntimeError) as exc_info:
+            await exchange_device_code("client-id", "secret-device", client=client)
+
+    message = str(exc_info.value)
+    assert message == "GitHub device authorization not complete: HTTP 429"
+    assert "secret-device" not in message
+    assert "rate limited" not in message
+
+
+@pytest.mark.asyncio
+async def test_exchange_device_code_normalizes_request_errors() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("could not connect with secret-device", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(RuntimeError) as exc_info:
+            await exchange_device_code("client-id", "secret-device", client=client)
+
+    message = str(exc_info.value)
+    assert message == "GitHub device authorization not complete: HTTP request error"
+    assert "secret-device" not in message
+    assert "could not connect" not in message
 
 
 @pytest.mark.asyncio
