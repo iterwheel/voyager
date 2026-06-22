@@ -456,6 +456,44 @@ def test_vyg_countdown_user_device_code_json_emits_completion_event(
     assert token_path.read_text(encoding="utf-8") == "secret-refresh"
 
 
+def test_vyg_countdown_user_device_code_request_failure_uses_safe_error_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    token_path = tmp_path / "refresh-token.txt"
+    store_command = (
+        f'{sys.executable} -c "import pathlib, sys; '
+        "pathlib.Path(sys.argv[1]).write_text(sys.stdin.read(), encoding='utf-8')\" "
+        f"{token_path}"
+    )
+
+    async def fake_request_device_code(client_id: str) -> DeviceCodeResponse:
+        assert client_id == "Iv1.test"
+        raise RuntimeError("GitHub device authorization failed: device_flow_disabled")
+
+    monkeypatch.setattr(
+        "voyager.core.github_app_user_auth.request_device_code", fake_request_device_code
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "countdown",
+            "user-device-code",
+            "--client-id",
+            "Iv1.test",
+            "--store-refresh-token-command",
+            store_command,
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "ERROR: GitHub device authorization failed: device_flow_disabled" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert "Iv1.test" not in result.stderr
+    assert result.stdout == ""
+    assert not token_path.exists()
+
+
 def test_vyg_bridge_serve_help_lists_flags() -> None:
     result = runner.invoke(app, ["bridge", "serve", "--help"])
     assert result.exit_code == 0
