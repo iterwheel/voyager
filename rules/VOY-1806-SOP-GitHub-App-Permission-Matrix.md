@@ -139,6 +139,12 @@ repositories, manage secrets, deploy production, or merge code directly.
      controlled canary proves GitHub requires a stronger permission for
      `resolveReviewThread`; that escalation would need a follow-up CHG/ADR and
      updated evidence in VOY-1807.
+   - Issue #202 tested the narrowest adjacent Countdown escalation,
+     `Contents: read & write`, because Pull requests was already at the maximum
+     `read & write` level. The live canary still returned
+     `viewerCanResolve=false`, so `Contents: write` is not a supported
+     workaround and must remain denied for Countdown. The permission rollback
+     restored `Contents: read-only`.
 
 4. **Subscribe to webhook events**
 
@@ -156,6 +162,14 @@ repositories, manage secrets, deploy production, or merge code directly.
    | `iterwheel-staticfire` | Check run, Check suite, Status, Workflow run, Pull request |
    | `iterwheel-clearance` | Pull request, Pull request review, Pull request review comment, Issue comment |
    | `iterwheel-countdown` | Pull request, Pull request review, Pull request review comment, Check run, Check suite, Status, Workflow run, Issue comment |
+
+   App-level event subscriptions are a desired per-app wiring target, not the
+   current bootstrap event source while App webhooks remain disabled. During
+   issue #202, saving the inactive `iterwheel-countdown` App permissions page
+   with an empty webhook URL cleared its public App metadata `events` list.
+   Operators must check `gh api /apps/<slug> --jq .events` after any App
+   settings save, and must not rely on hidden event checkboxes when the App
+   webhook is inactive.
 
 5. **Do not grant dangerous defaults**
 
@@ -193,6 +207,12 @@ repositories, manage secrets, deploy production, or merge code directly.
    Record before/after evidence in VOY-1807. Do not install Countdown broadly
    across all repositories for this proof; start with one selected canary
    repository such as `iterwheel/voyager-sandbox`.
+
+   Issue #202 provides negative evidence for the `Contents: read & write`
+   hypothesis: after the temporary escalation, Countdown still reported
+   `viewerCanResolve=false`, so no `resolveReviewThread` mutation was allowed.
+   Future escalation attempts need a new, narrower hypothesis and must not
+   repeat Contents write as the assumed fix.
 
 
 ## Examples

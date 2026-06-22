@@ -59,12 +59,12 @@ Countdown resolver canary status:
 | Check | Status | Evidence |
 |-------|--------|----------|
 | App exists | Complete | `iterwheel-countdown` App ID `3646540`; public page `https://github.com/apps/iterwheel-countdown`. |
-| Current public App metadata | Complete | `gh api /apps/iterwheel-countdown` on 2026-06-22 returned owner `iterwheel`, permissions `metadata: read`, `contents: read`, `issues: write`, `pull_requests: write`, `checks: write`, `actions: read`, and `statuses: read`; events `check_run`, `check_suite`, `issue_comment`, `pull_request`, `pull_request_review`, `pull_request_review_comment`, `status`, and `workflow_run`. |
-| Installation scope | Registry-recorded | Selected repository installation remains `iterwheel/voyager-sandbox` (`130630407`). Do not broaden Countdown to all repositories for issue #200. |
+| Current public App metadata | Complete with event caveat | `gh api /apps/iterwheel-countdown` on 2026-06-22 after the issue #202 rollback returned permissions `metadata: read`, `contents: read`, `issues: write`, `pull_requests: write`, `checks: write`, `actions: read`, and `statuses: read`; events `[]`. Earlier the same day, before the #202 permissions-page save, the public metadata returned events `check_run`, `check_suite`, `issue_comment`, `pull_request`, `pull_request_review`, `pull_request_review_comment`, `status`, and `workflow_run`. App webhooks are inactive with an empty webhook URL, and the GitHub App settings UI hid event checkboxes while saving the permission rollback, so the repository-level webhook remains the current bootstrap event source. |
+| Installation scope | Verified | On 2026-06-22, the Countdown installation token listed `total_count=1`, `repository_selection=selected`, repositories `iterwheel/voyager-sandbox`. Do not broaden Countdown to all repositories for issue #200 or #202. |
 | Operator credentials | Available on Wukong; absent locally | `/Users/frank/.voyager/config.toml`, `./voyager.toml`, `/etc/voyager/config.toml`, and local Countdown PEM paths were absent on this workstation on 2026-06-22. Wukong has `~/.voyager/secrets/iterwheel-countdown.pem`; the live canary used a one-off in-memory `AppConfig` so App ID, installation ID, and private key material stayed in the operator secret path and were not committed. |
 | Capability query canary | Complete-negative | On 2026-06-22, Countdown queried a private sandbox PR review thread as actor `iterwheel-countdown[bot]`. Response: type `PullRequestReviewThread`, repo `iterwheel/voyager-sandbox`, `isResolved=false`, `isOutdated=false`, `viewerCanResolve=false`, `viewerCanReply=true`. An existing sandbox canary thread also returned `viewerCanResolve=false`. This is not resolver-capable evidence. Keep private PR numbers and thread node IDs in operator notes, not this public registry. |
-| Resolve canary | Blocked by capability bit | No `resolveReviewThread` mutation was run because Countdown's live `viewerCanResolve=false`. The private canary PR was closed and its temporary branch was deleted after recording evidence. |
-| Permission escalation check | Pending operator sudo | GitHub App settings page requires GitHub sudo/passkey confirmation before editing permissions. No App settings were changed in this pass. If operators approve testing `Contents: read & write` or another permission, rerun the #200 canary and record before/after evidence here before claiming Countdown resolver capability. |
+| Permission escalation check | Complete-negative; permission rollback complete | Issue #202 tested the narrowest adjacent escalation because Pull requests was already `read & write` and has no higher level. Baseline App metadata was `contents: read`; selected installation scope was only `iterwheel/voyager-sandbox`; canary target was a private sandbox PR with a private sandbox `PullRequestReviewThread` node. Baseline diagnostic: actor `iterwheel-countdown[bot]`, type `PullRequestReviewThread`, `isResolved=false`, `isOutdated=false`, `viewerCanResolve=false`, `viewerCanReply=true`. After GitHub sudo/operator approval, `Contents` was temporarily changed to `read & write`; the repeated diagnostic returned the same flags, including `viewerCanResolve=false`. `Contents` was then rolled back to `read-only`; final diagnostic again returned `viewerCanResolve=false`, `viewerCanReply=true`, `isResolved=false`, `isOutdated=false`. The sandbox PR was closed and its temporary branch was deleted after evidence collection. |
+| Resolve canary | Blocked by capability bit | No `resolveReviewThread` mutation was run because Countdown's live `viewerCanResolve=false` in baseline, elevated, and rollback states. |
 
 Operational notes:
 
@@ -76,6 +76,12 @@ Operational notes:
 - App webhooks remain disabled. Enabling them after creation did not persist in
   the GitHub UI, and the App hook configuration API returned no hook entity for
   apps that were originally created webhook-disabled.
+- Issue #202 exposed a GitHub App settings UI hazard: saving Countdown
+  permissions while App webhooks were inactive and the webhook URL was empty
+  cleared the public App metadata `events` list. This did not affect the
+  current repository-level webhook event source, but operators must re-check
+  `.events` after future App settings saves and re-enable per-app event
+  subscriptions only as part of a deliberate App webhook activation task.
 - A repository-level webhook is the current bootstrap event source for
   allow-listed repositories. The five GitHub Apps still provide the per-agent
   write-back identities and permission boundaries.
@@ -169,3 +175,4 @@ Operational notes:
 | 2026-05-23 | Recorded that the real Assembly backend uses the Oh My Pi CLI command `omp -p` and remains sandbox-only for the first canary | Codex |
 | 2026-05-24 | Linked the Assembly write-back row and operational notes to VOY-1822, the Assembly-driven implementation-loop SOP | Codex |
 | 2026-06-22 | Recorded Countdown resolver diagnostic command, public App metadata evidence, and pending canary evidence requirements for issue #200 | Codex |
+| 2026-06-22 | Recorded issue #202 Countdown `Contents: read & write` permission canary: `viewerCanResolve` stayed false, no resolve mutation ran, Contents was rolled back to read-only, and inactive App webhook event subscriptions were cleared by the GitHub settings save | Codex |
