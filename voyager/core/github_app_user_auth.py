@@ -89,6 +89,7 @@ async def request_device_code(
 async def exchange_device_code(
     client_id: str,
     device_code: str,
+    repository_id: int | None = None,
     *,
     client: httpx.AsyncClient | None = None,
 ) -> UserAccessTokenResponse:
@@ -96,15 +97,18 @@ async def exchange_device_code(
     owns_client = client is None
     http = client or httpx.AsyncClient(timeout=15)
     try:
+        request_data: dict[str, str | int] = {
+            "client_id": client_id,
+            "device_code": device_code,
+            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+        }
+        if repository_id is not None:
+            request_data["repository_id"] = repository_id
         try:
             response = await http.post(
                 f"{GITHUB_LOGIN}/oauth/access_token",
                 headers={"Accept": "application/json"},
-                data={
-                    "client_id": client_id,
-                    "device_code": device_code,
-                    "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-                },
+                data=request_data,
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
