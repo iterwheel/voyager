@@ -70,17 +70,23 @@ async def request_device_code(
             raise RuntimeError(f"GitHub device authorization failed: HTTP {status_code}") from exc
         except httpx.HTTPError as exc:
             raise RuntimeError("GitHub device authorization failed: HTTP request error") from exc
-        data = response.json()
+        data = _response_json_object(
+            response,
+            "GitHub device authorization failed: malformed response",
+        )
         if data.get("error"):
             error = data.get("error")
             raise RuntimeError(f"GitHub device authorization failed: {error}")
-        return DeviceCodeResponse(
-            device_code=str(data["device_code"]),
-            user_code=str(data["user_code"]),
-            verification_uri=str(data["verification_uri"]),
-            expires_in=int(data["expires_in"]),
-            interval=int(data.get("interval", 5)),
-        )
+        try:
+            return DeviceCodeResponse(
+                device_code=str(data["device_code"]),
+                user_code=str(data["user_code"]),
+                verification_uri=str(data["verification_uri"]),
+                expires_in=int(data["expires_in"]),
+                interval=int(data.get("interval", 5)),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError("GitHub device authorization failed: malformed response") from exc
     finally:
         if owns_client:
             await http.aclose()
@@ -120,11 +126,17 @@ async def exchange_device_code(
             raise RuntimeError(
                 "GitHub device authorization not complete: HTTP request error"
             ) from exc
-        data = response.json()
+        data = _response_json_object(
+            response,
+            "GitHub device authorization not complete: malformed response",
+        )
         if data.get("error"):
             error = data.get("error")
             raise RuntimeError(f"GitHub device authorization not complete: {error}")
-        return _parse_user_access_token_response(data)
+        return _parse_user_access_token_response(
+            data,
+            "GitHub device authorization not complete: malformed response",
+        )
     finally:
         if owns_client:
             await http.aclose()
@@ -156,11 +168,14 @@ async def refresh_user_access_token(
             raise RuntimeError(f"GitHub refresh failed: HTTP {status_code}") from exc
         except httpx.HTTPError as exc:
             raise RuntimeError("GitHub refresh failed: HTTP request error") from exc
-        data = response.json()
+        data = _response_json_object(response, "GitHub refresh failed: malformed response")
         if data.get("error"):
             error = data.get("error")
             raise RuntimeError(f"GitHub refresh failed: {error}")
-        return _parse_user_access_token_response(data)
+        return _parse_user_access_token_response(
+            data,
+            "GitHub refresh failed: malformed response",
+        )
     finally:
         if owns_client:
             await http.aclose()
@@ -191,7 +206,10 @@ async def query_viewer_login(
             raise RuntimeError(f"GitHub GraphQL viewer query failed: HTTP {status_code}") from exc
         except httpx.HTTPError as exc:
             raise RuntimeError("GitHub GraphQL viewer query failed: HTTP request error") from exc
-        data = response.json()
+        data = _response_json_object(
+            response,
+            "GitHub GraphQL viewer query failed: malformed response",
+        )
         if data.get("errors"):
             raise RuntimeError("GitHub GraphQL viewer query returned errors")
         return str(((data.get("data") or {}).get("viewer") or {}).get("login") or "")
@@ -200,16 +218,32 @@ async def query_viewer_login(
             await http.aclose()
 
 
-def _parse_user_access_token_response(data: dict[str, Any]) -> UserAccessTokenResponse:
-    return UserAccessTokenResponse(
-        access_token=str(data["access_token"]),
-        token_type=str(data.get("token_type") or "bearer"),
-        expires_in=int(data["expires_in"]) if data.get("expires_in") is not None else None,
-        refresh_token=str(data["refresh_token"]) if data.get("refresh_token") else None,
-        refresh_token_expires_in=(
-            int(data["refresh_token_expires_in"])
-            if data.get("refresh_token_expires_in") is not None
-            else None
-        ),
-        scope=str(data["scope"]) if data.get("scope") is not None else None,
-    )
+def _response_json_object(response: httpx.Response, error_message: str) -> dict[str, Any]:
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise RuntimeError(error_message) from exc
+    if not isinstance(data, dict):
+        raise RuntimeError(error_message)
+    return data
+
+
+def _parse_user_access_token_response(
+    data: dict[str, Any],
+    error_message: str,
+) -> UserAccessTokenResponse:
+    try:
+        return UserAccessTokenResponse(
+            access_token=str(data["access_token"]),
+            token_type=str(data.get("token_type") or "bearer"),
+            expires_in=int(data["expires_in"]) if data.get("expires_in") is not None else None,
+            refresh_token=str(data["refresh_token"]) if data.get("refresh_token") else None,
+            refresh_token_expires_in=(
+                int(data["refresh_token_expires_in"])
+                if data.get("refresh_token_expires_in") is not None
+                else None
+            ),
+            scope=str(data["scope"]) if data.get("scope") is not None else None,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError(error_message) from exc
