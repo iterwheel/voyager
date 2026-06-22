@@ -14,7 +14,7 @@ import click
 import pytest
 from typer.testing import CliRunner
 
-from voyager.cli import _store_refresh_token, app
+from voyager.cli import _store_refresh_token, _store_refresh_token_argv, app
 from voyager.core.github_app_user_auth import DeviceCodeResponse, UserAccessTokenResponse
 
 # Force a wide terminal in tests so Typer/Rich does not wrap `--host`
@@ -176,6 +176,31 @@ def test_store_refresh_token_writes_recovery_file_when_child_cannot_exec(
         click.ClickException, match="replacement refresh token was saved"
     ) as exc_info:
         _store_refresh_token(str(broken_store), "secret-refresh")
+
+    recovery_paths = list((tmp_path / "recovery").glob("countdown-refresh-token-*.txt"))
+    assert len(recovery_paths) == 1
+    recovery_path = recovery_paths[0]
+    assert str(recovery_path) in str(exc_info.value)
+    assert recovery_path.read_text(encoding="utf-8") == "secret-refresh"
+    assert recovery_path.stat().st_mode & 0o777 == 0o600
+
+
+def test_store_refresh_token_writes_recovery_file_when_command_disappears_after_preflight(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    monkeypatch.setenv("VOYAGER_REFRESH_TOKEN_RECOVERY_DIR", str(tmp_path / "recovery"))
+    rotating_store = tmp_path / "rotating-store"
+    rotating_store.write_text("#!/bin/sh\ncat >/dev/null\n", encoding="utf-8")
+    rotating_store.chmod(0o700)
+    command = str(rotating_store)
+
+    assert _store_refresh_token_argv(command) == [command]
+    rotating_store.unlink()
+
+    with pytest.raises(
+        click.ClickException, match="replacement refresh token was saved"
+    ) as exc_info:
+        _store_refresh_token(command, "secret-refresh")
 
     recovery_paths = list((tmp_path / "recovery").glob("countdown-refresh-token-*.txt"))
     assert len(recovery_paths) == 1
