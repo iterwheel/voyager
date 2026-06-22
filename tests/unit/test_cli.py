@@ -211,26 +211,22 @@ def test_vyg_countdown_user_refresh_check_preflight_rejects_malformed_store_comm
     assert not refresh_called
 
 
-def test_store_refresh_token_writes_recovery_file_when_child_fails(
+def test_store_refresh_token_fails_closed_when_child_fails(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     monkeypatch.setenv("VOYAGER_REFRESH_TOKEN_RECOVERY_DIR", str(tmp_path))
     command = f'{sys.executable} -c "import sys; sys.exit(7)"'
 
     with pytest.raises(
-        click.ClickException, match="replacement refresh token was saved"
+        click.ClickException, match="replacement refresh token was not stored"
     ) as exc_info:
         _store_refresh_token(command, "secret-refresh")
 
-    recovery_paths = list(tmp_path.glob("countdown-refresh-token-*.txt"))
-    assert len(recovery_paths) == 1
-    recovery_path = recovery_paths[0]
-    assert str(recovery_path) in str(exc_info.value)
-    assert recovery_path.read_text(encoding="utf-8") == "secret-refresh"
-    assert recovery_path.stat().st_mode & 0o777 == 0o600
+    assert "secret-refresh" not in str(exc_info.value)
+    assert list(tmp_path.glob("countdown-refresh-token-*.txt")) == []
 
 
-def test_store_refresh_token_writes_recovery_file_when_child_cannot_exec(
+def test_store_refresh_token_fails_closed_when_child_cannot_exec(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     monkeypatch.setenv("VOYAGER_REFRESH_TOKEN_RECOVERY_DIR", str(tmp_path / "recovery"))
@@ -239,19 +235,15 @@ def test_store_refresh_token_writes_recovery_file_when_child_cannot_exec(
     broken_store.chmod(0o700)
 
     with pytest.raises(
-        click.ClickException, match="replacement refresh token was saved"
+        click.ClickException, match="replacement refresh token was not stored"
     ) as exc_info:
         _store_refresh_token(str(broken_store), "secret-refresh")
 
-    recovery_paths = list((tmp_path / "recovery").glob("countdown-refresh-token-*.txt"))
-    assert len(recovery_paths) == 1
-    recovery_path = recovery_paths[0]
-    assert str(recovery_path) in str(exc_info.value)
-    assert recovery_path.read_text(encoding="utf-8") == "secret-refresh"
-    assert recovery_path.stat().st_mode & 0o777 == 0o600
+    assert "secret-refresh" not in str(exc_info.value)
+    assert not (tmp_path / "recovery").exists()
 
 
-def test_store_refresh_token_writes_recovery_file_when_command_disappears_after_preflight(
+def test_store_refresh_token_fails_closed_when_command_disappears_after_preflight(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     monkeypatch.setenv("VOYAGER_REFRESH_TOKEN_RECOVERY_DIR", str(tmp_path / "recovery"))
@@ -264,19 +256,15 @@ def test_store_refresh_token_writes_recovery_file_when_command_disappears_after_
     rotating_store.unlink()
 
     with pytest.raises(
-        click.ClickException, match="replacement refresh token was saved"
+        click.ClickException, match="replacement refresh token was not stored"
     ) as exc_info:
         _store_refresh_token(command, "secret-refresh")
 
-    recovery_paths = list((tmp_path / "recovery").glob("countdown-refresh-token-*.txt"))
-    assert len(recovery_paths) == 1
-    recovery_path = recovery_paths[0]
-    assert str(recovery_path) in str(exc_info.value)
-    assert recovery_path.read_text(encoding="utf-8") == "secret-refresh"
-    assert recovery_path.stat().st_mode & 0o777 == 0o600
+    assert "secret-refresh" not in str(exc_info.value)
+    assert not (tmp_path / "recovery").exists()
 
 
-def test_store_refresh_token_writes_recovery_file_when_child_times_out(
+def test_store_refresh_token_fails_closed_when_child_times_out(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     monkeypatch.setenv("VOYAGER_REFRESH_TOKEN_RECOVERY_DIR", str(tmp_path / "recovery"))
@@ -284,16 +272,12 @@ def test_store_refresh_token_writes_recovery_file_when_child_times_out(
     command = f'{sys.executable} -c "import time; time.sleep(5)"'
 
     with pytest.raises(
-        click.ClickException, match="replacement refresh token was saved"
+        click.ClickException, match="replacement refresh token was not stored"
     ) as exc_info:
         _store_refresh_token(command, "secret-refresh")
 
-    recovery_paths = list((tmp_path / "recovery").glob("countdown-refresh-token-*.txt"))
-    assert len(recovery_paths) == 1
-    recovery_path = recovery_paths[0]
-    assert str(recovery_path) in str(exc_info.value)
-    assert recovery_path.read_text(encoding="utf-8") == "secret-refresh"
-    assert recovery_path.stat().st_mode & 0o777 == 0o600
+    assert "secret-refresh" not in str(exc_info.value)
+    assert not (tmp_path / "recovery").exists()
 
 
 def test_vyg_countdown_user_refresh_check_store_failure_hides_token_locals(
@@ -336,16 +320,14 @@ def test_vyg_countdown_user_refresh_check_store_failure_hides_token_locals(
 
     assert result.exit_code == 1
     assert "Secret-store command failed" in result.stderr
-    assert "replacement refresh token was saved" in result.stderr
+    assert "replacement refresh token was not stored" in result.stderr
+    assert "replacement refresh token was saved" not in result.stderr
     assert "secret-refresh" not in result.stderr
     assert "secret-access" not in result.stderr
     assert "old-refresh" not in result.stderr
     assert "Traceback" not in result.stderr
     assert result.stdout == ""
-    recovery_paths = list((tmp_path / "recovery").glob("countdown-refresh-token-*.txt"))
-    assert len(recovery_paths) == 1
-    assert recovery_paths[0].read_text(encoding="utf-8") == "secret-refresh"
-    assert recovery_paths[0].stat().st_mode & 0o777 == 0o600
+    assert not (tmp_path / "recovery").exists()
 
 
 def test_vyg_countdown_user_refresh_check_refresh_failure_uses_safe_error_path(
@@ -455,6 +437,189 @@ def test_vyg_countdown_user_refresh_check_viewer_failure_uses_safe_error_path(
     assert token_path.read_text(encoding="utf-8") == "secret-refresh"
 
 
+def test_vyg_countdown_user_refresh_check_expected_viewer_match_stores_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    token_path = tmp_path / "refresh-token.txt"
+    store_command = (
+        f'{sys.executable} -c "import pathlib, sys; '
+        "pathlib.Path(sys.argv[1]).write_text(sys.stdin.read(), encoding='utf-8')\" "
+        f"{token_path}"
+    )
+
+    async def fake_refresh_user_access_token(
+        client_id: str, refresh_token: str
+    ) -> UserAccessTokenResponse:
+        assert client_id == "Iv1.test"
+        assert refresh_token == "old-refresh"
+        return UserAccessTokenResponse(
+            access_token="secret-access",
+            token_type="bearer",
+            expires_in=28800,
+            refresh_token="secret-refresh",
+            refresh_token_expires_in=15897600,
+        )
+
+    async def fake_query_viewer_login(access_token: str) -> str:
+        assert access_token == "secret-access"
+        return "Maintainer"
+
+    monkeypatch.setattr(
+        "voyager.core.github_app_user_auth.refresh_user_access_token",
+        fake_refresh_user_access_token,
+    )
+    monkeypatch.setattr(
+        "voyager.core.github_app_user_auth.query_viewer_login",
+        fake_query_viewer_login,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "countdown",
+            "user-refresh-check",
+            "--client-id",
+            "Iv1.test",
+            "--refresh-token-env",
+            "VOYAGER_TEST_REFRESH_TOKEN",
+            "--store-refresh-token-command",
+            store_command,
+            "--expected-viewer-login-env",
+            "VOYAGER_EXPECTED_VIEWER",
+        ],
+        env={
+            "VOYAGER_TEST_REFRESH_TOKEN": "old-refresh",
+            "VOYAGER_EXPECTED_VIEWER": "maintainer",
+        },
+    )
+
+    assert result.exit_code == 0
+    assert "viewer_login_present: True" in result.stdout
+    assert "viewer_login_matches_expected: True" in result.stdout
+    assert "Maintainer" not in result.stdout
+    assert "maintainer" not in result.stdout
+    assert "secret-access" not in result.stdout
+    assert "secret-refresh" not in result.stdout
+    assert token_path.read_text(encoding="utf-8") == "secret-refresh"
+
+
+def test_vyg_countdown_user_refresh_check_expected_viewer_mismatch_does_not_store(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    token_path = tmp_path / "refresh-token.txt"
+    store_command = (
+        f'{sys.executable} -c "import pathlib, sys; '
+        "pathlib.Path(sys.argv[1]).write_text(sys.stdin.read(), encoding='utf-8')\" "
+        f"{token_path}"
+    )
+
+    async def fake_refresh_user_access_token(
+        client_id: str, refresh_token: str
+    ) -> UserAccessTokenResponse:
+        assert client_id == "Iv1.test"
+        assert refresh_token == "old-refresh"
+        return UserAccessTokenResponse(
+            access_token="secret-access",
+            token_type="bearer",
+            expires_in=28800,
+            refresh_token="secret-refresh",
+            refresh_token_expires_in=15897600,
+        )
+
+    async def fake_query_viewer_login(access_token: str) -> str:
+        assert access_token == "secret-access"
+        return "other-user"
+
+    monkeypatch.setattr(
+        "voyager.core.github_app_user_auth.refresh_user_access_token",
+        fake_refresh_user_access_token,
+    )
+    monkeypatch.setattr(
+        "voyager.core.github_app_user_auth.query_viewer_login",
+        fake_query_viewer_login,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "countdown",
+            "user-refresh-check",
+            "--client-id",
+            "Iv1.test",
+            "--refresh-token-env",
+            "VOYAGER_TEST_REFRESH_TOKEN",
+            "--store-refresh-token-command",
+            store_command,
+            "--expected-viewer-login-env",
+            "VOYAGER_EXPECTED_VIEWER",
+        ],
+        env={
+            "VOYAGER_TEST_REFRESH_TOKEN": "old-refresh",
+            "VOYAGER_EXPECTED_VIEWER": "maintainer",
+        },
+    )
+
+    assert result.exit_code == 1
+    assert "ERROR: GitHub viewer login did not match expected account" in result.stderr
+    assert "other-user" not in result.stderr
+    assert "maintainer" not in result.stderr
+    assert "secret-access" not in result.stderr
+    assert "secret-refresh" not in result.stderr
+    assert not token_path.exists()
+
+
+def test_vyg_countdown_user_refresh_check_expected_viewer_requires_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    token_path = tmp_path / "refresh-token.txt"
+    refresh_called = False
+    store_command = (
+        f'{sys.executable} -c "import pathlib, sys; '
+        "pathlib.Path(sys.argv[1]).write_text(sys.stdin.read(), encoding='utf-8')\" "
+        f"{token_path}"
+    )
+
+    async def fake_refresh_user_access_token(
+        client_id: str, refresh_token: str
+    ) -> UserAccessTokenResponse:
+        nonlocal refresh_called
+        refresh_called = True
+        return UserAccessTokenResponse(
+            access_token="secret-access",
+            token_type="bearer",
+            expires_in=28800,
+            refresh_token="secret-refresh",
+            refresh_token_expires_in=15897600,
+        )
+
+    monkeypatch.setattr(
+        "voyager.core.github_app_user_auth.refresh_user_access_token",
+        fake_refresh_user_access_token,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "countdown",
+            "user-refresh-check",
+            "--client-id",
+            "Iv1.test",
+            "--refresh-token-env",
+            "VOYAGER_TEST_REFRESH_TOKEN",
+            "--store-refresh-token-command",
+            store_command,
+            "--expected-viewer-login-env",
+            "VOYAGER_EXPECTED_VIEWER",
+        ],
+        env={"VOYAGER_TEST_REFRESH_TOKEN": "old-refresh"},
+    )
+
+    assert result.exit_code == 1
+    assert "ERROR: VOYAGER_EXPECTED_VIEWER is not set" in result.stderr
+    assert not refresh_called
+    assert not token_path.exists()
+
+
 def test_vyg_countdown_user_device_code_json_emits_completion_event(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
@@ -472,10 +637,11 @@ def test_vyg_countdown_user_device_code_json_emits_completion_event(
         )
 
     async def fake_exchange_device_code(
-        client_id: str, device_code: str
+        client_id: str, device_code: str, repository_id: int | None = None
     ) -> UserAccessTokenResponse:
         assert client_id == "Iv1.test"
         assert device_code == "secret-device"
+        assert repository_id is None
         assert events == ["sleep:1"]
         return UserAccessTokenResponse(
             access_token="secret-access",
@@ -538,6 +704,163 @@ def test_vyg_countdown_user_device_code_json_emits_completion_event(
     assert token_path.read_text(encoding="utf-8") == "secret-refresh"
 
 
+def test_vyg_countdown_user_device_code_expected_viewer_match_stores_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    token_path = tmp_path / "refresh-token.txt"
+
+    async def fake_request_device_code(client_id: str) -> DeviceCodeResponse:
+        assert client_id == "Iv1.test"
+        return DeviceCodeResponse(
+            device_code="secret-device",
+            user_code="ABCD-1234",
+            verification_uri="https://github.com/login/device",
+            expires_in=900,
+            interval=1,
+        )
+
+    async def fake_exchange_device_code(
+        client_id: str, device_code: str, repository_id: int | None = None
+    ) -> UserAccessTokenResponse:
+        assert client_id == "Iv1.test"
+        assert device_code == "secret-device"
+        assert repository_id == 12345
+        return UserAccessTokenResponse(
+            access_token="secret-access",
+            token_type="bearer",
+            expires_in=28800,
+            refresh_token="secret-refresh",
+            refresh_token_expires_in=15897600,
+        )
+
+    async def fake_query_viewer_login(access_token: str) -> str:
+        assert access_token == "secret-access"
+        return "Maintainer"
+
+    async def fake_sleep(interval: int) -> None:
+        assert interval == 1
+
+    monkeypatch.setattr(
+        "voyager.core.github_app_user_auth.request_device_code", fake_request_device_code
+    )
+    monkeypatch.setattr(
+        "voyager.core.github_app_user_auth.exchange_device_code", fake_exchange_device_code
+    )
+    monkeypatch.setattr(
+        "voyager.core.github_app_user_auth.query_viewer_login",
+        fake_query_viewer_login,
+    )
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+    store_command = (
+        f'{sys.executable} -c "import pathlib, sys; '
+        "pathlib.Path(sys.argv[1]).write_text(sys.stdin.read(), encoding='utf-8')\" "
+        f"{token_path}"
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "countdown",
+            "user-device-code",
+            "--client-id",
+            "Iv1.test",
+            "--store-refresh-token-command",
+            store_command,
+            "--expected-viewer-login-env",
+            "VOYAGER_EXPECTED_VIEWER",
+            "--repository-id",
+            "12345",
+        ],
+        env={"VOYAGER_EXPECTED_VIEWER": "maintainer"},
+    )
+
+    assert result.exit_code == 0
+    assert "viewer_login_present: True" in result.stdout
+    assert "viewer_login_matches_expected: True" in result.stdout
+    assert "Maintainer" not in result.stdout
+    assert "maintainer" not in result.stdout
+    assert "secret-access" not in result.stdout
+    assert "secret-refresh" not in result.stdout
+    assert token_path.read_text(encoding="utf-8") == "secret-refresh"
+
+
+def test_vyg_countdown_user_device_code_expected_viewer_mismatch_does_not_store(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    token_path = tmp_path / "refresh-token.txt"
+
+    async def fake_request_device_code(client_id: str) -> DeviceCodeResponse:
+        assert client_id == "Iv1.test"
+        return DeviceCodeResponse(
+            device_code="secret-device",
+            user_code="ABCD-1234",
+            verification_uri="https://github.com/login/device",
+            expires_in=900,
+            interval=1,
+        )
+
+    async def fake_exchange_device_code(
+        client_id: str, device_code: str, repository_id: int | None = None
+    ) -> UserAccessTokenResponse:
+        assert client_id == "Iv1.test"
+        assert device_code == "secret-device"
+        assert repository_id is None
+        return UserAccessTokenResponse(
+            access_token="secret-access",
+            token_type="bearer",
+            expires_in=28800,
+            refresh_token="secret-refresh",
+            refresh_token_expires_in=15897600,
+        )
+
+    async def fake_query_viewer_login(access_token: str) -> str:
+        assert access_token == "secret-access"
+        return "other-user"
+
+    async def fake_sleep(interval: int) -> None:
+        assert interval == 1
+
+    monkeypatch.setattr(
+        "voyager.core.github_app_user_auth.request_device_code", fake_request_device_code
+    )
+    monkeypatch.setattr(
+        "voyager.core.github_app_user_auth.exchange_device_code", fake_exchange_device_code
+    )
+    monkeypatch.setattr(
+        "voyager.core.github_app_user_auth.query_viewer_login",
+        fake_query_viewer_login,
+    )
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+    store_command = (
+        f'{sys.executable} -c "import pathlib, sys; '
+        "pathlib.Path(sys.argv[1]).write_text(sys.stdin.read(), encoding='utf-8')\" "
+        f"{token_path}"
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "countdown",
+            "user-device-code",
+            "--client-id",
+            "Iv1.test",
+            "--store-refresh-token-command",
+            store_command,
+            "--expected-viewer-login-env",
+            "VOYAGER_EXPECTED_VIEWER",
+        ],
+        env={"VOYAGER_EXPECTED_VIEWER": "maintainer"},
+    )
+
+    assert result.exit_code == 1
+    assert "ERROR: GitHub viewer login did not match expected account" in result.stderr
+    assert "other-user" not in result.stderr
+    assert "maintainer" not in result.stderr
+    assert "secret-access" not in result.stderr
+    assert "secret-refresh" not in result.stderr
+    assert not token_path.exists()
+
+
 def test_vyg_countdown_user_device_code_request_failure_uses_safe_error_path(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
@@ -597,10 +920,11 @@ def test_vyg_countdown_user_device_code_exchange_failure_uses_safe_error_path(
         )
 
     async def fake_exchange_device_code(
-        client_id: str, device_code: str
+        client_id: str, device_code: str, repository_id: int | None = None
     ) -> UserAccessTokenResponse:
         assert client_id == "Iv1.test"
         assert device_code == "secret-device"
+        assert repository_id is None
         raise RuntimeError("GitHub device authorization not complete: HTTP 429")
 
     async def fake_sleep(interval: int) -> None:
