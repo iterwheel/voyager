@@ -102,3 +102,22 @@ def test_voy_1807_main_registry_table_uses_numbered_labels():
             f"Legacy label {label!r} found in main registry clearance row — "
             f"it must only appear in the migration sub-section. Row: {clearance_row!r}"
         )
+
+
+def test_voy_1807_user_to_server_route_fails_closed_without_plaintext_recovery():
+    text = Path("rules/VOY-1807-REF-GitHub-App-Registry.md").read_text(encoding="utf-8")
+    route_row_match = re.search(
+        r"(?m)^\| User-to-server refresh route \|[^\n]*$",
+        text,
+    )
+    assert route_row_match is not None, "VOY-1807 missing user-to-server route row"
+    route_row = route_row_match.group(0)
+
+    assert "--expected-viewer-login-env" in route_row
+    assert "--repository-id" in route_row
+    assert "viewer_login_matches_expected" in route_row
+    assert "fails closed" in route_row
+    assert "does not write plaintext token material" in route_row
+    assert "countdown-refresh-token" not in route_row
+    assert "~/.voyager/recovery" not in route_row
+    assert "recovery file" not in route_row.lower()
