@@ -214,6 +214,15 @@ repositories, manage secrets, deploy production, or merge code directly.
    Future escalation attempts need a new, narrower hypothesis and must not
    repeat Contents write as the assumed fix.
 
+   Issue #204 explores a separate GitHub App user-to-server route. That route
+   must be evaluated as a human-authorized App user credential, not as an
+   `iterwheel-countdown[bot]` installation-token resolver. Operators may use
+   `vyg countdown user-device-code` and `vyg countdown user-refresh-check` to
+   collect safe token-lifetime and refresh metadata, but those commands must not
+   print access tokens, refresh tokens, private PR numbers, or review-thread node
+   IDs. If a later user-to-server canary resolves a thread, record the actual
+   `resolvedBy` actor and require a follow-up CHG before production use.
+
 
 ## Examples
 

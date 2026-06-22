@@ -47,6 +47,24 @@ def test_vyg_countdown_help_shows_review_thread_diagnostic() -> None:
     result = runner.invoke(app, ["countdown", "--help"])
     assert result.exit_code == 0
     assert "review-thread-diagnostic" in result.stdout
+    assert "user-device-code" in result.stdout
+    assert "user-refresh-check" in result.stdout
+
+
+def test_vyg_countdown_user_refresh_check_requires_env() -> None:
+    result = runner.invoke(
+        app,
+        [
+            "countdown",
+            "user-refresh-check",
+            "--client-id",
+            "Iv1.test",
+            "--refresh-token-env",
+            "VOYAGER_TEST_MISSING_REFRESH_TOKEN",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "VOYAGER_TEST_MISSING_REFRESH_TOKEN is not set" in result.stderr
 
 
 def test_vyg_bridge_serve_help_lists_flags() -> None:

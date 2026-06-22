@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -190,6 +191,112 @@ def _echo_thread_capabilities(threads: list[dict[str, Any]]) -> None:
             f"viewerCanResolve={thread['viewerCanResolve']} "
             f"viewerCanReply={thread['viewerCanReply']} error={thread['error']}"
         )
+
+
+@countdown_app.command("user-device-code")
+def user_device_code(
+    client_id: str = typer.Option(..., "--client-id", help="GitHub App client ID."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Start a GitHub App user-to-server device flow without printing token material."""
+    import asyncio
+
+    from voyager.core.github_app_user_auth import request_device_code
+
+    response = asyncio.run(request_device_code(client_id))
+    public_result = response.to_public_dict()
+    if json_output:
+        typer.echo(json.dumps(public_result, indent=2, sort_keys=True))
+        return
+
+    typer.echo("Countdown GitHub App user authorization")
+    typer.echo(f"verification_uri: {public_result['verification_uri']}")
+    typer.echo(f"user_code: {public_result['user_code']}")
+    typer.echo(f"expires_in: {public_result['expires_in']}")
+    typer.echo(f"poll_interval: {public_result['interval']}")
+    typer.echo("device_code: [redacted]")
+
+
+@countdown_app.command("user-refresh-check")
+def user_refresh_check(
+    client_id: str = typer.Option(..., "--client-id", help="GitHub App client ID."),
+    refresh_token_env: str = typer.Option(
+        "VOYAGER_COUNTDOWN_REFRESH_TOKEN",
+        "--refresh-token-env",
+        help="Environment variable containing the current refresh token.",
+    ),
+    check_viewer: bool = typer.Option(
+        False,
+        "--check-viewer",
+        help="Query GraphQL viewer.login with the refreshed access token.",
+    ),
+    store_refresh_token_command: str | None = typer.Option(
+        None,
+        "--store-refresh-token-command",
+        help=(
+            "Optional command that receives the replacement refresh token on stdin. "
+            "The command is split with shlex and is not run through a shell."
+        ),
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Refresh a GitHub App user token and report only non-secret metadata."""
+    import asyncio
+
+    from voyager.core.github_app_user_auth import query_viewer_login, refresh_user_access_token
+
+    refresh_token = os.environ.get(refresh_token_env)
+    if not refresh_token:
+        typer.echo(f"ERROR: {refresh_token_env} is not set", err=True)
+        raise typer.Exit(code=1)
+
+    async def _run() -> dict[str, Any]:
+        response = await refresh_user_access_token(client_id, refresh_token)
+        stored_replacement = False
+        if store_refresh_token_command and response.refresh_token:
+            import shlex
+            import subprocess
+
+            subprocess.run(
+                shlex.split(store_refresh_token_command),
+                input=response.refresh_token,
+                text=True,
+                check=True,
+            )
+            stored_replacement = True
+        result = response.to_public_dict()
+        result["replacement_refresh_token_must_be_stored"] = bool(response.refresh_token)
+        result["replacement_refresh_token_stored"] = stored_replacement
+        result["access_token"] = "[redacted]"
+        result["refresh_token"] = "[redacted]" if response.refresh_token else None
+        if check_viewer:
+            viewer_login = await query_viewer_login(response.access_token)
+            result["viewer_login_present"] = bool(viewer_login)
+            result["viewer_login"] = "[redacted]"
+        return result
+
+    public_result = asyncio.run(_run())
+    if json_output:
+        typer.echo(json.dumps(public_result, indent=2, sort_keys=True))
+        return
+
+    typer.echo("Countdown GitHub App user refresh check")
+    typer.echo(f"token_type: {public_result['token_type']}")
+    typer.echo(f"expires_in: {public_result['expires_in']}")
+    typer.echo(f"refresh_token_present: {public_result['refresh_token_present']}")
+    typer.echo(f"refresh_token_expires_in: {public_result['refresh_token_expires_in']}")
+    typer.echo(
+        "replacement_refresh_token_must_be_stored: "
+        f"{public_result['replacement_refresh_token_must_be_stored']}"
+    )
+    typer.echo(
+        f"replacement_refresh_token_stored: {public_result['replacement_refresh_token_stored']}"
+    )
+    if check_viewer:
+        typer.echo(f"viewer_login_present: {public_result['viewer_login_present']}")
+        typer.echo("viewer_login: [redacted]")
+    typer.echo("access_token: [redacted]")
+    typer.echo("refresh_token: [redacted]")
 
 
 def main() -> None:

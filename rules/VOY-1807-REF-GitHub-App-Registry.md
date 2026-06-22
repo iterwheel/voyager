@@ -64,6 +64,7 @@ Countdown resolver canary status:
 | Operator credentials | Available on Wukong; absent locally | `/Users/frank/.voyager/config.toml`, `./voyager.toml`, `/etc/voyager/config.toml`, and local Countdown PEM paths were absent on this workstation on 2026-06-22. Wukong has `~/.voyager/secrets/iterwheel-countdown.pem`; the live canary used a one-off in-memory `AppConfig` so App ID, installation ID, and private key material stayed in the operator secret path and were not committed. |
 | Capability query canary | Complete-negative | On 2026-06-22, Countdown queried a private sandbox PR review thread as actor `iterwheel-countdown[bot]`. Response: type `PullRequestReviewThread`, repo `iterwheel/voyager-sandbox`, `isResolved=false`, `isOutdated=false`, `viewerCanResolve=false`, `viewerCanReply=true`. An existing sandbox canary thread also returned `viewerCanResolve=false`. This is not resolver-capable evidence. Keep private PR numbers and thread node IDs in operator notes, not this public registry. |
 | Permission escalation check | Complete-negative; permission rollback complete | Issue #202 tested the narrowest adjacent escalation because Pull requests was already `read & write` and has no higher level. Baseline App metadata was `contents: read`; selected installation scope was only `iterwheel/voyager-sandbox`; canary target was a private sandbox PR with a private sandbox `PullRequestReviewThread` node. Baseline diagnostic: actor `iterwheel-countdown[bot]`, type `PullRequestReviewThread`, `isResolved=false`, `isOutdated=false`, `viewerCanResolve=false`, `viewerCanReply=true`. After GitHub sudo/operator approval, `Contents` was temporarily changed to `read & write`; the repeated diagnostic returned the same flags, including `viewerCanResolve=false`. `Contents` was then rolled back to `read-only`; final diagnostic again returned `viewerCanResolve=false`, `viewerCanReply=true`, `isResolved=false`, `isOutdated=false`. The sandbox PR was closed and its temporary branch was deleted after evidence collection. |
+| User-to-server refresh route | Tooling ready; live authorization pending operator | Issue #204 adds safe operator helpers for the GitHub App user-to-server route. `vyg countdown user-device-code --client-id <id>` starts Device Flow and prints only verification URI, user code, expiry, and polling interval. `vyg countdown user-refresh-check --client-id <id> --refresh-token-env <env>` refreshes from an operator-provided environment variable, optionally sends the replacement refresh token to an operator-selected secret-store command over stdin, and prints only redacted metadata. This route must be evaluated as a human-authorized App user credential and must not be described as `iterwheel-countdown[bot]` resolver capability. |
 | Resolve canary | Blocked by capability bit | No `resolveReviewThread` mutation was run because Countdown's live `viewerCanResolve=false` in baseline, elevated, and rollback states. |
 
 Operational notes:
@@ -82,6 +83,11 @@ Operational notes:
   current repository-level webhook event source, but operators must re-check
   `.events` after future App settings saves and re-enable per-app event
   subscriptions only as part of a deliberate App webhook activation task.
+- Issue #204 must not publish GitHub App user access tokens, refresh tokens,
+  maintainer usernames, private sandbox PR numbers, or review-thread node IDs.
+  A successful user-to-server route proves only that an explicitly authorized
+  maintainer user can mint and refresh App user tokens; a separate canary and
+  follow-up CHG are required before any production resolver use.
 - A repository-level webhook is the current bootstrap event source for
   allow-listed repositories. The five GitHub Apps still provide the per-agent
   write-back identities and permission boundaries.
@@ -176,3 +182,4 @@ Operational notes:
 | 2026-05-24 | Linked the Assembly write-back row and operational notes to VOY-1822, the Assembly-driven implementation-loop SOP | Codex |
 | 2026-06-22 | Recorded Countdown resolver diagnostic command, public App metadata evidence, and pending canary evidence requirements for issue #200 | Codex |
 | 2026-06-22 | Recorded issue #202 Countdown `Contents: read & write` permission canary: `viewerCanResolve` stayed false, no resolve mutation ran, Contents was rolled back to read-only, and inactive App webhook event subscriptions were cleared by the GitHub settings save | Codex |
+| 2026-06-22 | Added issue #204 GitHub App user-to-server helper commands and documented the route as human-authorized, token-redacted, and not equivalent to Countdown bot resolver capability | Codex |
