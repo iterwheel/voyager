@@ -17,6 +17,8 @@ countdown_app = typer.Typer(no_args_is_help=True)
 app.add_typer(bridge_app, name="bridge")
 app.add_typer(countdown_app, name="countdown")
 
+_STORE_REFRESH_TOKEN_TIMEOUT_SECONDS = 30
+
 
 @app.command("version")
 def version() -> None:
@@ -377,8 +379,14 @@ def _store_refresh_token(command: str, refresh_token: str | None) -> None:
             stderr=subprocess.DEVNULL,
             text=True,
             check=True,
+            timeout=_STORE_REFRESH_TOKEN_TIMEOUT_SECONDS,
         )
-    except (RuntimeError, OSError, subprocess.CalledProcessError) as exc:
+    except (
+        RuntimeError,
+        OSError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+    ) as exc:
         recovery_path = _write_refresh_token_recovery_file(refresh_token)
         raise click.ClickException(
             f"Secret-store command failed; replacement refresh token was saved to {recovery_path}"
