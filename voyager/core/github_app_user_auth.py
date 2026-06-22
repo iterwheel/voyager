@@ -117,16 +117,22 @@ async def refresh_user_access_token(
     owns_client = client is None
     http = client or httpx.AsyncClient(timeout=15)
     try:
-        response = await http.post(
-            f"{GITHUB_LOGIN}/oauth/access_token",
-            headers={"Accept": "application/json"},
-            data={
-                "client_id": client_id,
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
-            },
-        )
-        response.raise_for_status()
+        try:
+            response = await http.post(
+                f"{GITHUB_LOGIN}/oauth/access_token",
+                headers={"Accept": "application/json"},
+                data={
+                    "client_id": client_id,
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                },
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code
+            raise RuntimeError(f"GitHub refresh failed: HTTP {status_code}") from exc
+        except httpx.HTTPError as exc:
+            raise RuntimeError("GitHub refresh failed: HTTP request error") from exc
         data = response.json()
         if data.get("error"):
             error = data.get("error")
