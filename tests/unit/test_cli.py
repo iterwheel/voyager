@@ -67,6 +67,23 @@ def test_vyg_countdown_user_refresh_check_requires_env() -> None:
     assert "VOYAGER_TEST_MISSING_REFRESH_TOKEN is not set" in result.stderr
 
 
+def test_vyg_countdown_user_refresh_check_requires_store_command() -> None:
+    result = runner.invoke(
+        app,
+        [
+            "countdown",
+            "user-refresh-check",
+            "--client-id",
+            "Iv1.test",
+            "--refresh-token-env",
+            "VOYAGER_TEST_REFRESH_TOKEN",
+        ],
+        env={"VOYAGER_TEST_REFRESH_TOKEN": "old-refresh"},
+    )
+    assert result.exit_code == 1
+    assert "--store-refresh-token-command is required" in result.stderr
+
+
 def test_vyg_bridge_serve_help_lists_flags() -> None:
     result = runner.invoke(app, ["bridge", "serve", "--help"])
     assert result.exit_code == 0
