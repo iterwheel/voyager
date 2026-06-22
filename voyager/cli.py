@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+import click
 import typer
 import uvicorn
 
@@ -341,7 +342,7 @@ def user_refresh_check(
 
 def _store_refresh_token(command: str, refresh_token: str | None) -> None:
     if not refresh_token:
-        raise RuntimeError("GitHub response did not include a replacement refresh token")
+        raise click.ClickException("GitHub response did not include a replacement refresh token")
 
     import subprocess  # nosec B404
 
@@ -358,7 +359,7 @@ def _store_refresh_token(command: str, refresh_token: str | None) -> None:
         )
     except (OSError, subprocess.CalledProcessError) as exc:
         recovery_path = _write_refresh_token_recovery_file(refresh_token)
-        raise RuntimeError(
+        raise click.ClickException(
             f"Secret-store command failed; replacement refresh token was saved to {recovery_path}"
         ) from exc
 
