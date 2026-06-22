@@ -218,7 +218,10 @@ def user_device_code(
 
     from voyager.core.github_app_user_auth import exchange_device_code, request_device_code
 
-    _preflight_store_refresh_token_command(store_refresh_token_command)
+    try:
+        _preflight_store_refresh_token_command(store_refresh_token_command)
+    except click.ClickException as exc:
+        _exit_with_error(exc.message)
 
     async def _run() -> dict[str, Any]:
         response = await request_device_code(client_id)
@@ -306,7 +309,10 @@ def user_refresh_check(
     if not store_refresh_token_command:
         typer.echo("ERROR: --store-refresh-token-command is required", err=True)
         raise typer.Exit(code=1)
-    _preflight_store_refresh_token_command(store_refresh_token_command)
+    try:
+        _preflight_store_refresh_token_command(store_refresh_token_command)
+    except click.ClickException as exc:
+        _exit_with_error(exc.message)
 
     async def _run() -> dict[str, Any]:
         response = await refresh_user_access_token(client_id, refresh_token)
@@ -376,7 +382,10 @@ def _store_refresh_token(command: str, refresh_token: str | None) -> None:
 
 
 def _preflight_store_refresh_token_command(command: str) -> None:
-    _store_refresh_token_argv(command)
+    try:
+        _store_refresh_token_argv(command)
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 def _store_refresh_token_argv(command: str) -> list[str]:
