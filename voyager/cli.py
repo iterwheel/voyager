@@ -344,6 +344,8 @@ def _store_refresh_token(command: str, refresh_token: str | None) -> None:
     subprocess.run(  # nosec B603
         shlex.split(command),
         input=refresh_token,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         text=True,
         check=True,
     )
