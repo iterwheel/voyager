@@ -95,6 +95,41 @@ async def test_refresh_user_access_token_uses_refresh_grant() -> None:
 
 
 @pytest.mark.asyncio
+async def test_refresh_user_access_token_normalizes_http_status_errors() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/login/oauth/access_token"
+        return httpx.Response(
+            401,
+            request=request,
+            json={"message": "bad refresh token", "token": "old-refresh"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(RuntimeError) as exc_info:
+            await refresh_user_access_token("client-id", "old-refresh", client=client)
+
+    message = str(exc_info.value)
+    assert message == "GitHub refresh failed: HTTP 401"
+    assert "old-refresh" not in message
+    assert "bad refresh token" not in message
+
+
+@pytest.mark.asyncio
+async def test_refresh_user_access_token_normalizes_request_errors() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("could not connect with old-refresh", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(RuntimeError) as exc_info:
+            await refresh_user_access_token("client-id", "old-refresh", client=client)
+
+    message = str(exc_info.value)
+    assert message == "GitHub refresh failed: HTTP request error"
+    assert "old-refresh" not in message
+    assert "could not connect" not in message
+
+
+@pytest.mark.asyncio
 async def test_query_viewer_login_returns_actor_without_public_token() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["authorization"] == "Bearer ghu_access"
