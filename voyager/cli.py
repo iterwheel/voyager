@@ -196,25 +196,65 @@ def _echo_thread_capabilities(threads: list[dict[str, Any]]) -> None:
 @countdown_app.command("user-device-code")
 def user_device_code(
     client_id: str = typer.Option(..., "--client-id", help="GitHub App client ID."),
+    store_refresh_token_command: str = typer.Option(
+        ...,
+        "--store-refresh-token-command",
+        help=(
+            "Command that receives the first refresh token on stdin. "
+            "The command is split with shlex and is not run through a shell."
+        ),
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
     """Start a GitHub App user-to-server device flow without printing token material."""
     import asyncio
+    import time
 
-    from voyager.core.github_app_user_auth import request_device_code
+    from voyager.core.github_app_user_auth import exchange_device_code, request_device_code
 
-    response = asyncio.run(request_device_code(client_id))
-    public_result = response.to_public_dict()
+    async def _run() -> dict[str, Any]:
+        response = await request_device_code(client_id)
+        public_result = response.to_public_dict()
+        if json_output:
+            typer.echo(json.dumps(public_result, indent=2, sort_keys=True))
+        else:
+            typer.echo("Countdown GitHub App user authorization")
+            typer.echo(f"verification_uri: {public_result['verification_uri']}")
+            typer.echo(f"user_code: {public_result['user_code']}")
+            typer.echo(f"expires_in: {public_result['expires_in']}")
+            typer.echo(f"poll_interval: {public_result['interval']}")
+            typer.echo("device_code: [redacted]")
+
+        deadline = time.monotonic() + response.expires_in
+        interval = response.interval
+        while True:
+            try:
+                token_response = await exchange_device_code(client_id, response.device_code)
+                break
+            except RuntimeError as exc:
+                message = str(exc)
+                if "slow_down" in message:
+                    interval += 5
+                elif "authorization_pending" not in message:
+                    raise
+                if time.monotonic() + interval >= deadline:
+                    raise RuntimeError("GitHub device authorization expired") from exc
+                await asyncio.sleep(interval)
+
+        _store_refresh_token(store_refresh_token_command, token_response.refresh_token)
+        result = token_response.to_public_dict()
+        result["refresh_token_stored"] = bool(token_response.refresh_token)
+        return result
+
+    public_result = asyncio.run(_run())
     if json_output:
-        typer.echo(json.dumps(public_result, indent=2, sort_keys=True))
         return
 
-    typer.echo("Countdown GitHub App user authorization")
-    typer.echo(f"verification_uri: {public_result['verification_uri']}")
-    typer.echo(f"user_code: {public_result['user_code']}")
+    typer.echo(f"token_type: {public_result['token_type']}")
     typer.echo(f"expires_in: {public_result['expires_in']}")
-    typer.echo(f"poll_interval: {public_result['interval']}")
-    typer.echo("device_code: [redacted]")
+    typer.echo(f"refresh_token_present: {public_result['refresh_token_present']}")
+    typer.echo(f"refresh_token_expires_in: {public_result['refresh_token_expires_in']}")
+    typer.echo(f"refresh_token_stored: {public_result['refresh_token_stored']}")
 
 
 @countdown_app.command("user-refresh-check")
@@ -249,22 +289,14 @@ def user_refresh_check(
     if not refresh_token:
         typer.echo(f"ERROR: {refresh_token_env} is not set", err=True)
         raise typer.Exit(code=1)
+    if not store_refresh_token_command:
+        typer.echo("ERROR: --store-refresh-token-command is required", err=True)
+        raise typer.Exit(code=1)
 
     async def _run() -> dict[str, Any]:
         response = await refresh_user_access_token(client_id, refresh_token)
-        stored_replacement = False
-        if store_refresh_token_command and response.refresh_token:
-            import shlex
-            import subprocess  # nosec B404
-
-            # Operator-provided secret-store command: shlex-split argv, no shell.
-            subprocess.run(  # nosec B603
-                shlex.split(store_refresh_token_command),
-                input=response.refresh_token,
-                text=True,
-                check=True,
-            )
-            stored_replacement = True
+        _store_refresh_token(store_refresh_token_command, response.refresh_token)
+        stored_replacement = bool(response.refresh_token)
         redacted = "[" + "redacted" + "]"
         result = response.to_public_dict()
         result["replacement_refresh_token_must_be_stored"] = bool(response.refresh_token)
@@ -299,6 +331,22 @@ def user_refresh_check(
         typer.echo("viewer_login: [redacted]")
     typer.echo("access_token: [redacted]")
     typer.echo("refresh_token: [redacted]")
+
+
+def _store_refresh_token(command: str, refresh_token: str | None) -> None:
+    if not refresh_token:
+        raise RuntimeError("GitHub response did not include a replacement refresh token")
+
+    import shlex
+    import subprocess  # nosec B404
+
+    # Operator-provided secret-store command: shlex-split argv, no shell.
+    subprocess.run(  # nosec B603
+        shlex.split(command),
+        input=refresh_token,
+        text=True,
+        check=True,
+    )
 
 
 def main() -> None:
