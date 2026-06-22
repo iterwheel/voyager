@@ -220,11 +220,13 @@ repositories, manage secrets, deploy production, or merge code directly.
    `vyg countdown user-device-code` and `vyg countdown user-refresh-check` to
    collect safe token-lifetime and refresh metadata. Both commands require an
    operator-selected secret-store command for replacement refresh tokens, must
-   preflight that command before token rotation, and must keep store-failure
-   recovery file permissions at `0600`. They must not print access tokens,
-   refresh tokens, private PR numbers, or review-thread node IDs. If a later
-   user-to-server canary resolves a thread, record the actual `resolvedBy` actor
-   and require a follow-up CHG before production use.
+   preflight that command before token rotation, and must fail closed without
+   writing plaintext token material if storage fails after rotation. Expected
+   viewer checks may print only boolean match metadata. They must not print
+   access tokens, refresh tokens, maintainer usernames, private PR numbers, or
+   review-thread node IDs. If a later user-to-server canary resolves a thread,
+   record the actual `resolvedBy` actor and require a follow-up CHG before
+   production use.
 
 
 ## Examples
