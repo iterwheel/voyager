@@ -576,6 +576,65 @@ def test_vyg_countdown_user_device_code_request_failure_uses_safe_error_path(
     assert not token_path.exists()
 
 
+def test_vyg_countdown_user_device_code_exchange_failure_uses_safe_error_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    token_path = tmp_path / "refresh-token.txt"
+    store_command = (
+        f'{sys.executable} -c "import pathlib, sys; '
+        "pathlib.Path(sys.argv[1]).write_text(sys.stdin.read(), encoding='utf-8')\" "
+        f"{token_path}"
+    )
+
+    async def fake_request_device_code(client_id: str) -> DeviceCodeResponse:
+        assert client_id == "Iv1.test"
+        return DeviceCodeResponse(
+            device_code="secret-device",
+            user_code="ABCD-1234",
+            verification_uri="https://github.com/login/device",
+            expires_in=900,
+            interval=1,
+        )
+
+    async def fake_exchange_device_code(
+        client_id: str, device_code: str
+    ) -> UserAccessTokenResponse:
+        assert client_id == "Iv1.test"
+        assert device_code == "secret-device"
+        raise RuntimeError("GitHub device authorization not complete: HTTP 429")
+
+    async def fake_sleep(interval: int) -> None:
+        assert interval == 1
+
+    monkeypatch.setattr(
+        "voyager.core.github_app_user_auth.request_device_code", fake_request_device_code
+    )
+    monkeypatch.setattr(
+        "voyager.core.github_app_user_auth.exchange_device_code", fake_exchange_device_code
+    )
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+
+    result = runner.invoke(
+        app,
+        [
+            "countdown",
+            "user-device-code",
+            "--client-id",
+            "Iv1.test",
+            "--store-refresh-token-command",
+            store_command,
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "ERROR: GitHub device authorization not complete: HTTP 429" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert "secret-device" not in result.stderr
+    assert "secret-device" not in result.stdout
+    assert "device_code: [redacted]" in result.stdout
+    assert not token_path.exists()
+
+
 def test_vyg_bridge_serve_help_lists_flags() -> None:
     result = runner.invoke(app, ["bridge", "serve", "--help"])
     assert result.exit_code == 0
