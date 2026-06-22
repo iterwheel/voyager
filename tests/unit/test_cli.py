@@ -140,9 +140,29 @@ def test_vyg_countdown_user_refresh_check_preflights_store_command(
     )
 
     assert result.exit_code == 1
-    assert isinstance(result.exception, RuntimeError)
-    assert "secret-store command executable not found" in str(result.exception)
+    assert "ERROR: secret-store command executable not found" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert result.stdout == ""
     assert not refresh_called
+
+
+def test_vyg_countdown_user_device_code_preflight_uses_safe_error_path() -> None:
+    result = runner.invoke(
+        app,
+        [
+            "countdown",
+            "user-device-code",
+            "--client-id",
+            "Iv1.test",
+            "--store-refresh-token-command",
+            "voyager-missing-secret-store-command",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "ERROR: secret-store command executable not found" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert result.stdout == ""
 
 
 def test_store_refresh_token_writes_recovery_file_when_child_fails(
