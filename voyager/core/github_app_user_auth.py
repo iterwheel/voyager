@@ -58,12 +58,18 @@ async def request_device_code(
     owns_client = client is None
     http = client or httpx.AsyncClient(timeout=15)
     try:
-        response = await http.post(
-            f"{GITHUB_LOGIN}/device/code",
-            headers={"Accept": "application/json"},
-            data={"client_id": client_id},
-        )
-        response.raise_for_status()
+        try:
+            response = await http.post(
+                f"{GITHUB_LOGIN}/device/code",
+                headers={"Accept": "application/json"},
+                data={"client_id": client_id},
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code
+            raise RuntimeError(f"GitHub device authorization failed: HTTP {status_code}") from exc
+        except httpx.HTTPError as exc:
+            raise RuntimeError("GitHub device authorization failed: HTTP request error") from exc
         data = response.json()
         if data.get("error"):
             error = data.get("error")
@@ -90,16 +96,26 @@ async def exchange_device_code(
     owns_client = client is None
     http = client or httpx.AsyncClient(timeout=15)
     try:
-        response = await http.post(
-            f"{GITHUB_LOGIN}/oauth/access_token",
-            headers={"Accept": "application/json"},
-            data={
-                "client_id": client_id,
-                "device_code": device_code,
-                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-            },
-        )
-        response.raise_for_status()
+        try:
+            response = await http.post(
+                f"{GITHUB_LOGIN}/oauth/access_token",
+                headers={"Accept": "application/json"},
+                data={
+                    "client_id": client_id,
+                    "device_code": device_code,
+                    "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                },
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code
+            raise RuntimeError(
+                f"GitHub device authorization not complete: HTTP {status_code}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise RuntimeError(
+                "GitHub device authorization not complete: HTTP request error"
+            ) from exc
         data = response.json()
         if data.get("error"):
             error = data.get("error")
