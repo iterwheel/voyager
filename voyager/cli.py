@@ -319,8 +319,7 @@ def user_device_code(
     if expected_viewer_login_env:
         typer.echo(f"viewer_login_present: {public_result['viewer_login_present']}")
         typer.echo(
-            "viewer_login_matches_expected: "
-            f"{public_result['viewer_login_matches_expected']}"
+            f"viewer_login_matches_expected: {public_result['viewer_login_matches_expected']}"
         )
     typer.echo(f"refresh_token_stored: {public_result['refresh_token_stored']}")
 
@@ -420,8 +419,7 @@ def user_refresh_check(
         typer.echo(f"viewer_login_present: {public_result['viewer_login_present']}")
         if expected_viewer_login_env:
             typer.echo(
-                "viewer_login_matches_expected: "
-                f"{public_result['viewer_login_matches_expected']}"
+                f"viewer_login_matches_expected: {public_result['viewer_login_matches_expected']}"
             )
     typer.echo("access_token: [redacted]")
     typer.echo("refresh_token: [redacted]")
@@ -486,8 +484,6 @@ def _store_refresh_token_argv(command: str) -> list[str]:
     if not resolved:
         raise RuntimeError(f"secret-store command executable not found: {executable}")
     return [resolved, *argv[1:]]
-
-
 
 
 def main() -> None:
