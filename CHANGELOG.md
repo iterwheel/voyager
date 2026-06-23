@@ -8,6 +8,8 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+## [0.7.3] — 2026-06-23
+
 ### Added — Countdown refresh failure diagnostics ([#207](https://github.com/iterwheel/voyager/issues/207))
 
 - Countdown user refresh checks now include safe HTTP failure diagnostics for
@@ -756,7 +758,8 @@ auth, FastAPI webhook bridge, DeepSeek LLM adapter, rocket-factory
 pipeline state machine, SWM-1101 per-thread verdict pipeline. See
 `b2e4ca1` and prior history.
 
-[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.7.3...HEAD
+[0.7.3]: https://github.com/iterwheel/voyager/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/iterwheel/voyager/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/iterwheel/voyager/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/iterwheel/voyager/compare/v0.6.0...v0.7.0
