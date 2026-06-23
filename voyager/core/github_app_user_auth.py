@@ -164,14 +164,24 @@ async def refresh_user_access_token(
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            status_code = exc.response.status_code
-            raise RuntimeError(f"GitHub refresh failed: HTTP {status_code}") from exc
+            raise RuntimeError(
+                _refresh_error_message(
+                    exc.response,
+                    refresh_token_present=bool(refresh_token),
+                )
+            ) from exc
         except httpx.HTTPError as exc:
             raise RuntimeError("GitHub refresh failed: HTTP request error") from exc
         data = _response_json_object(response, "GitHub refresh failed: malformed response")
         if data.get("error"):
             error = data.get("error")
-            raise RuntimeError(f"GitHub refresh failed: {error}")
+            raise RuntimeError(
+                _refresh_error_message(
+                    response,
+                    refresh_token_present=bool(refresh_token),
+                    oauth_error=str(error),
+                )
+            )
         return _parse_user_access_token_response(
             data,
             "GitHub refresh failed: malformed response",
@@ -179,6 +189,36 @@ async def refresh_user_access_token(
     finally:
         if owns_client:
             await http.aclose()
+
+
+def _refresh_error_message(
+    response: httpx.Response,
+    *,
+    refresh_token_present: bool,
+    oauth_error: str | None = None,
+) -> str:
+    content_type = _safe_diagnostic_value(response.headers.get("content-type") or "missing")
+    request_id = response.headers.get("x-github-request-id")
+    diagnostics = [
+        f"HTTP {response.status_code}",
+        f"content_type={content_type}",
+        (
+            f"x_github_request_id={_safe_diagnostic_value(request_id)}"
+            if request_id
+            else "x_github_request_id_present=false"
+        ),
+        "client_secret_present=false",
+        "repository_id_present=false",
+        f"refresh_token_present={str(refresh_token_present).lower()}",
+    ]
+    if oauth_error:
+        diagnostics.append(f"oauth_error={_safe_diagnostic_value(oauth_error)}")
+    return "GitHub refresh failed: " + "; ".join(diagnostics)
+
+
+def _safe_diagnostic_value(value: str) -> str:
+    cleaned = "".join(ch if ch.isalnum() or ch in "._-+/" else "_" for ch in value.strip())
+    return cleaned[:120] or "missing"
 
 
 async def query_viewer_login(
