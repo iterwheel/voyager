@@ -238,16 +238,26 @@ async def run_review_thread_resolve_canary(
             )
             continue
 
-        result = await client.resolve_review_thread(app_slug, repository, thread.thread_id)
-        resolved_by = ((result or {}).get("resolvedBy") or {}).get("login")
-        operations.append(
-            ReviewThreadResolveOperation(
-                thread_id=thread.thread_id,
-                applied=True,
-                reason=None,
-                resolved_by=str(resolved_by) if resolved_by else None,
+        try:
+            result = await client.resolve_review_thread(app_slug, repository, thread.thread_id)
+        except RuntimeError as exc:
+            operations.append(
+                ReviewThreadResolveOperation(
+                    thread_id=thread.thread_id,
+                    applied=False,
+                    reason=str(exc),
+                )
             )
-        )
+        else:
+            resolved_by = ((result or {}).get("resolvedBy") or {}).get("login")
+            operations.append(
+                ReviewThreadResolveOperation(
+                    thread_id=thread.thread_id,
+                    applied=True,
+                    reason=None,
+                    resolved_by=str(resolved_by) if resolved_by else None,
+                )
+            )
 
     after = await query_review_thread_capabilities(
         client,
