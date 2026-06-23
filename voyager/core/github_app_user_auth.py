@@ -365,8 +365,9 @@ def _graphql_error_message(errors: Any) -> str:
 
 
 def _safe_graphql_error_message(value: str) -> str:
-    cleaned = _safe_diagnostic_value(value)
-    return re.sub(r"PRRT_[A-Za-z0-9._+/=-]+", "PRRT_redacted", cleaned)
+    redacted = re.sub(r"PRRT_[A-Za-z0-9._+/=-]+", "PRRT_redacted", value)
+    redacted = re.sub(r"(?<![A-Za-z0-9])MD[A-Za-z0-9+/=]{18,}", "NODEID_redacted", redacted)
+    return _safe_diagnostic_value(redacted)
 
 
 def _response_json_object(response: httpx.Response, error_message: str) -> dict[str, Any]:
