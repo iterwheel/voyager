@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 authors = [{ name = "Iterwheel" }]
 dependencies = [
     "click>=8.0",
-    "fastapi>=0.136,<0.137.2",
+    "fastapi>=0.136,<0.138.1",
     "cryptography>=48.0.1",
     "httpx>=0.28",
     "idna>=3.15",

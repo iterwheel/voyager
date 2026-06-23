@@ -8,6 +8,11 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+### Changed — Dependency maintenance ([#208](https://github.com/iterwheel/voyager/pull/208))
+
+- Allowed FastAPI 0.138.x by widening the supported FastAPI dependency range
+  while keeping the lower bound at 0.136.
+
 ## [0.7.3] — 2026-06-23
 
 ### Added — Countdown refresh failure diagnostics ([#207](https://github.com/iterwheel/voyager/issues/207))
