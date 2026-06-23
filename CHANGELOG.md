@@ -8,6 +8,14 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+### Added — Countdown refresh failure diagnostics ([#207](https://github.com/iterwheel/voyager/issues/207))
+
+- Countdown user refresh checks now include safe HTTP failure diagnostics for
+  GitHub refresh-token errors: response status, response content type, GitHub
+  request id when present, and request-shape booleans for client secret,
+  repository id, and refresh-token presence. Token values and response bodies
+  remain redacted.
+
 ## [0.7.2] — 2026-06-23
 
 ### Added — Countdown user token tooling ([#204](https://github.com/iterwheel/voyager/issues/204), [#205](https://github.com/iterwheel/voyager/pull/205))

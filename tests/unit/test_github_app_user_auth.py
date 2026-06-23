@@ -238,6 +238,10 @@ async def test_refresh_user_access_token_normalizes_http_status_errors() -> None
         return httpx.Response(
             401,
             request=request,
+            headers={
+                "content-type": "application/json; charset=utf-8",
+                "x-github-request-id": "ABC1:DEF2:345",
+            },
             json={"message": "bad refresh token", "token": "old-refresh"},
         )
 
@@ -246,9 +250,46 @@ async def test_refresh_user_access_token_normalizes_http_status_errors() -> None
             await refresh_user_access_token("client-id", "old-refresh", client=client)
 
     message = str(exc_info.value)
-    assert message == "GitHub refresh failed: HTTP 401"
+    assert message.startswith("GitHub refresh failed: HTTP 401")
+    assert "content_type=application/json__charset_utf-8" in message
+    assert "x_github_request_id=ABC1_DEF2_345" in message
+    assert "client_secret_present=false" in message
+    assert "repository_id_present=false" in message
+    assert "refresh_token_present=true" in message
     assert "old-refresh" not in message
     assert "bad refresh token" not in message
+
+
+@pytest.mark.asyncio
+async def test_refresh_user_access_token_diagnoses_oauth_json_errors() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/login/oauth/access_token"
+        return httpx.Response(
+            200,
+            request=request,
+            headers={
+                "content-type": "application/json; charset=utf-8",
+                "x-github-request-id": "ABC1:DEF2:346",
+            },
+            json={
+                "error": "incorrect_client_credentials",
+                "error_description": "old-refresh",
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(RuntimeError) as exc_info:
+            await refresh_user_access_token("client-id", "old-refresh", client=client)
+
+    message = str(exc_info.value)
+    assert message.startswith("GitHub refresh failed: HTTP 200")
+    assert "content_type=application/json__charset_utf-8" in message
+    assert "x_github_request_id=ABC1_DEF2_346" in message
+    assert "client_secret_present=false" in message
+    assert "repository_id_present=false" in message
+    assert "refresh_token_present=true" in message
+    assert "oauth_error=incorrect_client_credentials" in message
+    assert "old-refresh" not in message
 
 
 @pytest.mark.asyncio
