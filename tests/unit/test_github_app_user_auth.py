@@ -343,7 +343,8 @@ async def test_refresh_user_access_token_normalizes_missing_token_fields() -> No
 
 @pytest.mark.asyncio
 async def test_user_access_client_reports_sanitized_graphql_errors() -> None:
-    legacy_thread_id = "MDExOlB1bGxSZXF1ZXN0UmV2aWV3VGhyZWFkMTIzNDU2"
+    md_legacy_thread_id = "MDExOlB1bGxSZXF1ZXN0UmV2aWV3VGhyZWFkMTIzNDU2"
+    non_md_legacy_thread_id = "OTk6UHVsbFJlcXVlc3RSZXZpZXdUaHJlYWQxMjM0NTY="
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/graphql"
@@ -356,7 +357,8 @@ async def test_user_access_client_reports_sanitized_graphql_errors() -> None:
                     {
                         "type": "FORBIDDEN",
                         "message": (
-                            f"Resource not accessible by integration PRRT_secret {legacy_thread_id}"
+                            "Resource not accessible by integration PRRT_secret "
+                            f"{md_legacy_thread_id} {non_md_legacy_thread_id}"
                         ),
                     }
                 ],
@@ -376,11 +378,13 @@ async def test_user_access_client_reports_sanitized_graphql_errors() -> None:
     message = str(exc_info.value)
     assert "first_type=FORBIDDEN" in message
     assert (
-        "first_message=Resource_not_accessible_by_integration_PRRT_redacted_NODEID_redacted"
+        "first_message=Resource_not_accessible_by_integration_PRRT_redacted_"
+        "NODEID_redacted_NODEID_redacted"
     ) in message
     assert "secret-access" not in message
     assert "PRRT_secret" not in message
-    assert legacy_thread_id not in message
+    assert md_legacy_thread_id not in message
+    assert non_md_legacy_thread_id not in message
     assert "old-refresh" not in message
 
 

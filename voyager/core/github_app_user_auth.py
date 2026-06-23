@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -366,8 +368,28 @@ def _graphql_error_message(errors: Any) -> str:
 
 def _safe_graphql_error_message(value: str) -> str:
     redacted = re.sub(r"PRRT_[A-Za-z0-9._+/=-]+", "PRRT_redacted", value)
-    redacted = re.sub(r"(?<![A-Za-z0-9])MD[A-Za-z0-9+/=]{18,}", "NODEID_redacted", redacted)
+    redacted = re.sub(
+        r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{20,}={0,2}(?![A-Za-z0-9+/=])",
+        _redact_base64_node_id,
+        redacted,
+    )
     return _safe_diagnostic_value(redacted)
+
+
+def _redact_base64_node_id(match: re.Match[str]) -> str:
+    value = match.group(0)
+    padding = "=" * (-len(value) % 4)
+    try:
+        decoded = base64.b64decode(value + padding, validate=True)
+    except (binascii.Error, ValueError):
+        return value
+    try:
+        text = decoded.decode("utf-8")
+    except UnicodeDecodeError:
+        return value
+    if ":" not in text or any(ord(ch) < 32 or ord(ch) > 126 for ch in text):
+        return value
+    return "NODEID_redacted"
 
 
 def _response_json_object(response: httpx.Response, error_message: str) -> dict[str, Any]:
