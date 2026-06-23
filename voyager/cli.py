@@ -260,7 +260,12 @@ def user_review_thread_diagnostic(
         }
 
         if expected_viewer_login is not None:
-            viewer_login = await query_viewer_login(response.access_token)
+            try:
+                viewer_login = await query_viewer_login(response.access_token)
+            except RuntimeError:
+                _store_refresh_token(store_refresh_token_command, response.refresh_token)
+                result["replacement_refresh_token_stored"] = bool(response.refresh_token)
+                raise
             result["viewer_login_present"] = bool(viewer_login)
             result["viewer_login_matches_expected"] = _viewer_login_matches_expected(
                 viewer_login,

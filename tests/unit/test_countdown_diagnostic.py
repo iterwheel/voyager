@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 import pytest
 
 from voyager.core.countdown_diagnostic import (
     query_review_thread_capabilities,
     run_review_thread_resolve_canary,
 )
+from voyager.core.github_app import GitHubGraphQLError
 
 
 class _FakeGitHubClient:
@@ -16,7 +18,7 @@ class _FakeGitHubClient:
         *,
         viewer_can_resolve: bool,
         resolved_after_mutation: bool = False,
-        resolve_error: str | None = None,
+        resolve_error: BaseException | str | None = None,
     ) -> None:
         self.viewer_can_resolve = viewer_can_resolve
         self.resolved_after_mutation = resolved_after_mutation
@@ -66,6 +68,8 @@ class _FakeGitHubClient:
     ) -> dict[str, Any]:
         self.resolve_calls.append((app_slug, repository, thread_id))
         if self.resolve_error:
+            if isinstance(self.resolve_error, BaseException):
+                raise self.resolve_error
             raise RuntimeError(self.resolve_error)
         self.resolved_after_mutation = True
         return {"id": thread_id, "isResolved": True, "resolvedBy": {"login": app_slug + "[bot]"}}
@@ -161,5 +165,45 @@ async def test_resolve_canary_preserves_mutation_failure_and_requeries_after() -
         "GitHub GraphQL user-token request returned errors: "
         "first_type=FORBIDDEN; first_message=Resource_not_accessible_by_integration"
     )
+    assert report.after.threads[0].is_resolved is False
+    assert len(client.graphql_calls) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("resolve_error", "expected_reason"),
+    [
+        (
+            GitHubGraphQLError([{"type": "FORBIDDEN", "message": "raw thread id"}]),
+            "resolveReviewThread failed: GraphQLError first_type=FORBIDDEN",
+        ),
+        (
+            httpx.HTTPStatusError(
+                "forbidden",
+                request=httpx.Request("POST", "https://api.github.com/graphql"),
+                response=httpx.Response(403),
+            ),
+            "resolveReviewThread failed: HTTP 403",
+        ),
+    ],
+)
+async def test_resolve_canary_preserves_github_client_failures_and_requeries_after(
+    resolve_error: BaseException,
+    expected_reason: str,
+) -> None:
+    client = _FakeGitHubClient(viewer_can_resolve=True, resolve_error=resolve_error)
+
+    report = await run_review_thread_resolve_canary(
+        client,  # type: ignore[arg-type]
+        repository="iterwheel/voyager-sandbox",
+        pr=42,
+        thread_ids=["PRRT_123"],
+    )
+
+    assert client.resolve_calls == [
+        ("iterwheel-countdown", "iterwheel/voyager-sandbox", "PRRT_123")
+    ]
+    assert report.operations[0].applied is False
+    assert report.operations[0].reason == expected_reason
     assert report.after.threads[0].is_resolved is False
     assert len(client.graphql_calls) == 2
