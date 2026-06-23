@@ -186,6 +186,161 @@ def review_thread_diagnostic(
     _echo_thread_capabilities(public_result["threads"])
 
 
+@countdown_app.command("user-review-thread-diagnostic")
+def user_review_thread_diagnostic(
+    client_id: str = typer.Option(..., "--client-id", help="GitHub App client ID."),
+    repo: str = typer.Option(..., "--repo", help="GitHub repository (owner/name)."),
+    pr: int = typer.Option(..., "--pr", min=1, help="Pull request number."),
+    thread_ids: list[str] = typer.Option(
+        ...,
+        "--thread-id",
+        "-t",
+        help="PullRequestReviewThread node ID. Repeat for multiple threads.",
+    ),
+    refresh_token_env: str = typer.Option(
+        "VOYAGER_COUNTDOWN_REFRESH_TOKEN",
+        "--refresh-token-env",
+        help="Environment variable containing the current refresh token.",
+    ),
+    expected_viewer_login_env: str | None = typer.Option(
+        None,
+        "--expected-viewer-login-env",
+        help="Environment variable containing the expected GitHub login for actor proof.",
+    ),
+    store_refresh_token_command: str | None = typer.Option(
+        None,
+        "--store-refresh-token-command",
+        help=(
+            "Command that receives the replacement refresh token on stdin. "
+            "The command is split with shlex and is not run through a shell."
+        ),
+    ),
+    resolve: bool = typer.Option(
+        False,
+        "--resolve",
+        help="Run a controlled resolveReviewThread canary after capability checks.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Query or resolve review threads using a GitHub App user-to-server token."""
+    import asyncio
+
+    from voyager.core.countdown_diagnostic import (
+        ReviewThreadCapabilityReport,
+        ReviewThreadResolveCanaryReport,
+        query_review_thread_capabilities,
+        run_review_thread_resolve_canary,
+    )
+    from voyager.core.github_app_user_auth import (
+        GitHubUserAccessClient,
+        query_viewer_login,
+        refresh_user_access_token,
+    )
+
+    refresh_token = os.environ.get(refresh_token_env)
+    if not refresh_token:
+        typer.echo(f"ERROR: {refresh_token_env} is not set", err=True)
+        raise typer.Exit(code=1)
+    if not store_refresh_token_command:
+        typer.echo("ERROR: --store-refresh-token-command is required", err=True)
+        raise typer.Exit(code=1)
+    try:
+        _preflight_store_refresh_token_command(store_refresh_token_command)
+        expected_viewer_login = _expected_viewer_login_from_env(expected_viewer_login_env)
+    except click.ClickException as exc:
+        _exit_with_error(exc.message)
+
+    async def _run() -> dict[str, Any]:
+        response = await refresh_user_access_token(client_id, refresh_token)
+        result = {
+            "credential": response.to_public_dict(),
+            "replacement_refresh_token_must_be_stored": bool(response.refresh_token),
+            "replacement_refresh_token_stored": False,  # nosec B105
+            "viewer_login_present": False,
+        }
+
+        if expected_viewer_login is not None:
+            try:
+                viewer_login = await query_viewer_login(response.access_token)
+            except RuntimeError:
+                _store_refresh_token(store_refresh_token_command, response.refresh_token)
+                result["replacement_refresh_token_stored"] = bool(response.refresh_token)
+                raise
+            result["viewer_login_present"] = bool(viewer_login)
+            result["viewer_login_matches_expected"] = _viewer_login_matches_expected(
+                viewer_login,
+                expected_viewer_login,
+            )
+            if not result["viewer_login_matches_expected"]:
+                raise RuntimeError("GitHub viewer login did not match expected account")
+
+        _store_refresh_token(store_refresh_token_command, response.refresh_token)
+        result["replacement_refresh_token_stored"] = bool(response.refresh_token)
+
+        client = GitHubUserAccessClient(response.access_token)
+        try:
+            if resolve:
+                report: (
+                    ReviewThreadCapabilityReport | ReviewThreadResolveCanaryReport
+                ) = await run_review_thread_resolve_canary(
+                    client,  # type: ignore[arg-type]
+                    app_slug="github-app-user",
+                    repository=repo,
+                    pr=pr,
+                    thread_ids=thread_ids,
+                )
+            else:
+                report = await query_review_thread_capabilities(
+                    client,  # type: ignore[arg-type]
+                    app_slug="github-app-user",
+                    repository=repo,
+                    pr=pr,
+                    thread_ids=thread_ids,
+                )
+        finally:
+            await client.aclose()
+
+        public_report = _redact_user_review_thread_result(report.to_public_dict())
+        result["viewer_login_present"] = bool(
+            result["viewer_login_present"]
+            or public_report.get("actor_login_present")
+            or (public_report.get("before") or {}).get("actor_login_present")
+        )
+        result["diagnostic"] = public_report
+        return result
+
+    try:
+        public_result = asyncio.run(_run())
+    except click.ClickException as exc:
+        _exit_with_error(exc.message)
+    except RuntimeError as exc:
+        _exit_with_error(str(exc))
+
+    if json_output:
+        typer.echo(json.dumps(public_result, indent=2, sort_keys=True))
+        return
+
+    typer.echo("Countdown GitHub App user review-thread diagnostic")
+    credential = public_result["credential"]
+    typer.echo(f"token_type: {credential['token_type']}")
+    typer.echo(f"expires_in: {credential['expires_in']}")
+    typer.echo(f"refresh_token_present: {credential['refresh_token_present']}")
+    typer.echo(f"refresh_token_expires_in: {credential['refresh_token_expires_in']}")
+    typer.echo(
+        "replacement_refresh_token_must_be_stored: "
+        f"{public_result['replacement_refresh_token_must_be_stored']}"
+    )
+    typer.echo(
+        f"replacement_refresh_token_stored: {public_result['replacement_refresh_token_stored']}"
+    )
+    typer.echo(f"viewer_login_present: {public_result['viewer_login_present']}")
+    if expected_viewer_login_env:
+        typer.echo(
+            f"viewer_login_matches_expected: {public_result['viewer_login_matches_expected']}"
+        )
+    typer.echo(json.dumps(public_result["diagnostic"], indent=2, sort_keys=True))
+
+
 def _exit_with_error(message: str) -> NoReturn:
     typer.echo(f"ERROR: {message}", err=True)
     raise typer.Exit(code=1)
@@ -212,6 +367,67 @@ def _echo_thread_capabilities(threads: list[dict[str, Any]]) -> None:
             f"viewerCanResolve={thread['viewerCanResolve']} "
             f"viewerCanReply={thread['viewerCanReply']} error={thread['error']}"
         )
+
+
+def _redact_user_review_thread_result(result: dict[str, Any]) -> dict[str, Any]:
+    if "before" in result and "after" in result:
+        return {
+            "before": _redact_user_capability_report(result["before"]),
+            "operations": [
+                _redact_user_resolve_operation(index, operation)
+                for index, operation in enumerate(result.get("operations") or [])
+            ],
+            "after": _redact_user_capability_report(result["after"]),
+        }
+    return _redact_user_capability_report(result)
+
+
+def _redact_user_capability_report(report: dict[str, Any]) -> dict[str, Any]:
+    report_repo = report.get("repo")
+    report_pr = report.get("pr")
+    return {
+        "actor_login_present": bool(report.get("actor_login")),
+        "repo_present": bool(report_repo),
+        "pr_present": report_pr is not None,
+        "threads": [
+            _redact_user_thread_capability(index, thread, report_repo, report_pr)
+            for index, thread in enumerate(report.get("threads") or [])
+        ],
+    }
+
+
+def _redact_user_thread_capability(
+    index: int,
+    thread: dict[str, Any],
+    report_repo: Any,
+    report_pr: Any,
+) -> dict[str, Any]:
+    thread_repo = thread.get("repo")
+    thread_pr = thread.get("pr")
+    return {
+        "index": index,
+        "thread_id_present": bool(thread.get("thread_id")),
+        "type": thread.get("type"),
+        "repo_present": bool(thread_repo),
+        "repo_matches_report": bool(report_repo and thread_repo == report_repo),
+        "pr_present": thread_pr is not None,
+        "pr_matches_report": bool(report_pr is not None and thread_pr == report_pr),
+        "isResolved": thread.get("isResolved"),
+        "isOutdated": thread.get("isOutdated"),
+        "viewerCanResolve": thread.get("viewerCanResolve"),
+        "viewerCanReply": thread.get("viewerCanReply"),
+        "error": thread.get("error"),
+    }
+
+
+def _redact_user_resolve_operation(index: int, operation: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "index": index,
+        "thread_id_present": bool(operation.get("thread_id")),
+        "applied": operation.get("applied"),
+        "reason": operation.get("reason"),
+        "resolvedBy_present": bool(operation.get("resolvedBy")),
+    }
 
 
 @countdown_app.command("user-device-code")

@@ -51,6 +51,7 @@ def test_vyg_countdown_help_shows_review_thread_diagnostic() -> None:
     result = runner.invoke(app, ["countdown", "--help"])
     assert result.exit_code == 0
     assert "review-thread-diagnostic" in result.stdout
+    assert "user-review-thread-diagnostic" in result.stdout
     assert "user-device-code" in result.stdout
     assert "user-refresh-check" in result.stdout
 
@@ -618,6 +619,290 @@ def test_vyg_countdown_user_refresh_check_expected_viewer_requires_env(
     assert "ERROR: VOYAGER_EXPECTED_VIEWER is not set" in result.stderr
     assert not refresh_called
     assert not token_path.exists()
+
+
+def test_vyg_countdown_user_review_thread_diagnostic_redacts_sensitive_output(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    token_path = tmp_path / "refresh-token.txt"
+    store_command = (
+        f'{sys.executable} -c "import pathlib, sys; '
+        "pathlib.Path(sys.argv[1]).write_text(sys.stdin.read(), encoding='utf-8')\" "
+        f"{token_path}"
+    )
+
+    async def fake_refresh_user_access_token(
+        client_id: str, refresh_token: str
+    ) -> UserAccessTokenResponse:
+        assert client_id == "Iv1.test"
+        assert refresh_token == "old-refresh"
+        return UserAccessTokenResponse(
+            access_token="secret-access",
+            token_type="bearer",
+            expires_in=28800,
+            refresh_token="secret-refresh",
+            refresh_token_expires_in=15897600,
+        )
+
+    async def fake_query_viewer_login(access_token: str) -> str:
+        assert access_token == "secret-access"
+        return "Maintainer"
+
+    class FakeUserAccessClient:
+        def __init__(self, access_token: str) -> None:
+            assert access_token == "secret-access"
+
+        async def aclose(self) -> None:
+            return None
+
+    class FakeCapabilityReport:
+        def to_public_dict(self) -> dict[str, Any]:
+            return {
+                "app_slug": "github-app-user",
+                "actor_login": "Maintainer",
+                "repo": "iterwheel/voyager-sandbox",
+                "pr": 69,
+                "threads": [
+                    {
+                        "thread_id": "PRRT_secret",
+                        "type": "PullRequestReviewThread",
+                        "repo": "iterwheel/voyager-sandbox",
+                        "pr": 69,
+                        "isResolved": False,
+                        "isOutdated": False,
+                        "viewerCanResolve": True,
+                        "viewerCanReply": True,
+                        "error": None,
+                    }
+                ],
+            }
+
+    async def fake_query_review_thread_capabilities(
+        client: Any,
+        *,
+        app_slug: str,
+        repository: str,
+        pr: int,
+        thread_ids: list[str],
+    ) -> FakeCapabilityReport:
+        assert isinstance(client, FakeUserAccessClient)
+        assert app_slug == "github-app-user"
+        assert repository == "iterwheel/voyager-sandbox"
+        assert pr == 69
+        assert thread_ids == ["PRRT_secret"]
+        return FakeCapabilityReport()
+
+    monkeypatch.setattr(
+        "voyager.core.github_app_user_auth.refresh_user_access_token",
+        fake_refresh_user_access_token,
+    )
+    monkeypatch.setattr(
+        "voyager.core.github_app_user_auth.query_viewer_login",
+        fake_query_viewer_login,
+    )
+    monkeypatch.setattr(
+        "voyager.core.github_app_user_auth.GitHubUserAccessClient",
+        FakeUserAccessClient,
+    )
+    monkeypatch.setattr(
+        "voyager.core.countdown_diagnostic.query_review_thread_capabilities",
+        fake_query_review_thread_capabilities,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "countdown",
+            "user-review-thread-diagnostic",
+            "--client-id",
+            "Iv1.test",
+            "--repo",
+            "iterwheel/voyager-sandbox",
+            "--pr",
+            "69",
+            "--thread-id",
+            "PRRT_secret",
+            "--refresh-token-env",
+            "VOYAGER_TEST_REFRESH_TOKEN",
+            "--store-refresh-token-command",
+            store_command,
+            "--expected-viewer-login-env",
+            "VOYAGER_EXPECTED_VIEWER",
+            "--json",
+        ],
+        env={
+            "VOYAGER_TEST_REFRESH_TOKEN": "old-refresh",
+            "VOYAGER_EXPECTED_VIEWER": "maintainer",
+        },
+    )
+
+    assert result.exit_code == 0
+    assert "secret-access" not in result.stdout
+    assert "secret-refresh" not in result.stdout
+    assert "Maintainer" not in result.stdout
+    assert "maintainer" not in result.stdout
+    assert "PRRT_secret" not in result.stdout
+    public_result = json.loads(result.stdout)
+    assert public_result["viewer_login_present"] is True
+    assert public_result["viewer_login_matches_expected"] is True
+    assert public_result["replacement_refresh_token_stored"] is True
+    assert public_result["diagnostic"]["actor_login_present"] is True
+    assert public_result["diagnostic"]["repo_present"] is True
+    assert public_result["diagnostic"]["pr_present"] is True
+    assert "repo" not in public_result["diagnostic"]
+    assert "pr" not in public_result["diagnostic"]
+    thread = public_result["diagnostic"]["threads"][0]
+    assert thread["thread_id_present"] is True
+    assert thread["repo_present"] is True
+    assert thread["repo_matches_report"] is True
+    assert thread["pr_present"] is True
+    assert thread["pr_matches_report"] is True
+    assert "repo" not in thread
+    assert "pr" not in thread
+    assert thread["viewerCanResolve"] is True
+    assert token_path.read_text(encoding="utf-8") == "secret-refresh"
+
+
+def test_vyg_countdown_user_review_thread_diagnostic_viewer_mismatch_does_not_store(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    token_path = tmp_path / "refresh-token.txt"
+    store_command = (
+        f'{sys.executable} -c "import pathlib, sys; '
+        "pathlib.Path(sys.argv[1]).write_text(sys.stdin.read(), encoding='utf-8')\" "
+        f"{token_path}"
+    )
+
+    async def fake_refresh_user_access_token(
+        client_id: str, refresh_token: str
+    ) -> UserAccessTokenResponse:
+        assert client_id == "Iv1.test"
+        assert refresh_token == "old-refresh"
+        return UserAccessTokenResponse(
+            access_token="secret-access",
+            token_type="bearer",
+            expires_in=28800,
+            refresh_token="secret-refresh",
+            refresh_token_expires_in=15897600,
+        )
+
+    async def fake_query_viewer_login(access_token: str) -> str:
+        assert access_token == "secret-access"
+        return "other-user"
+
+    monkeypatch.setattr(
+        "voyager.core.github_app_user_auth.refresh_user_access_token",
+        fake_refresh_user_access_token,
+    )
+    monkeypatch.setattr(
+        "voyager.core.github_app_user_auth.query_viewer_login",
+        fake_query_viewer_login,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "countdown",
+            "user-review-thread-diagnostic",
+            "--client-id",
+            "Iv1.test",
+            "--repo",
+            "iterwheel/voyager-sandbox",
+            "--pr",
+            "69",
+            "--thread-id",
+            "PRRT_secret",
+            "--refresh-token-env",
+            "VOYAGER_TEST_REFRESH_TOKEN",
+            "--store-refresh-token-command",
+            store_command,
+            "--expected-viewer-login-env",
+            "VOYAGER_EXPECTED_VIEWER",
+            "--json",
+        ],
+        env={
+            "VOYAGER_TEST_REFRESH_TOKEN": "old-refresh",
+            "VOYAGER_EXPECTED_VIEWER": "maintainer",
+        },
+    )
+
+    assert result.exit_code == 1
+    assert "ERROR: GitHub viewer login did not match expected account" in result.stderr
+    assert "other-user" not in result.stderr
+    assert "maintainer" not in result.stderr
+    assert "secret-access" not in result.stderr
+    assert "secret-refresh" not in result.stderr
+    assert not token_path.exists()
+
+
+def test_vyg_countdown_user_review_thread_diagnostic_viewer_query_failure_stores_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    token_path = tmp_path / "refresh-token.txt"
+    store_command = (
+        f'{sys.executable} -c "import pathlib, sys; '
+        "pathlib.Path(sys.argv[1]).write_text(sys.stdin.read(), encoding='utf-8')\" "
+        f"{token_path}"
+    )
+
+    async def fake_refresh_user_access_token(
+        client_id: str, refresh_token: str
+    ) -> UserAccessTokenResponse:
+        assert client_id == "Iv1.test"
+        assert refresh_token == "old-refresh"
+        return UserAccessTokenResponse(
+            access_token="secret-access",
+            token_type="bearer",
+            expires_in=28800,
+            refresh_token="secret-refresh",
+            refresh_token_expires_in=15897600,
+        )
+
+    async def fake_query_viewer_login(access_token: str) -> str:
+        assert access_token == "secret-access"
+        raise RuntimeError("GitHub GraphQL viewer query failed: HTTP request error")
+
+    monkeypatch.setattr(
+        "voyager.core.github_app_user_auth.refresh_user_access_token",
+        fake_refresh_user_access_token,
+    )
+    monkeypatch.setattr(
+        "voyager.core.github_app_user_auth.query_viewer_login",
+        fake_query_viewer_login,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "countdown",
+            "user-review-thread-diagnostic",
+            "--client-id",
+            "Iv1.test",
+            "--repo",
+            "iterwheel/voyager-sandbox",
+            "--pr",
+            "69",
+            "--thread-id",
+            "PRRT_secret",
+            "--refresh-token-env",
+            "VOYAGER_TEST_REFRESH_TOKEN",
+            "--store-refresh-token-command",
+            store_command,
+            "--expected-viewer-login-env",
+            "VOYAGER_EXPECTED_VIEWER",
+            "--json",
+        ],
+        env={
+            "VOYAGER_TEST_REFRESH_TOKEN": "old-refresh",
+            "VOYAGER_EXPECTED_VIEWER": "maintainer",
+        },
+    )
+
+    assert result.exit_code == 1
+    assert "ERROR: GitHub GraphQL viewer query failed: HTTP request error" in result.stderr
+    assert "secret-access" not in result.stderr
+    assert "secret-refresh" not in result.stderr
+    assert token_path.read_text(encoding="utf-8") == "secret-refresh"
 
 
 def test_vyg_countdown_user_device_code_json_emits_completion_event(

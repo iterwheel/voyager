@@ -3,7 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from voyager.core.github_app import GitHubAppClient
+import httpx
+
+from voyager.core.github_app import GitHubAppClient, GitHubGraphQLError
 
 COUNTDOWN_AGENT_SLUG = "iterwheel-countdown"
 
@@ -238,16 +240,26 @@ async def run_review_thread_resolve_canary(
             )
             continue
 
-        result = await client.resolve_review_thread(app_slug, repository, thread.thread_id)
-        resolved_by = ((result or {}).get("resolvedBy") or {}).get("login")
-        operations.append(
-            ReviewThreadResolveOperation(
-                thread_id=thread.thread_id,
-                applied=True,
-                reason=None,
-                resolved_by=str(resolved_by) if resolved_by else None,
+        try:
+            result = await client.resolve_review_thread(app_slug, repository, thread.thread_id)
+        except (GitHubGraphQLError, httpx.HTTPStatusError, RuntimeError) as exc:
+            operations.append(
+                ReviewThreadResolveOperation(
+                    thread_id=thread.thread_id,
+                    applied=False,
+                    reason=_resolve_failure_reason(exc),
+                )
             )
-        )
+        else:
+            resolved_by = ((result or {}).get("resolvedBy") or {}).get("login")
+            operations.append(
+                ReviewThreadResolveOperation(
+                    thread_id=thread.thread_id,
+                    applied=True,
+                    reason=None,
+                    resolved_by=str(resolved_by) if resolved_by else None,
+                )
+            )
 
     after = await query_review_thread_capabilities(
         client,
@@ -261,3 +273,13 @@ async def run_review_thread_resolve_canary(
         operations=tuple(operations),
         after=after,
     )
+
+
+def _resolve_failure_reason(exc: BaseException) -> str:
+    if isinstance(exc, GitHubGraphQLError):
+        first = exc.errors[0] if exc.errors else {}
+        first_type = str(first.get("type") or "unknown")
+        return f"resolveReviewThread failed: GraphQLError first_type={first_type}"
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
+        return f"resolveReviewThread failed: HTTP {exc.response.status_code}"
+    return str(exc)

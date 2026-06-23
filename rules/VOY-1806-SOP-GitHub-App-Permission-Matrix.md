@@ -228,6 +228,15 @@ repositories, manage secrets, deploy production, or merge code directly.
    record the actual `resolvedBy` actor and require a follow-up CHG before
    production use.
 
+   The 2026-06-23 user-to-server canary did not resolve a thread. The route
+   could query a sandbox `PullRequestReviewThread` and saw
+   `viewerCanResolve=true`, but GitHub rejected `resolveReviewThread` with
+   GraphQL `FORBIDDEN` / `Resource not accessible by integration`. This means
+   `viewerCanResolve=true` is necessary but not sufficient for GitHub App
+   user-to-server resolver use. Do not route production review-thread closure to
+   user-to-server credentials unless a later canary records
+   `operation_applied=true` and `isResolved_after=true`.
+
 
 ## Examples
 
