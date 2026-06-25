@@ -259,7 +259,10 @@ def review_thread_diagnostic(
             if app_baseline_client is not None:
                 await app_baseline_client.aclose()
 
-    result = asyncio.run(_run())
+    try:
+        result = asyncio.run(_run())
+    except RuntimeError as exc:
+        _exit_with_error(str(exc))
     public_result: dict[str, Any] = result.to_public_dict()
     if json_output:
         typer.echo(json.dumps(public_result, indent=2, sort_keys=True))

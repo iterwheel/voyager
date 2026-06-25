@@ -82,18 +82,36 @@ class GitHubTokenReviewThreadClient:
         variables: dict[str, Any],
     ) -> dict[str, Any]:
         del app_slug, repository
-        response = await self._client.post(
-            f"{GITHUB_API}/graphql",
-            headers={
-                "Accept": "application/vnd.github+json",
-                "Authorization": f"Bearer {self._token}",
-                "X-GitHub-Api-Version": GITHUB_API_VERSION,
-                "User-Agent": "voyager-countdown-dedicated-pat-canary",
-            },
-            json={"query": query, "variables": variables},
-        )
-        response.raise_for_status()
-        payload = response.json()
+        try:
+            response = await self._client.post(
+                f"{GITHUB_API}/graphql",
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "Authorization": f"Bearer {self._token}",
+                    "X-GitHub-Api-Version": GITHUB_API_VERSION,
+                    "User-Agent": "voyager-countdown-dedicated-pat-canary",
+                },
+                json={"query": query, "variables": variables},
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code
+            raise RuntimeError(
+                f"GitHub GraphQL dedicated PAT request failed: HTTP {status_code}"
+            ) from None
+        except httpx.HTTPError:
+            raise RuntimeError(
+                "GitHub GraphQL dedicated PAT request failed: HTTP request error"
+            ) from None
+
+        try:
+            payload = response.json()
+        except ValueError:
+            raise RuntimeError(
+                "GitHub GraphQL dedicated PAT request failed: malformed response"
+            ) from None
+        if not isinstance(payload, dict):
+            raise RuntimeError("GitHub GraphQL dedicated PAT request failed: malformed response")
         errors = payload.get("errors") or []
         if errors:
             raise GitHubGraphQLError(errors)

@@ -328,3 +328,92 @@ async def test_token_client_queries_capabilities_without_printing_token() -> Non
     assert report.app_slug == DEDICATED_PAT_FALLBACK_SLUG
     assert report.threads[0].viewer_can_resolve is True
     assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_token_client_normalizes_http_status_errors_without_token() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401,
+            json={"message": "bad token", "token": "secret-pat"},
+            request=request,
+        )
+
+    client = GitHubTokenReviewThreadClient("secret-pat")
+    await client._client.aclose()
+    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(RuntimeError) as exc_info:
+            await query_review_thread_capabilities(
+                client,  # type: ignore[arg-type]
+                app_slug=DEDICATED_PAT_FALLBACK_SLUG,
+                repository="iterwheel/voyager-sandbox",
+                pr=42,
+                thread_ids=["PRRT_private"],
+            )
+    finally:
+        await client.aclose()
+
+    message = str(exc_info.value)
+    assert message == "GitHub GraphQL dedicated PAT request failed: HTTP 401"
+    assert "secret-pat" not in message
+    assert "bad token" not in message
+    assert exc_info.value.__suppress_context__ is True
+
+
+@pytest.mark.asyncio
+async def test_token_client_normalizes_request_errors_without_token() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("could not connect with secret-pat", request=request)
+
+    client = GitHubTokenReviewThreadClient("secret-pat")
+    await client._client.aclose()
+    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(RuntimeError) as exc_info:
+            await query_review_thread_capabilities(
+                client,  # type: ignore[arg-type]
+                app_slug=DEDICATED_PAT_FALLBACK_SLUG,
+                repository="iterwheel/voyager-sandbox",
+                pr=42,
+                thread_ids=["PRRT_private"],
+            )
+    finally:
+        await client.aclose()
+
+    message = str(exc_info.value)
+    assert message == "GitHub GraphQL dedicated PAT request failed: HTTP request error"
+    assert "secret-pat" not in message
+    assert "could not connect" not in message
+    assert exc_info.value.__suppress_context__ is True
+
+
+@pytest.mark.asyncio
+async def test_token_client_normalizes_malformed_response_without_token() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=b"not-json secret-pat",
+            request=request,
+        )
+
+    client = GitHubTokenReviewThreadClient("secret-pat")
+    await client._client.aclose()
+    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(RuntimeError) as exc_info:
+            await query_review_thread_capabilities(
+                client,  # type: ignore[arg-type]
+                app_slug=DEDICATED_PAT_FALLBACK_SLUG,
+                repository="iterwheel/voyager-sandbox",
+                pr=42,
+                thread_ids=["PRRT_private"],
+            )
+    finally:
+        await client.aclose()
+
+    message = str(exc_info.value)
+    assert message == "GitHub GraphQL dedicated PAT request failed: malformed response"
+    assert "secret-pat" not in message
+    assert "not-json" not in message
+    assert exc_info.value.__suppress_context__ is True

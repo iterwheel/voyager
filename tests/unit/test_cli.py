@@ -168,6 +168,45 @@ def test_vyg_countdown_review_thread_diagnostic_empty_pat_command_errors(
     assert "--pat-token-command must not be empty" in result.stderr
 
 
+def test_vyg_countdown_review_thread_diagnostic_pat_query_failure_uses_safe_error_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_query_review_thread_capabilities(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("GitHub GraphQL dedicated PAT request failed: HTTP 401")
+
+    monkeypatch.setattr(
+        "voyager.core.countdown_diagnostic.query_review_thread_capabilities",
+        fake_query_review_thread_capabilities,
+    )
+    monkeypatch.setattr("voyager.cli._read_pat_token", lambda command: "secret-pat")
+    monkeypatch.setattr(
+        "voyager.core.config.load_config",
+        lambda config=None: (_ for _ in ()).throw(AssertionError("config should not load")),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "countdown",
+            "review-thread-diagnostic",
+            "--repo",
+            "iterwheel/voyager-sandbox",
+            "--pr",
+            "42",
+            "--thread-id",
+            "PRRT_private",
+            "--pat-token-command",
+            "fake-token-command",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "ERROR: GitHub GraphQL dedicated PAT request failed: HTTP 401" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert "secret-pat" not in result.stderr
+    assert result.stdout == ""
+
+
 def test_vyg_countdown_review_thread_diagnostic_pat_resolve_requires_app_baseline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
