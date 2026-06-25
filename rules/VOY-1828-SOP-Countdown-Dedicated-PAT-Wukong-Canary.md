@@ -220,9 +220,14 @@ uv run vyg countdown review-thread-diagnostic \
   --pr "$VOYAGER_CANARY_PR" \
   --thread-id "$VOYAGER_CANARY_THREAD_ID" \
   --pat-token-command "security find-generic-password -a ${VOYAGER_PAT_ACCOUNT:?} -s voyager/countdown-dedicated-pat -w" \
+  --pat-expected-login-env VOYAGER_PAT_ACCOUNT \
   --resolve \
   --json
 ```
+
+The expected-login env is private operator state. It lets the CLI prove the
+PAT viewer matches the dedicated machine user before running the mutation,
+while keeping the exact login out of public evidence.
 
 Expected result:
 
