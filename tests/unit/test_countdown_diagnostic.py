@@ -19,10 +19,12 @@ class _FakeGitHubClient:
         self,
         *,
         viewer_can_resolve: bool,
+        is_outdated: bool | None = False,
         resolved_after_mutation: bool = False,
         resolve_error: BaseException | str | None = None,
     ) -> None:
         self.viewer_can_resolve = viewer_can_resolve
+        self.is_outdated = is_outdated
         self.resolved_after_mutation = resolved_after_mutation
         self.resolve_error = resolve_error
         self.resolve_calls: list[tuple[str, str, str]] = []
@@ -51,7 +53,7 @@ class _FakeGitHubClient:
                     "__typename": "PullRequestReviewThread",
                     "id": variables["threadIds"][0],
                     "isResolved": self.resolved_after_mutation,
-                    "isOutdated": False,
+                    "isOutdated": self.is_outdated,
                     "viewerCanResolve": self.viewer_can_resolve,
                     "viewerCanReply": True,
                     "pullRequest": {
@@ -119,6 +121,22 @@ async def test_resolve_canary_skips_when_countdown_cannot_resolve() -> None:
     assert report.operations[0].applied is False
     assert report.operations[0].reason == "viewerCanResolve is false"
     assert report.after.threads[0].is_resolved is False
+
+
+@pytest.mark.asyncio
+async def test_resolve_canary_skips_when_outdated_state_is_unknown() -> None:
+    client = _FakeGitHubClient(viewer_can_resolve=True, is_outdated=None)
+
+    report = await run_review_thread_resolve_canary(
+        client,  # type: ignore[arg-type]
+        repository="iterwheel/voyager-sandbox",
+        pr=42,
+        thread_ids=["PRRT_123"],
+    )
+
+    assert client.resolve_calls == []
+    assert report.operations[0].applied is False
+    assert report.operations[0].reason == "thread_is_outdated_or_unknown"
 
 
 @pytest.mark.asyncio

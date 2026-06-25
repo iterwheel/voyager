@@ -299,6 +299,8 @@ def _skip_reason(
         return "thread_does_not_belong_to_target_pr"
     if thread.is_resolved is True:
         return "already_resolved"
+    if thread.is_outdated is not False:
+        return "thread_is_outdated_or_unknown"
     if thread.viewer_can_resolve is not True:
         return "viewerCanResolve is false"
     return None

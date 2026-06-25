@@ -150,8 +150,15 @@ def review_thread_diagnostic(
         _exit_with_error(exc.message)
 
     client: GitHubAppClient | GitHubTokenReviewThreadClient
+    app_baseline_client: GitHubAppClient | None = None
     diagnostic_slug = app_slug
     if pat_token is not None:
+        if resolve:
+            cfg = load_config(config)
+            if app_slug not in cfg.apps:
+                typer.echo(f"ERROR: app {app_slug!r} is not configured", err=True)
+                raise typer.Exit(code=1)
+            app_baseline_client = GitHubAppClient(cfg.apps)
         client = GitHubTokenReviewThreadClient(pat_token)
         diagnostic_slug = DEDICATED_PAT_FALLBACK_SLUG
     else:
@@ -164,6 +171,19 @@ def review_thread_diagnostic(
     async def _run() -> ReviewThreadCapabilityReport | ReviewThreadResolveCanaryReport:
         try:
             if resolve:
+                if app_baseline_client is not None:
+                    app_baseline = await query_review_thread_capabilities(
+                        app_baseline_client,
+                        app_slug=app_slug,
+                        repository=repo,
+                        pr=pr,
+                        thread_ids=thread_ids,
+                    )
+                    _validate_pat_resolve_app_baseline(
+                        app_baseline,
+                        repository=repo,
+                        pr=pr,
+                    )
                 return await run_review_thread_resolve_canary(
                     client,
                     app_slug=diagnostic_slug,
@@ -180,6 +200,8 @@ def review_thread_diagnostic(
             )
         finally:
             await client.aclose()
+            if app_baseline_client is not None:
+                await app_baseline_client.aclose()
 
     result = asyncio.run(_run())
     public_result: dict[str, Any] = result.to_public_dict()
@@ -753,6 +775,41 @@ def _read_pat_token(command: str) -> str:
     if not token:
         raise click.ClickException("PAT token command did not produce a token")
     return token
+
+
+def _validate_pat_resolve_app_baseline(
+    report: Any,
+    *,
+    repository: str,
+    pr: int,
+) -> None:
+    for thread in report.threads:
+        if thread.error:
+            raise click.ClickException(
+                f"Countdown App baseline failed before PAT resolve: {thread.error}"
+            )
+        if thread.repository != repository or thread.pr != pr:
+            raise click.ClickException(
+                "Countdown App baseline thread does not belong to target PR; "
+                "refusing PAT fallback resolve"
+            )
+        if thread.is_resolved is not False:
+            raise click.ClickException(
+                "Countdown App baseline thread is not unresolved; refusing PAT fallback resolve"
+            )
+        if thread.is_outdated is not False:
+            raise click.ClickException(
+                "Countdown App baseline thread is outdated or unknown; refusing PAT fallback resolve"
+            )
+        if thread.viewer_can_reply is not True:
+            raise click.ClickException(
+                "Countdown App baseline viewerCanReply is not true; refusing PAT fallback resolve"
+            )
+        if thread.viewer_can_resolve is not False:
+            raise click.ClickException(
+                "Countdown App baseline viewerCanResolve is not false; "
+                "refusing PAT fallback resolve"
+            )
 
 
 def _pat_token_command_argv(command: str) -> list[str]:
