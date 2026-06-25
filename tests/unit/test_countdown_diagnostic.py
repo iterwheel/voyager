@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import httpx
 import pytest
 
 from voyager.core.countdown_diagnostic import (
+    DEDICATED_PAT_FALLBACK_PUBLIC_ACTOR,
+    DEDICATED_PAT_FALLBACK_SLUG,
+    GitHubTokenReviewThreadClient,
+    ReviewThreadCapability,
+    ReviewThreadCapabilityReport,
+    ReviewThreadResolveCanaryReport,
+    ReviewThreadResolveOperation,
     query_review_thread_capabilities,
     run_review_thread_resolve_canary,
 )
@@ -17,10 +25,12 @@ class _FakeGitHubClient:
         self,
         *,
         viewer_can_resolve: bool,
+        is_outdated: bool | None = False,
         resolved_after_mutation: bool = False,
         resolve_error: BaseException | str | None = None,
     ) -> None:
         self.viewer_can_resolve = viewer_can_resolve
+        self.is_outdated = is_outdated
         self.resolved_after_mutation = resolved_after_mutation
         self.resolve_error = resolve_error
         self.resolve_calls: list[tuple[str, str, str]] = []
@@ -49,7 +59,7 @@ class _FakeGitHubClient:
                     "__typename": "PullRequestReviewThread",
                     "id": variables["threadIds"][0],
                     "isResolved": self.resolved_after_mutation,
-                    "isOutdated": False,
+                    "isOutdated": self.is_outdated,
                     "viewerCanResolve": self.viewer_can_resolve,
                     "viewerCanReply": True,
                     "pullRequest": {
@@ -117,6 +127,22 @@ async def test_resolve_canary_skips_when_countdown_cannot_resolve() -> None:
     assert report.operations[0].applied is False
     assert report.operations[0].reason == "viewerCanResolve is false"
     assert report.after.threads[0].is_resolved is False
+
+
+@pytest.mark.asyncio
+async def test_resolve_canary_skips_when_outdated_state_is_unknown() -> None:
+    client = _FakeGitHubClient(viewer_can_resolve=True, is_outdated=None)
+
+    report = await run_review_thread_resolve_canary(
+        client,  # type: ignore[arg-type]
+        repository="iterwheel/voyager-sandbox",
+        pr=42,
+        thread_ids=["PRRT_123"],
+    )
+
+    assert client.resolve_calls == []
+    assert report.operations[0].applied is False
+    assert report.operations[0].reason == "thread_is_outdated_or_unknown"
 
 
 @pytest.mark.asyncio
@@ -207,3 +233,181 @@ async def test_resolve_canary_preserves_github_client_failures_and_requeries_aft
     assert report.operations[0].reason == expected_reason
     assert report.after.threads[0].is_resolved is False
     assert len(client.graphql_calls) == 2
+
+
+def test_dedicated_pat_public_dict_redacts_actor_and_resolved_by() -> None:
+    raw_login = "raw-machine-user-login"
+    report = ReviewThreadCapabilityReport(
+        app_slug=DEDICATED_PAT_FALLBACK_SLUG,
+        actor_login=raw_login,
+        repository="iterwheel/voyager-sandbox",
+        pr=42,
+        threads=(
+            ReviewThreadCapability(
+                thread_id="PRRT_private",
+                type_name="PullRequestReviewThread",
+                repository="iterwheel/voyager-sandbox",
+                pr=42,
+                is_resolved=False,
+                is_outdated=False,
+                viewer_can_resolve=True,
+                viewer_can_reply=True,
+            ),
+        ),
+    )
+    canary = ReviewThreadResolveCanaryReport(
+        before=report,
+        operations=(
+            ReviewThreadResolveOperation(
+                thread_id="PRRT_private",
+                applied=True,
+                reason=None,
+                resolved_by=raw_login,
+            ),
+        ),
+        after=report,
+    )
+
+    public_report = report.to_public_dict()
+    public_canary = canary.to_public_dict()
+
+    assert public_report["actor_login"] == DEDICATED_PAT_FALLBACK_PUBLIC_ACTOR
+    assert public_canary["before"]["actor_login"] == DEDICATED_PAT_FALLBACK_PUBLIC_ACTOR
+    assert public_canary["after"]["actor_login"] == DEDICATED_PAT_FALLBACK_PUBLIC_ACTOR
+    assert public_canary["operations"][0]["resolvedBy"] == DEDICATED_PAT_FALLBACK_PUBLIC_ACTOR
+    assert raw_login not in json.dumps(public_report)
+    assert raw_login not in json.dumps(public_canary)
+
+
+@pytest.mark.asyncio
+async def test_token_client_queries_capabilities_without_printing_token() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.headers["authorization"] == "Bearer secret-pat"
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "viewer": {"login": "raw-machine-user-login"},
+                    "nodes": [
+                        {
+                            "__typename": "PullRequestReviewThread",
+                            "id": "PRRT_private",
+                            "isResolved": False,
+                            "isOutdated": False,
+                            "viewerCanResolve": True,
+                            "viewerCanReply": True,
+                            "pullRequest": {
+                                "number": 42,
+                                "repository": {"nameWithOwner": "iterwheel/voyager-sandbox"},
+                            },
+                        }
+                    ],
+                }
+            },
+            request=request,
+        )
+
+    client = GitHubTokenReviewThreadClient("secret-pat", transport=httpx.MockTransport(handler))
+    try:
+        assert not hasattr(client, "_token")
+        assert "secret-pat" not in repr(vars(client))
+        report = await query_review_thread_capabilities(
+            client,  # type: ignore[arg-type]
+            app_slug=DEDICATED_PAT_FALLBACK_SLUG,
+            repository="iterwheel/voyager-sandbox",
+            pr=42,
+            thread_ids=["PRRT_private"],
+        )
+    finally:
+        await client.aclose()
+
+    assert report.actor_login == "raw-machine-user-login"
+    assert report.app_slug == DEDICATED_PAT_FALLBACK_SLUG
+    assert report.threads[0].viewer_can_resolve is True
+    assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_token_client_normalizes_http_status_errors_without_token() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401,
+            json={"message": "bad token", "token": "secret-pat"},
+            request=request,
+        )
+
+    client = GitHubTokenReviewThreadClient("secret-pat", transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(RuntimeError) as exc_info:
+            await query_review_thread_capabilities(
+                client,  # type: ignore[arg-type]
+                app_slug=DEDICATED_PAT_FALLBACK_SLUG,
+                repository="iterwheel/voyager-sandbox",
+                pr=42,
+                thread_ids=["PRRT_private"],
+            )
+    finally:
+        await client.aclose()
+
+    message = str(exc_info.value)
+    assert message == "GitHub GraphQL dedicated PAT request failed: HTTP 401"
+    assert "secret-pat" not in message
+    assert "bad token" not in message
+    assert exc_info.value.__suppress_context__ is True
+
+
+@pytest.mark.asyncio
+async def test_token_client_normalizes_request_errors_without_token() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("could not connect with secret-pat", request=request)
+
+    client = GitHubTokenReviewThreadClient("secret-pat", transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(RuntimeError) as exc_info:
+            await query_review_thread_capabilities(
+                client,  # type: ignore[arg-type]
+                app_slug=DEDICATED_PAT_FALLBACK_SLUG,
+                repository="iterwheel/voyager-sandbox",
+                pr=42,
+                thread_ids=["PRRT_private"],
+            )
+    finally:
+        await client.aclose()
+
+    message = str(exc_info.value)
+    assert message == "GitHub GraphQL dedicated PAT request failed: HTTP request error"
+    assert "secret-pat" not in message
+    assert "could not connect" not in message
+    assert exc_info.value.__suppress_context__ is True
+
+
+@pytest.mark.asyncio
+async def test_token_client_normalizes_malformed_response_without_token() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=b"not-json secret-pat",
+            request=request,
+        )
+
+    client = GitHubTokenReviewThreadClient("secret-pat", transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(RuntimeError) as exc_info:
+            await query_review_thread_capabilities(
+                client,  # type: ignore[arg-type]
+                app_slug=DEDICATED_PAT_FALLBACK_SLUG,
+                repository="iterwheel/voyager-sandbox",
+                pr=42,
+                thread_ids=["PRRT_private"],
+            )
+    finally:
+        await client.aclose()
+
+    message = str(exc_info.value)
+    assert message == "GitHub GraphQL dedicated PAT request failed: malformed response"
+    assert "secret-pat" not in message
+    assert "not-json" not in message
+    assert exc_info.value.__suppress_context__ is True

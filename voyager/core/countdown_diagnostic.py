@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
 
-from voyager.core.github_app import GitHubAppClient, GitHubGraphQLError
+from voyager.core.github_app import (
+    GITHUB_API,
+    GITHUB_API_VERSION,
+    GitHubGraphQLError,
+)
 
 COUNTDOWN_AGENT_SLUG = "iterwheel-countdown"
+DEDICATED_PAT_FALLBACK_SLUG = "dedicated-pat-fallback"
+DEDICATED_PAT_FALLBACK_PUBLIC_ACTOR = "dedicated-pat-fallback-user"
+DEDICATED_PAT_FALLBACK_RESOLVE_ALLOWED_REPOSITORIES = frozenset({"iterwheel/voyager-sandbox"})
 
 _THREAD_CAPABILITY_QUERY = """
 query ReviewThreadCapabilities($threadIds: [ID!]!) {
@@ -32,6 +39,115 @@ query ReviewThreadCapabilities($threadIds: [ID!]!) {
   }
 }
 """
+
+
+class ReviewThreadClient(Protocol):
+    async def aclose(self) -> None: ...
+
+    async def graphql(
+        self,
+        app_slug: str,
+        repository: str,
+        *,
+        query: str,
+        variables: dict[str, Any],
+    ) -> dict[str, Any]: ...
+
+    async def resolve_review_thread(
+        self,
+        app_slug: str,
+        repository: str,
+        thread_id: str,
+    ) -> dict[str, Any]: ...
+
+
+class GitHubTokenReviewThreadClient:
+    """Minimal GraphQL client for explicit operator-provided fallback tokens."""
+
+    def __init__(self, token: str, *, transport: httpx.AsyncBaseTransport | None = None) -> None:
+        stripped_token = token.strip()
+        if not stripped_token:
+            raise ValueError("token must not be empty")
+        self._client = httpx.AsyncClient(
+            timeout=15,
+            transport=transport,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {stripped_token}",
+                "X-GitHub-Api-Version": GITHUB_API_VERSION,
+                "User-Agent": "voyager-countdown-dedicated-pat-canary",
+            },
+        )
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+    async def graphql(
+        self,
+        app_slug: str,
+        repository: str,
+        *,
+        query: str,
+        variables: dict[str, Any],
+    ) -> dict[str, Any]:
+        del app_slug, repository
+        try:
+            response = await self._client.post(
+                f"{GITHUB_API}/graphql",
+                json={"query": query, "variables": variables},
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code
+            raise RuntimeError(
+                f"GitHub GraphQL dedicated PAT request failed: HTTP {status_code}"
+            ) from None
+        except httpx.HTTPError:
+            raise RuntimeError(
+                "GitHub GraphQL dedicated PAT request failed: HTTP request error"
+            ) from None
+
+        try:
+            payload = response.json()
+        except ValueError:
+            raise RuntimeError(
+                "GitHub GraphQL dedicated PAT request failed: malformed response"
+            ) from None
+        if not isinstance(payload, dict):
+            raise RuntimeError("GitHub GraphQL dedicated PAT request failed: malformed response")
+        errors = payload.get("errors") or []
+        if errors:
+            raise GitHubGraphQLError(errors)
+        return payload.get("data") or {}
+
+    async def resolve_review_thread(
+        self,
+        app_slug: str,
+        repository: str,
+        thread_id: str,
+    ) -> dict[str, Any]:
+        del app_slug
+        query = """
+        mutation ResolveReviewThread($threadId: ID!) {
+          resolveReviewThread(input: {threadId: $threadId}) {
+            thread {
+              id
+              isResolved
+              isOutdated
+              resolvedBy {
+                login
+              }
+            }
+          }
+        }
+        """
+        data = await self.graphql(
+            DEDICATED_PAT_FALLBACK_SLUG,
+            repository,
+            query=query,
+            variables={"threadId": thread_id},
+        )
+        return (((data or {}).get("resolveReviewThread") or {}).get("thread")) or {}
 
 
 @dataclass(frozen=True)
@@ -71,7 +187,7 @@ class ReviewThreadCapabilityReport:
     def to_public_dict(self) -> dict[str, Any]:
         return {
             "app_slug": self.app_slug,
-            "actor_login": self.actor_login,
+            "actor_login": _public_actor_login(self.app_slug, self.actor_login),
             "repo": self.repository,
             "pr": self.pr,
             "threads": [thread.to_public_dict() for thread in self.threads],
@@ -85,12 +201,15 @@ class ReviewThreadResolveOperation:
     reason: str | None
     resolved_by: str | None = None
 
-    def to_public_dict(self) -> dict[str, Any]:
+    def to_public_dict(self, *, redact_resolved_by: bool = False) -> dict[str, Any]:
+        resolved_by = self.resolved_by
+        if redact_resolved_by and resolved_by:
+            resolved_by = DEDICATED_PAT_FALLBACK_PUBLIC_ACTOR
         return {
             "thread_id": self.thread_id,
             "applied": self.applied,
             "reason": self.reason,
-            "resolvedBy": self.resolved_by,
+            "resolvedBy": resolved_by,
         }
 
 
@@ -101,11 +220,21 @@ class ReviewThreadResolveCanaryReport:
     after: ReviewThreadCapabilityReport
 
     def to_public_dict(self) -> dict[str, Any]:
+        redact_pat_actor = self.before.app_slug == DEDICATED_PAT_FALLBACK_SLUG
         return {
             "before": self.before.to_public_dict(),
-            "operations": [operation.to_public_dict() for operation in self.operations],
+            "operations": [
+                operation.to_public_dict(redact_resolved_by=redact_pat_actor)
+                for operation in self.operations
+            ],
             "after": self.after.to_public_dict(),
         }
+
+
+def _public_actor_login(app_slug: str, actor_login: str) -> str:
+    if app_slug == DEDICATED_PAT_FALLBACK_SLUG:
+        return DEDICATED_PAT_FALLBACK_PUBLIC_ACTOR
+    return actor_login
 
 
 def _thread_capability_from_node(
@@ -160,7 +289,7 @@ def _thread_capability_from_node(
 
 
 async def query_review_thread_capabilities(
-    client: GitHubAppClient,
+    client: ReviewThreadClient,
     *,
     app_slug: str = COUNTDOWN_AGENT_SLUG,
     repository: str,
@@ -206,13 +335,15 @@ def _skip_reason(
         return "thread_does_not_belong_to_target_pr"
     if thread.is_resolved is True:
         return "already_resolved"
+    if thread.is_outdated is not False:
+        return "thread_is_outdated_or_unknown"
     if thread.viewer_can_resolve is not True:
         return "viewerCanResolve is false"
     return None
 
 
 async def run_review_thread_resolve_canary(
-    client: GitHubAppClient,
+    client: ReviewThreadClient,
     *,
     app_slug: str = COUNTDOWN_AGENT_SLUG,
     repository: str,

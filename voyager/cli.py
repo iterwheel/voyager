@@ -18,6 +18,7 @@ app.add_typer(bridge_app, name="bridge")
 app.add_typer(countdown_app, name="countdown")
 
 _STORE_REFRESH_TOKEN_TIMEOUT_SECONDS = 30
+_PAT_TOKEN_COMMAND_TIMEOUT_SECONDS = 30
 
 
 @app.command("version")
@@ -115,6 +116,22 @@ def review_thread_diagnostic(
         "--resolve",
         help="Run a controlled resolveReviewThread canary after capability checks.",
     ),
+    pat_token_command: str | None = typer.Option(
+        None,
+        "--pat-token-command",
+        help=(
+            "Command that prints a dedicated PAT fallback token on stdout. "
+            "The command is split with shlex and is not run through a shell."
+        ),
+    ),
+    pat_expected_login_env: str = typer.Option(
+        "VOYAGER_COUNTDOWN_DEDICATED_PAT_EXPECTED_LOGIN",
+        "--pat-expected-login-env",
+        help=(
+            "Environment variable containing the expected dedicated PAT GitHub login. "
+            "Required for --pat-token-command."
+        ),
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
     """Query Countdown review-thread resolver capability, optionally resolving canary threads."""
@@ -122,40 +139,141 @@ def review_thread_diagnostic(
 
     from voyager.core.config import load_config
     from voyager.core.countdown_diagnostic import (
+        DEDICATED_PAT_FALLBACK_RESOLVE_ALLOWED_REPOSITORIES,
+        DEDICATED_PAT_FALLBACK_SLUG,
+        GitHubTokenReviewThreadClient,
         ReviewThreadCapabilityReport,
         ReviewThreadResolveCanaryReport,
         query_review_thread_capabilities,
         run_review_thread_resolve_canary,
     )
-    from voyager.core.github_app import GitHubAppClient
+    from voyager.core.github_app import GitHubAppClient, GitHubGraphQLError
 
-    cfg = load_config(config)
-    if app_slug not in cfg.apps:
-        typer.echo(f"ERROR: app {app_slug!r} is not configured", err=True)
+    has_pat_token_command = pat_token_command is not None
+
+    if has_pat_token_command and app_slug != "iterwheel-countdown":
+        typer.echo("ERROR: --app cannot be combined with --pat-token-command", err=True)
+        raise typer.Exit(code=1)
+    if has_pat_token_command and resolve and len(thread_ids) != 1:
+        typer.echo(
+            "ERROR: --pat-token-command --resolve requires exactly one --thread-id",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if (
+        has_pat_token_command
+        and resolve
+        and repo not in DEDICATED_PAT_FALLBACK_RESOLVE_ALLOWED_REPOSITORIES
+    ):
+        allowed_repos = ", ".join(sorted(DEDICATED_PAT_FALLBACK_RESOLVE_ALLOWED_REPOSITORIES))
+        typer.echo(
+            f"ERROR: --pat-token-command --resolve is only allowed for: {allowed_repos}",
+            err=True,
+        )
         raise typer.Exit(code=1)
 
-    async def _run() -> ReviewThreadCapabilityReport | ReviewThreadResolveCanaryReport:
+    client: GitHubAppClient | GitHubTokenReviewThreadClient | None = None
+    app_baseline_client: GitHubAppClient | None = None
+    expected_pat_login: str | None = None
+    diagnostic_slug = app_slug
+    if has_pat_token_command:
+        try:
+            expected_pat_login = _expected_viewer_login_from_env(pat_expected_login_env)
+        except click.ClickException as exc:
+            _exit_with_error(exc.message)
+    if has_pat_token_command and resolve:
+        cfg = load_config(config)
+        if app_slug not in cfg.apps:
+            typer.echo(f"ERROR: app {app_slug!r} is not configured", err=True)
+            raise typer.Exit(code=1)
+        app_baseline_client = GitHubAppClient(cfg.apps)
+        diagnostic_slug = DEDICATED_PAT_FALLBACK_SLUG
+    elif has_pat_token_command:
+        try:
+            assert pat_token_command is not None
+            pat_token = _read_pat_token(pat_token_command)
+        except click.ClickException as exc:
+            _exit_with_error(exc.message)
+        client = GitHubTokenReviewThreadClient(pat_token)
+        diagnostic_slug = DEDICATED_PAT_FALLBACK_SLUG
+    else:
+        cfg = load_config(config)
+        if app_slug not in cfg.apps:
+            typer.echo(f"ERROR: app {app_slug!r} is not configured", err=True)
+            raise typer.Exit(code=1)
         client = GitHubAppClient(cfg.apps)
+
+    async def _run() -> ReviewThreadCapabilityReport | ReviewThreadResolveCanaryReport:
+        active_client = client
         try:
             if resolve:
+                if app_baseline_client is not None:
+                    app_baseline = await query_review_thread_capabilities(
+                        app_baseline_client,
+                        app_slug=app_slug,
+                        repository=repo,
+                        pr=pr,
+                        thread_ids=thread_ids,
+                    )
+                    _validate_pat_resolve_app_baseline(
+                        app_baseline,
+                        repository=repo,
+                        pr=pr,
+                    )
+                    assert pat_token_command is not None
+                    try:
+                        pat_token = _read_pat_token(pat_token_command)
+                    except click.ClickException as exc:
+                        _exit_with_error(exc.message)
+                    active_client = GitHubTokenReviewThreadClient(pat_token)
+                    pat_actor = await query_review_thread_capabilities(
+                        active_client,
+                        app_slug=diagnostic_slug,
+                        repository=repo,
+                        pr=pr,
+                        thread_ids=thread_ids,
+                    )
+                    assert expected_pat_login is not None
+                    _validate_dedicated_pat_expected_actor(
+                        pat_actor.actor_login,
+                        expected_pat_login,
+                    )
+                assert active_client is not None
                 return await run_review_thread_resolve_canary(
-                    client,
-                    app_slug=app_slug,
+                    active_client,
+                    app_slug=diagnostic_slug,
                     repository=repo,
                     pr=pr,
                     thread_ids=thread_ids,
                 )
-            return await query_review_thread_capabilities(
-                client,
-                app_slug=app_slug,
+            assert active_client is not None
+            report = await query_review_thread_capabilities(
+                active_client,
+                app_slug=diagnostic_slug,
                 repository=repo,
                 pr=pr,
                 thread_ids=thread_ids,
             )
+            if has_pat_token_command:
+                assert expected_pat_login is not None
+                _validate_dedicated_pat_expected_actor(
+                    report.actor_login,
+                    expected_pat_login,
+                    operation="query",
+                )
+            return report
         finally:
-            await client.aclose()
+            if active_client is not None:
+                await active_client.aclose()
+            if app_baseline_client is not None:
+                await app_baseline_client.aclose()
 
-    result = asyncio.run(_run())
+    try:
+        result = asyncio.run(_run())
+    except GitHubGraphQLError as exc:
+        _exit_with_error(str(exc))
+    except RuntimeError as exc:
+        _exit_with_error(str(exc))
     public_result: dict[str, Any] = result.to_public_dict()
     if json_output:
         typer.echo(json.dumps(public_result, indent=2, sort_keys=True))
@@ -283,7 +401,7 @@ def user_review_thread_diagnostic(
                 report: (
                     ReviewThreadCapabilityReport | ReviewThreadResolveCanaryReport
                 ) = await run_review_thread_resolve_canary(
-                    client,  # type: ignore[arg-type]
+                    client,
                     app_slug="github-app-user",
                     repository=repo,
                     pr=pr,
@@ -291,7 +409,7 @@ def user_review_thread_diagnostic(
                 )
             else:
                 report = await query_review_thread_capabilities(
-                    client,  # type: ignore[arg-type]
+                    client,
                     app_slug="github-app-user",
                     repository=repo,
                     pr=pr,
@@ -357,6 +475,18 @@ def _expected_viewer_login_from_env(env_name: str | None) -> str | None:
 
 def _viewer_login_matches_expected(viewer_login: str, expected_viewer_login: str) -> bool:
     return viewer_login.casefold() == expected_viewer_login.casefold()
+
+
+def _validate_dedicated_pat_expected_actor(
+    actor_login: str,
+    expected_viewer_login: str,
+    *,
+    operation: str = "resolve",
+) -> None:
+    if not _viewer_login_matches_expected(actor_login, expected_viewer_login):
+        raise click.ClickException(
+            f"Dedicated PAT viewer did not match expected login; refusing PAT fallback {operation}"
+        )
 
 
 def _echo_thread_capabilities(threads: list[dict[str, Any]]) -> None:
@@ -699,6 +829,91 @@ def _store_refresh_token_argv(command: str) -> list[str]:
     resolved = shutil.which(executable)
     if not resolved:
         raise RuntimeError(f"secret-store command executable not found: {executable}")
+    return [resolved, *argv[1:]]
+
+
+def _read_pat_token(command: str) -> str:
+    import subprocess  # nosec B404
+
+    try:
+        argv = _pat_token_command_argv(command)
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    try:
+        completed = subprocess.run(  # nosec B603
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=True,
+            timeout=_PAT_TOKEN_COMMAND_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise click.ClickException("PAT token command failed") from exc
+
+    token = completed.stdout.strip()
+    if not token:
+        raise click.ClickException("PAT token command did not produce a token")
+    return token
+
+
+def _validate_pat_resolve_app_baseline(
+    report: Any,
+    *,
+    repository: str,
+    pr: int,
+) -> None:
+    for thread in report.threads:
+        if thread.error:
+            raise click.ClickException(
+                f"Countdown App baseline failed before PAT resolve: {thread.error}"
+            )
+        if thread.repository != repository or thread.pr != pr:
+            raise click.ClickException(
+                "Countdown App baseline thread does not belong to target PR; "
+                "refusing PAT fallback resolve"
+            )
+        if thread.is_resolved is not False:
+            raise click.ClickException(
+                "Countdown App baseline thread is not unresolved; refusing PAT fallback resolve"
+            )
+        if thread.is_outdated is not False:
+            raise click.ClickException(
+                "Countdown App baseline thread is outdated or unknown; refusing PAT fallback resolve"
+            )
+        if thread.viewer_can_reply is not True:
+            raise click.ClickException(
+                "Countdown App baseline viewerCanReply is not true; refusing PAT fallback resolve"
+            )
+        if thread.viewer_can_resolve is not False:
+            raise click.ClickException(
+                "Countdown App baseline viewerCanResolve is not false; "
+                "refusing PAT fallback resolve"
+            )
+
+
+def _pat_token_command_argv(command: str) -> list[str]:
+    import shlex
+    import shutil
+
+    try:
+        argv = shlex.split(command)
+    except ValueError as exc:
+        raise RuntimeError(f"invalid --pat-token-command: {exc}") from exc
+    if not argv:
+        raise RuntimeError("--pat-token-command must not be empty")
+
+    executable = argv[0]
+    if os.sep in executable or (os.altsep and os.altsep in executable):
+        executable_path = Path(executable)
+        if not executable_path.is_file() or not os.access(executable_path, os.X_OK):
+            raise RuntimeError(f"PAT token command is not executable: {executable}")
+        return argv
+
+    resolved = shutil.which(executable)
+    if not resolved:
+        raise RuntimeError(f"PAT token command executable not found: {executable}")
     return [resolved, *argv[1:]]
 
 
