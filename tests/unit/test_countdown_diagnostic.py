@@ -310,10 +310,10 @@ async def test_token_client_queries_capabilities_without_printing_token() -> Non
             request=request,
         )
 
-    client = GitHubTokenReviewThreadClient("secret-pat")
-    await client._client.aclose()
-    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = GitHubTokenReviewThreadClient("secret-pat", transport=httpx.MockTransport(handler))
     try:
+        assert not hasattr(client, "_token")
+        assert "secret-pat" not in repr(vars(client))
         report = await query_review_thread_capabilities(
             client,  # type: ignore[arg-type]
             app_slug=DEDICATED_PAT_FALLBACK_SLUG,
@@ -339,9 +339,7 @@ async def test_token_client_normalizes_http_status_errors_without_token() -> Non
             request=request,
         )
 
-    client = GitHubTokenReviewThreadClient("secret-pat")
-    await client._client.aclose()
-    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = GitHubTokenReviewThreadClient("secret-pat", transport=httpx.MockTransport(handler))
     try:
         with pytest.raises(RuntimeError) as exc_info:
             await query_review_thread_capabilities(
@@ -366,9 +364,7 @@ async def test_token_client_normalizes_request_errors_without_token() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("could not connect with secret-pat", request=request)
 
-    client = GitHubTokenReviewThreadClient("secret-pat")
-    await client._client.aclose()
-    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = GitHubTokenReviewThreadClient("secret-pat", transport=httpx.MockTransport(handler))
     try:
         with pytest.raises(RuntimeError) as exc_info:
             await query_review_thread_capabilities(
@@ -397,9 +393,7 @@ async def test_token_client_normalizes_malformed_response_without_token() -> Non
             request=request,
         )
 
-    client = GitHubTokenReviewThreadClient("secret-pat")
-    await client._client.aclose()
-    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = GitHubTokenReviewThreadClient("secret-pat", transport=httpx.MockTransport(handler))
     try:
         with pytest.raises(RuntimeError) as exc_info:
             await query_review_thread_capabilities(

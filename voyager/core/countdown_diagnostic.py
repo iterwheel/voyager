@@ -64,11 +64,20 @@ class ReviewThreadClient(Protocol):
 class GitHubTokenReviewThreadClient:
     """Minimal GraphQL client for explicit operator-provided fallback tokens."""
 
-    def __init__(self, token: str) -> None:
-        if not token.strip():
+    def __init__(self, token: str, *, transport: httpx.AsyncBaseTransport | None = None) -> None:
+        stripped_token = token.strip()
+        if not stripped_token:
             raise ValueError("token must not be empty")
-        self._token = token.strip()
-        self._client = httpx.AsyncClient(timeout=15)
+        self._client = httpx.AsyncClient(
+            timeout=15,
+            transport=transport,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {stripped_token}",
+                "X-GitHub-Api-Version": GITHUB_API_VERSION,
+                "User-Agent": "voyager-countdown-dedicated-pat-canary",
+            },
+        )
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -85,12 +94,6 @@ class GitHubTokenReviewThreadClient:
         try:
             response = await self._client.post(
                 f"{GITHUB_API}/graphql",
-                headers={
-                    "Accept": "application/vnd.github+json",
-                    "Authorization": f"Bearer {self._token}",
-                    "X-GitHub-Api-Version": GITHUB_API_VERSION,
-                    "User-Agent": "voyager-countdown-dedicated-pat-canary",
-                },
                 json={"query": query, "variables": variables},
             )
             response.raise_for_status()
