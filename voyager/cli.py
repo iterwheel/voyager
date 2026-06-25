@@ -147,7 +147,7 @@ def review_thread_diagnostic(
         query_review_thread_capabilities,
         run_review_thread_resolve_canary,
     )
-    from voyager.core.github_app import GitHubAppClient
+    from voyager.core.github_app import GitHubAppClient, GitHubGraphQLError
 
     has_pat_token_command = pat_token_command is not None
 
@@ -261,6 +261,8 @@ def review_thread_diagnostic(
 
     try:
         result = asyncio.run(_run())
+    except GitHubGraphQLError as exc:
+        _exit_with_error(str(exc))
     except RuntimeError as exc:
         _exit_with_error(str(exc))
     public_result: dict[str, Any] = result.to_public_dict()
