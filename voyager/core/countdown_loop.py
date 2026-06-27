@@ -141,8 +141,17 @@ class Candidate:
 class TargetError:
     """A repo (or repo#pr) whose enumeration failed; the run skipped it and continued."""
 
-    target: str
+    repo: str
     message: str
+    pr: int | None = None
+
+    def public_target(self, *, show_raw: bool) -> str:
+        if self.pr is None:
+            return self.repo
+        if show_raw or self.repo in _RAW_IDENTIFIER_REPOS:
+            return f"{self.repo}#{self.pr}"
+        # Non-sandbox: keep the private PR number out of output (VOY-1828).
+        return f"{self.repo}#<redacted>"
 
 
 @dataclass(frozen=True)
@@ -153,6 +162,14 @@ class LoopSummary:
     candidates: tuple[Candidate, ...]
     capped: bool
     errors: tuple[TargetError, ...] = ()
+    repos_enumerated: int = 0
+
+    @property
+    def systemic_failure(self) -> bool:
+        """Every attempted repo failed to even list its PRs — a likely global
+        auth/config fault (missing key, 401 on the installation token) rather
+        than isolated per-repo issues. The caller should fail, not report success."""
+        return bool(self.repos_scanned) and self.repos_enumerated == 0
 
     def to_public_dict(self, *, show_raw: bool = False) -> dict[str, Any]:
         """Public summary. Raw PR numbers / thread IDs are emitted only for
@@ -163,7 +180,11 @@ class LoopSummary:
             "prs_scanned": self.prs_scanned,
             "candidate_count": len(self.candidates),
             "capped": self.capped,
-            "errors": [{"target": e.target, "message": e.message} for e in self.errors],
+            "systemic_failure": self.systemic_failure,
+            "errors": [
+                {"target": e.public_target(show_raw=show_raw), "message": e.message}
+                for e in self.errors
+            ],
             "candidates": [_candidate_public(c, show_raw=show_raw) for c in self.candidates],
         }
 
@@ -254,6 +275,7 @@ async def run_resolve_loop(
     scanned: list[str] = []
     errors: list[TargetError] = []
     prs_scanned = 0
+    repos_enumerated = 0
     capped = False
     for repo in allowed:
         if capped:
@@ -265,14 +287,17 @@ async def run_resolve_loop(
             pr_numbers = await _list_open_pr_numbers(client, app_slug, repo)
         except _TOLERATED_ENUMERATION_ERRORS as exc:
             # One failing/inaccessible repo must not suppress the rest of the run.
-            errors.append(TargetError(target=repo, message=str(exc)))
+            # If EVERY repo fails this way, systemic_failure flags it for the caller
+            # so a global auth/config fault is not reported as a successful scan.
+            errors.append(TargetError(repo=repo, message=str(exc)))
             continue
+        repos_enumerated += 1
         for pr in pr_numbers:
             prs_scanned += 1
             try:
                 pr_candidates = await _candidates_for_pr(client, app_slug, repo, pr)
             except _TOLERATED_ENUMERATION_ERRORS as exc:
-                errors.append(TargetError(target=f"{repo}#{pr}", message=str(exc)))
+                errors.append(TargetError(repo=repo, pr=pr, message=str(exc)))
                 continue
             for candidate in pr_candidates:
                 if len(candidates) >= max_resolves:
@@ -289,6 +314,7 @@ async def run_resolve_loop(
         candidates=tuple(candidates),
         capped=capped,
         errors=tuple(errors),
+        repos_enumerated=repos_enumerated,
     )
 
 

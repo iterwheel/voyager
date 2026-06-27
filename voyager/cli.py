@@ -398,24 +398,34 @@ def resolve_loop(
 
     if json_output:
         typer.echo(json.dumps(summary.to_public_dict(show_raw=show_raw), indent=2, sort_keys=True))
-        return
+    else:
+        typer.echo("Countdown resolve-loop (deterministic core; read-only — resolve lands in #218)")
+        typer.echo(f"repos scanned: {', '.join(summary.repos_scanned) or '(none)'}")
+        if summary.repos_skipped:
+            typer.echo(
+                f"repos skipped (outside frozenset ceiling): {', '.join(summary.repos_skipped)}"
+            )
+        typer.echo(f"PRs scanned: {summary.prs_scanned}")
+        if summary.errors:
+            typer.echo(f"errors (target skipped, scan continued): {len(summary.errors)}")
+            for err in summary.errors:
+                typer.echo(f"! {err.public_target(show_raw=show_raw)}: {err.message}")
+        capped = " (capped by --max-resolves)" if summary.capped else ""
+        typer.echo(f"resolvable candidates: {len(summary.candidates)}{capped}")
+        for candidate in summary.candidates:
+            if show_raw or candidate.repo in _RAW_IDENTIFIER_REPOS:
+                typer.echo(f"- {candidate.repo}#{candidate.pr} thread={candidate.thread_id}")
+            else:
+                typer.echo(f"- {candidate.repo} [pr/thread redacted — pass --show-raw]")
 
-    typer.echo("Countdown resolve-loop (deterministic core; read-only — resolve lands in #218)")
-    typer.echo(f"repos scanned: {', '.join(summary.repos_scanned) or '(none)'}")
-    if summary.repos_skipped:
-        typer.echo(f"repos skipped (outside frozenset ceiling): {', '.join(summary.repos_skipped)}")
-    typer.echo(f"PRs scanned: {summary.prs_scanned}")
-    if summary.errors:
-        typer.echo(f"errors (target skipped, scan continued): {len(summary.errors)}")
-        for err in summary.errors:
-            typer.echo(f"! {err.target}: {err.message}")
-    capped = " (capped by --max-resolves)" if summary.capped else ""
-    typer.echo(f"resolvable candidates: {len(summary.candidates)}{capped}")
-    for candidate in summary.candidates:
-        if show_raw or candidate.repo in _RAW_IDENTIFIER_REPOS:
-            typer.echo(f"- {candidate.repo}#{candidate.pr} thread={candidate.thread_id}")
-        else:
-            typer.echo(f"- {candidate.repo} [pr/thread redacted — pass --show-raw]")
+    if summary.systemic_failure:
+        # Every scanned repo failed enumeration — surface as a failure, not a
+        # success with errors, so a global App auth/config fault is not masked.
+        typer.echo(
+            "ERROR: every scanned repo failed enumeration — likely App auth/config fault",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
 
 @countdown_app.command("user-review-thread-diagnostic")

@@ -13,6 +13,7 @@ from voyager.core.countdown_loop import (
     AlreadyRunningError,
     Candidate,
     LoopSummary,
+    TargetError,
     gate_repos,
     load_repo_list,
     run_resolve_loop,
@@ -184,9 +185,10 @@ async def test_repo_enumeration_error_is_isolated_and_scan_continues():
     )
     summary = await run_resolve_loop(client, requested_repos=[repo_a, repo_b], ceiling=ceiling)
     # repo_a failed but did not abort the run; repo_b still scanned and yielded a candidate.
-    assert [e.target for e in summary.errors] == [repo_a]
+    assert [(e.repo, e.pr) for e in summary.errors] == [(repo_a, None)]
     assert [c.thread_id for c in summary.candidates] == ["ok"]
     assert summary.repos_scanned == (repo_a, repo_b)
+    assert summary.systemic_failure is False  # repo_b enumerated, so not systemic
 
 
 # --- cap must not over-report scanned repos (codex bot finding #2) ------------
@@ -225,9 +227,10 @@ async def test_per_pr_error_isolated_and_sibling_prs_continue():
     )
     summary = await run_resolve_loop(client, requested_repos=[repo], ceiling=ceiling)
     # PR 1's thread fetch failed but PR 2 still scanned and yielded a candidate.
-    assert [e.target for e in summary.errors] == [f"{repo}#1"]
+    assert [(e.repo, e.pr) for e in summary.errors] == [(repo, 1)]
     assert [c.thread_id for c in summary.candidates] == ["ok"]
     assert summary.prs_scanned == 2
+    assert summary.systemic_failure is False  # repo enumerated fine; only one PR failed
 
 
 async def test_open_pr_enumeration_paginates_across_pages():
@@ -241,6 +244,46 @@ async def test_open_pr_enumeration_paginates_across_pages():
     # all three pages enumerated → PR 5 (on page 3) reached and its candidate found.
     assert summary.prs_scanned == 5
     assert [c.thread_id for c in summary.candidates] == ["deep"]
+
+
+# --- systemic failure + error redaction (codex re-review P2s) ----------------
+
+
+async def test_systemic_failure_when_every_repo_fails_enumeration():
+    repo_a, repo_b = "iterwheel/a", "iterwheel/b"
+    ceiling = frozenset({repo_a, repo_b})
+    # Both repos raise at enumeration (mimics a global auth/config fault).
+    client = FakeClient(raise_repos={repo_a, repo_b})
+    summary = await run_resolve_loop(client, requested_repos=[repo_a, repo_b], ceiling=ceiling)
+    assert summary.repos_enumerated == 0
+    assert summary.systemic_failure is True
+    assert len(summary.errors) == 2
+
+
+def test_target_error_redacts_pr_for_non_sandbox():
+    real_err = TargetError(repo=REAL, pr=42, message="boom")
+    assert real_err.public_target(show_raw=False) == f"{REAL}#<redacted>"
+    assert real_err.public_target(show_raw=True) == f"{REAL}#42"
+    sandbox_err = TargetError(repo=SANDBOX, pr=42, message="boom")
+    assert sandbox_err.public_target(show_raw=False) == f"{SANDBOX}#42"
+    repo_level = TargetError(repo=REAL, message="boom")
+    assert repo_level.public_target(show_raw=False) == REAL
+
+
+def test_to_public_dict_redacts_pr_in_errors():
+    import json
+
+    summary = LoopSummary(
+        repos_scanned=(REAL,),
+        repos_skipped=(),
+        prs_scanned=1,
+        candidates=(),
+        capped=False,
+        errors=(TargetError(repo=REAL, pr=999, message="thread boom"),),
+        repos_enumerated=1,
+    )
+    assert "999" not in json.dumps(summary.to_public_dict())
+    assert summary.to_public_dict(show_raw=True)["errors"][0]["target"] == f"{REAL}#999"
 
 
 # --- output redaction (trinity code-review P1) -------------------------------
