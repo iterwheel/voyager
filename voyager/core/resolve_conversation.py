@@ -20,7 +20,7 @@ Hard constraints (enforced by construction):
 
 from __future__ import annotations
 
-import subprocess
+import subprocess  # nosec B404
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -309,8 +309,10 @@ def resolve_conversations(
             pull_request = (data.get("repository") or {}).get("pullRequest")
             if pull_request is None:
                 # null pullRequest with no GraphQL error = wrong PR number; fail loud
-                # instead of silently reporting "nothing to resolve".
-                raise ResolveConversationError(f"PR #{pr} not found in {repo!r}")
+                # instead of silently reporting "nothing to resolve". The PR number is
+                # omitted from the message to honor the non-sandbox redaction rule
+                # (VOY-1828) — the CLI prints ResolveConversationError text verbatim.
+                raise ResolveConversationError(f"requested pull request not found in {repo!r}")
             review_threads: dict[str, Any] = pull_request.get("reviewThreads") or {}
             page_info: dict[str, Any] = review_threads.get("pageInfo") or {}
             nodes: list[dict[str, Any]] = review_threads.get("nodes") or []

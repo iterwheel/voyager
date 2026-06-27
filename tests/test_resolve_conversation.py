@@ -708,7 +708,10 @@ class TestReviewFixes:
         gql = _SmartGql([{"repository": {"pullRequest": None}}])
         with pytest.raises(ResolveConversationError) as ei:
             resolve_conversations(repo="iterwheel/voyager", pr=99999, gql=gql)
-        assert "not found" in str(ei.value).lower()
+        msg = str(ei.value)
+        assert "not found" in msg.lower()
+        # VOY-1828: non-sandbox errors must not leak the raw PR number.
+        assert "99999" not in msg
 
     def test_has_next_page_with_null_cursor_raises(self) -> None:
         page = _pr_response([_thread_node(id="PRRT_1")], has_next_page=True, end_cursor=None)

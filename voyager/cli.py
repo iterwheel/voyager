@@ -112,10 +112,16 @@ def resolve_conversation(
         resolve_conversations,
     )
 
-    # Gate the allowlist BEFORE reading the machine token: a non-allowlisted repo
-    # must never trigger credential-store access for the machine account.
+    # Gate ALL usage errors (allowlist + target selection) BEFORE reading the
+    # machine token: a bad invocation must never touch the credential store, which
+    # would otherwise mask a usage error as an auth failure on gh-less hosts.
     if repo not in RESOLVE_ALLOWED_REPOS:
         typer.echo(f"ERROR: repo {repo!r} is not in the resolve allowlist")
+        raise typer.Exit(code=1)
+    pr_val = pr or None
+    thread_val = thread_id or None
+    if (pr_val is None) == (thread_val is None):
+        typer.echo("ERROR: provide exactly one of --pr or --thread-id")
         raise typer.Exit(code=1)
 
     try:
@@ -123,8 +129,8 @@ def resolve_conversation(
         gql = make_github_gql(token)
         summary = resolve_conversations(
             repo=repo,
-            pr=pr or None,
-            thread_id=thread_id or None,
+            pr=pr_val,
+            thread_id=thread_val,
             dry_run=dry_run,
             gql=gql,
         )
