@@ -81,12 +81,6 @@ pi_workdir = "~/.voyager/state/assembly"
 pi_timeout_seconds = 900
 authorized_actors = ["FrankXHL", "ryosaeba1985"]
 authorized_associations = ["owner", "member"]
-
-[countdown.dedicated_pat_fallback]
-enabled = true
-allowed_repositories = ["Iterwheel/Voyager-Sandbox"]
-keychain_service = "voyager/countdown-dedicated-pat"
-expected_login_env = "VOYAGER_PAT_ACCOUNT"
 """,
         encoding="utf-8",
     )
@@ -107,11 +101,6 @@ expected_login_env = "VOYAGER_PAT_ACCOUNT"
     assert cfg.assembly.pi_timeout_seconds == 900
     assert cfg.assembly.authorized_actors == ("frankxhl", "ryosaeba1985")
     assert cfg.assembly.authorized_associations == ("OWNER", "MEMBER")
-    fallback = cfg.countdown.dedicated_pat_fallback
-    assert fallback.enabled is True
-    assert fallback.allowed_repositories == ("iterwheel/voyager-sandbox",)
-    assert fallback.keychain_service == "voyager/countdown-dedicated-pat"
-    assert fallback.expected_login_env == "VOYAGER_PAT_ACCOUNT"
 
 
 @pytest.mark.parametrize(
@@ -124,14 +113,6 @@ expected_login_env = "VOYAGER_PAT_ACCOUNT"
         ),
         ('[assembly]\npi_timeout_seconds = "900"\n', "[assembly].pi_timeout_seconds"),
         ('[assembly]\nauthorized_actors = "frank"\n', "[assembly].authorized_actors"),
-        (
-            '[countdown.dedicated_pat_fallback]\nenabled = "true"\n',
-            "[countdown.dedicated_pat_fallback].enabled",
-        ),
-        (
-            "[countdown.dedicated_pat_fallback]\nenabled = true\n",
-            "[countdown.dedicated_pat_fallback].allowed_repositories",
-        ),
     ],
 )
 def test_load_config_rejects_malformed_runtime_sections(

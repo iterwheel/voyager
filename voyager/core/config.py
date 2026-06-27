@@ -100,25 +100,6 @@ class ReviewFixConfig:
 
 
 @dataclass(frozen=True, kw_only=True)
-class CountdownDedicatedPatFallbackConfig:
-    """Dedicated machine-user PAT fallback settings for Countdown resolver sync."""
-
-    enabled: bool = False
-    allowed_repositories: tuple[str, ...] = ()
-    keychain_service: str | None = None
-    expected_login_env: str | None = None
-
-
-@dataclass(frozen=True, kw_only=True)
-class CountdownConfig:
-    """Countdown runtime settings loaded from ``[countdown]``."""
-
-    dedicated_pat_fallback: CountdownDedicatedPatFallbackConfig = field(
-        default_factory=CountdownDedicatedPatFallbackConfig
-    )
-
-
-@dataclass(frozen=True, kw_only=True)
 class VoyagerConfig:
     """Top-level voyager configuration.
 
@@ -135,7 +116,6 @@ class VoyagerConfig:
     bridge: BridgeConfig = field(default_factory=BridgeConfig)
     assembly: AssemblyConfig = field(default_factory=AssemblyConfig)
     review_fix: ReviewFixConfig = field(default_factory=ReviewFixConfig)
-    countdown: CountdownConfig = field(default_factory=CountdownConfig)
 
 
 def _parse_app(item: dict[str, Any]) -> AppConfig:
@@ -421,59 +401,6 @@ def _parse_review_fix(raw: dict[str, Any]) -> ReviewFixConfig:
     )
 
 
-def _parse_countdown(raw: dict[str, Any]) -> CountdownConfig:
-    section = raw.get("countdown")
-    if section is None:
-        return CountdownConfig()
-    section = _optional_table(section, "[countdown]")
-    fallback_section = _optional_table(
-        section.get("dedicated_pat_fallback"),
-        "[countdown.dedicated_pat_fallback]",
-    )
-    enabled_raw = fallback_section.get("enabled", False)
-    if not isinstance(enabled_raw, bool):
-        raise ValueError(
-            "[countdown.dedicated_pat_fallback].enabled must be a TOML boolean, got "
-            f"{type(enabled_raw).__name__}: {enabled_raw!r}"
-        )
-    allowed_repositories = _string_tuple(
-        fallback_section,
-        "allowed_repositories",
-        "[countdown.dedicated_pat_fallback]",
-        case="lower",
-    )
-    keychain_service = _optional_string(
-        fallback_section,
-        "keychain_service",
-        "[countdown.dedicated_pat_fallback]",
-    )
-    expected_login_env = _optional_string(
-        fallback_section,
-        "expected_login_env",
-        "[countdown.dedicated_pat_fallback]",
-    )
-    if enabled_raw and not allowed_repositories:
-        raise ValueError(
-            "[countdown.dedicated_pat_fallback].allowed_repositories is required when enabled"
-        )
-    if enabled_raw and not keychain_service:
-        raise ValueError(
-            "[countdown.dedicated_pat_fallback].keychain_service is required when enabled"
-        )
-    if enabled_raw and not expected_login_env:
-        raise ValueError(
-            "[countdown.dedicated_pat_fallback].expected_login_env is required when enabled"
-        )
-    return CountdownConfig(
-        dedicated_pat_fallback=CountdownDedicatedPatFallbackConfig(
-            enabled=enabled_raw,
-            allowed_repositories=allowed_repositories,
-            keychain_service=keychain_service,
-            expected_login_env=expected_login_env,
-        )
-    )
-
-
 def load_config(path: str | Path | None = None) -> VoyagerConfig:
     if path is None:
         env_path = os.environ.get("VOYAGER_CONFIG_PATH")
@@ -551,7 +478,6 @@ def load_config(path: str | Path | None = None) -> VoyagerConfig:
     bridge = _parse_bridge(raw)
     assembly = _parse_assembly(raw)
     review_fix = _parse_review_fix(raw)
-    countdown = _parse_countdown(raw)
 
     return VoyagerConfig(
         apps=apps,
@@ -562,7 +488,6 @@ def load_config(path: str | Path | None = None) -> VoyagerConfig:
         bridge=bridge,
         assembly=assembly,
         review_fix=review_fix,
-        countdown=countdown,
     )
 
 

@@ -20,8 +20,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import subprocess  # nosec B404
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -76,15 +74,6 @@ from voyager.bots.clearance.models import (
 from voyager.bots.clearance.severity import evaluate as evaluate_severity
 from voyager.bots.clearance.severity_input import extract_severity_and_kind
 from voyager.bots.clearance.state import StateStore
-from voyager.core.config import CountdownDedicatedPatFallbackConfig
-from voyager.core.countdown_diagnostic import (
-    COUNTDOWN_AGENT_SLUG,
-    DEDICATED_PAT_FALLBACK_PUBLIC_ACTOR,
-    DEDICATED_PAT_FALLBACK_SLUG,
-    GitHubTokenReviewThreadClient,
-    query_review_thread_capabilities,
-    run_review_thread_resolve_canary,
-)
 from voyager.core.github_app import GitHubAppClient, GitHubGraphQLError
 from voyager.core.review_identity import extract_known_limitation_rule_id
 from voyager.core.writeback import _safe_exception_fields, build_writeback_failure, dry_run_enabled
@@ -111,57 +100,6 @@ def _authorized_resolver_app_for_pr_author(pr_author_login: str | None) -> str |
 
 def _bot_login_for_app_slug(app_slug: str) -> str:
     return f"{app_slug}[bot]"
-
-
-def _countdown_dedicated_pat_fallback_for_repository(
-    cfg: Any | None,
-    repository: str,
-) -> CountdownDedicatedPatFallbackConfig | None:
-    countdown = getattr(cfg, "countdown", None)
-    fallback = getattr(countdown, "dedicated_pat_fallback", None)
-    if not isinstance(fallback, CountdownDedicatedPatFallbackConfig):
-        return None
-    if not fallback.enabled:
-        return None
-    normalized_repo = repository.strip().lower()
-    if normalized_repo not in fallback.allowed_repositories:
-        return None
-    return fallback
-
-
-def _read_countdown_dedicated_pat(
-    fallback: CountdownDedicatedPatFallbackConfig,
-) -> tuple[str, str]:
-    expected_env = fallback.expected_login_env or ""
-    expected_login = os.environ.get(expected_env, "").strip()
-    if not expected_login:
-        raise RuntimeError("dedicated PAT expected-login env is not set")
-    service = fallback.keychain_service or ""
-    if not service:
-        raise RuntimeError("dedicated PAT Keychain service is not configured")
-    try:
-        completed = subprocess.run(  # nosec B603
-            [
-                "/usr/bin/security",
-                "find-generic-password",
-                "-a",
-                expected_login,
-                "-s",
-                service,
-                "-w",
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            check=True,
-            timeout=15,
-        )
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        raise RuntimeError("dedicated PAT Keychain lookup failed") from exc
-    token = completed.stdout.strip()
-    if not token:
-        raise RuntimeError("dedicated PAT Keychain lookup returned empty token")
-    return token, expected_login
 
 
 def _is_clearance_comment(comment: dict[str, Any]) -> bool:
@@ -619,69 +557,6 @@ async def _app_can_resolve_thread(
         if item.get("id") == thread_id:
             return item.get("viewerCanResolve") is True
     return False
-
-
-async def _app_thread_capability(
-    *,
-    client: GitHubAppClient,
-    app_slug: str,
-    repository: str,
-    pr: int,
-    thread_id: str,
-    cache: dict[str, list[dict[str, Any]] | None] | None = None,
-) -> dict[str, Any] | None:
-    if cache is not None and app_slug in cache:
-        threads = cache[app_slug]
-    else:
-        try:
-            threads = await client.pull_request_review_threads(app_slug, repository, pr)
-        except Exception as exc:
-            safe = _safe_exception_fields(exc)
-            _log.warning(
-                "resolver fallback capability check failed for app=%s thread=%s "
-                "on %s#%s: class=%s status=%s",
-                app_slug,
-                thread_id,
-                repository,
-                pr,
-                safe["error_class"],
-                safe["status"],
-            )
-            threads = None
-        if cache is not None:
-            cache[app_slug] = threads
-
-    if not threads:
-        return None
-    for item in threads:
-        if item.get("id") == thread_id:
-            return item
-    return None
-
-
-def _countdown_app_baseline_allows_dedicated_pat_fallback(
-    thread: dict[str, Any] | None,
-) -> bool:
-    if not thread:
-        return False
-    return (
-        thread.get("isResolved") is False
-        and thread.get("isOutdated") is False
-        and thread.get("viewerCanResolve") is False
-        and thread.get("viewerCanReply") is True
-    )
-
-
-def _public_countdown_app_baseline(thread: dict[str, Any] | None) -> dict[str, Any]:
-    if not thread:
-        return {"available": False}
-    return {
-        "available": True,
-        "viewerCanResolve": thread.get("viewerCanResolve"),
-        "viewerCanReply": thread.get("viewerCanReply"),
-        "isResolved": thread.get("isResolved"),
-        "isOutdated": thread.get("isOutdated"),
-    }
 
 
 async def _app_head_repo_accessible(
@@ -1624,12 +1499,6 @@ async def _maybe_sync_stage_15(
     head_repo: str | None = None,
     is_fork_pr: bool = False,
     pr_author_login: str | None = None,
-    cfg: Any | None = None,
-    dedicated_pat_token_reader: Callable[
-        [CountdownDedicatedPatFallbackConfig],
-        tuple[str, str],
-    ] = _read_countdown_dedicated_pat,
-    dedicated_pat_client_factory: Callable[[str], Any] = GitHubTokenReviewThreadClient,
 ) -> list[Stage15Action]:
     """Stage 1.5 — resolve GitHub threads whose verdict is RESOLVED but isResolved=false.
 
@@ -1654,7 +1523,6 @@ async def _maybe_sync_stage_15(
     resolver_thread_cache: dict[str, list[dict[str, Any]] | None] = {}
     resolver_head_repo_access_cache: dict[tuple[str, str], bool] = {}
     verdict_reply_dedupe_cache: dict[str, Any] = {}
-    dedicated_pat_fallback_blocked = False
 
     for thread in threads:
         if thread.verdict != Verdict.RESOLVED:
@@ -1834,301 +1702,6 @@ async def _maybe_sync_stage_15(
                     )
                 )
                 continue
-
-            dedicated_pat_fallback = _countdown_dedicated_pat_fallback_for_repository(
-                cfg,
-                repository,
-            )
-            if dedicated_pat_fallback is not None:
-                if dedicated_pat_fallback_blocked:
-                    actions.append(
-                        Stage15Action(
-                            mutation=Stage15Mutation.RESOLVE_REVIEW_THREAD,
-                            threadId=thread.id,
-                            result={
-                                "applied": False,
-                                "skipped": "dedicated PAT fallback disabled after earlier failure",
-                                "verifier_app": CLEARANCE_AGENT_SLUG,
-                                "resolver_app": DEDICATED_PAT_FALLBACK_SLUG,
-                                "resolver_login": DEDICATED_PAT_FALLBACK_PUBLIC_ACTOR,
-                                "resolver_actor_class": "dedicated_machine_user_fallback",
-                                "fallback": True,
-                                "fallback_type": "dedicated_pat",
-                            },
-                        )
-                    )
-                else:
-                    countdown_baseline = await _app_thread_capability(
-                        client=client,
-                        app_slug=COUNTDOWN_AGENT_SLUG,
-                        repository=repository,
-                        pr=pr,
-                        thread_id=thread.id,
-                        cache=resolver_thread_cache,
-                    )
-                    if _countdown_app_baseline_allows_dedicated_pat_fallback(countdown_baseline):
-                        pat_client: Any | None = None
-                        try:
-                            token, expected_login = dedicated_pat_token_reader(
-                                dedicated_pat_fallback
-                            )
-                            pat_client = dedicated_pat_client_factory(token)
-                            pat_report = await query_review_thread_capabilities(
-                                pat_client,
-                                app_slug=DEDICATED_PAT_FALLBACK_SLUG,
-                                repository=repository,
-                                pr=pr,
-                                thread_ids=[thread.id],
-                            )
-                            if pat_report.actor_login.casefold() != expected_login.casefold():
-                                raise RuntimeError("dedicated PAT expected-login check failed")
-                            pat_thread = pat_report.threads[0]
-                            pat_can_resolve = (
-                                pat_thread.repository == repository
-                                and pat_thread.pr == pr
-                                and pat_thread.is_resolved is False
-                                and pat_thread.is_outdated is False
-                                and pat_thread.viewer_can_resolve is True
-                                and pat_thread.viewer_can_reply is True
-                            )
-                            if not pat_can_resolve:
-                                raise RuntimeError("dedicated PAT capability gate failed")
-
-                            if dry_run:
-                                actions.append(
-                                    Stage15Action(
-                                        mutation=Stage15Mutation.RESOLVE_REVIEW_THREAD,
-                                        threadId=thread.id,
-                                        result={
-                                            "dry_run": True,
-                                            "repo": repository,
-                                            "pr": pr,
-                                            "thread_id": thread.id,
-                                            "verifier_app": CLEARANCE_AGENT_SLUG,
-                                            "countdown_app_baseline": {
-                                                "viewerCanResolve": False,
-                                                "viewerCanReply": True,
-                                                "isResolved": False,
-                                                "isOutdated": False,
-                                            },
-                                            "resolver_app": DEDICATED_PAT_FALLBACK_SLUG,
-                                            "resolver_login": DEDICATED_PAT_FALLBACK_PUBLIC_ACTOR,
-                                            "resolver_actor_class": (
-                                                "dedicated_machine_user_fallback"
-                                            ),
-                                            "resolver_viewerCanResolve": True,
-                                            "fallback": True,
-                                            "fallback_type": "dedicated_pat",
-                                        },
-                                    )
-                                )
-                                continue
-
-                            canary = await run_review_thread_resolve_canary(
-                                pat_client,
-                                app_slug=DEDICATED_PAT_FALLBACK_SLUG,
-                                repository=repository,
-                                pr=pr,
-                                thread_ids=[thread.id],
-                            )
-                            operation = canary.operations[0]
-                            after_thread = canary.after.threads[0]
-                            if (
-                                operation.applied is not True
-                                or after_thread.is_resolved is not True
-                            ):
-                                dedicated_pat_fallback_blocked = True
-                                actions.append(
-                                    Stage15Action(
-                                        mutation=Stage15Mutation.RESOLVE_REVIEW_THREAD,
-                                        threadId=thread.id,
-                                        result={
-                                            "applied": False,
-                                            "operation": "resolveReviewThread",
-                                            "error_class": (
-                                                "DedicatedPatAfterStateVerificationFailed"
-                                            ),
-                                            "reason": operation.reason
-                                            or "dedicated PAT after-state verification failed",
-                                            "verifier_app": CLEARANCE_AGENT_SLUG,
-                                            "countdown_app_baseline": {
-                                                "viewerCanResolve": False,
-                                                "viewerCanReply": True,
-                                                "isResolved": False,
-                                                "isOutdated": False,
-                                            },
-                                            "resolver_app": DEDICATED_PAT_FALLBACK_SLUG,
-                                            "resolver_login": DEDICATED_PAT_FALLBACK_PUBLIC_ACTOR,
-                                            "resolver_actor_class": (
-                                                "dedicated_machine_user_fallback"
-                                            ),
-                                            "resolver_viewerCanResolve": True,
-                                            "fallback": True,
-                                            "fallback_type": "dedicated_pat",
-                                        },
-                                    )
-                                )
-                                continue
-
-                            resolved_by = DEDICATED_PAT_FALLBACK_PUBLIC_ACTOR
-                            result_with_meta = {
-                                "id": thread.id,
-                                "isResolved": True,
-                                "resolvedBy": {"login": resolved_by},
-                                "verifier_app": CLEARANCE_AGENT_SLUG,
-                                "clearance_viewerCanResolve": False,
-                                "countdown_app_baseline": {
-                                    "viewerCanResolve": False,
-                                    "viewerCanReply": True,
-                                    "isResolved": False,
-                                    "isOutdated": False,
-                                },
-                                "resolver_app": DEDICATED_PAT_FALLBACK_SLUG,
-                                "resolver_login": resolved_by,
-                                "resolver_actor_class": "dedicated_machine_user_fallback",
-                                "resolver_viewerCanResolve": True,
-                                "fallback": True,
-                                "fallback_type": "dedicated_pat",
-                            }
-                            snap.github_state = GitHubThreadState(
-                                isResolved=True,
-                                isOutdated=snap.github_state.isOutdated,
-                                viewerCanResolve=snap.github_state.viewerCanResolve,
-                                resolvedBy=resolved_by,
-                                synced_via=("Stage 1.5 dedicated PAT fallback resolveReviewThread"),
-                                synced_at=now,
-                            )
-                            thread.github_isResolved = True
-                            thread.github_resolvedBy = resolved_by
-
-                            comment_body = build_delegated_close_reason_comment(
-                                thread,
-                                snap,
-                                head_sha=head_sha,
-                                resolver_login=resolved_by,
-                            )
-                            dedicated_reply_result: dict[str, Any] = {"posted": False}
-                            skip_reason = await _current_head_verdict_reply_skip_reason(
-                                client=client,
-                                repository=repository,
-                                pr=pr,
-                                thread=thread,
-                                head_sha=head_sha,
-                                cache=verdict_reply_dedupe_cache,
-                            )
-                            if skip_reason:
-                                dedicated_reply_result = {
-                                    "posted": False,
-                                    "skipped": skip_reason,
-                                }
-                            else:
-                                try:
-                                    reply = await client.create_review_thread_reply(
-                                        CLEARANCE_AGENT_SLUG,
-                                        repository,
-                                        pr,
-                                        thread.comment_id,
-                                        body=comment_body,
-                                    )
-                                    dedicated_reply_result = {
-                                        "posted": True,
-                                        "url": (reply or {}).get("html_url"),
-                                    }
-                                except (httpx.HTTPError, RuntimeError) as exc:
-                                    safe = _safe_exception_fields(exc)
-                                    dedicated_reply_result = {
-                                        "posted": False,
-                                        "error_class": safe["error_class"],
-                                        "status": safe["status"],
-                                    }
-                                    _log.warning(
-                                        "dedicated PAT fallback in-thread reply suppressed "
-                                        "for thread %s (mutation already applied): "
-                                        "class=%s status=%s",
-                                        thread.id,
-                                        safe["error_class"],
-                                        safe["status"],
-                                    )
-                            result_with_meta["in_thread_reply"] = dedicated_reply_result
-                            actions.append(
-                                Stage15Action(
-                                    mutation=Stage15Mutation.RESOLVE_REVIEW_THREAD,
-                                    threadId=thread.id,
-                                    result=result_with_meta,
-                                )
-                            )
-                            continue
-                        except (
-                            RuntimeError,
-                            httpx.HTTPError,
-                            GitHubGraphQLError,
-                            TimeoutError,
-                        ) as exc:
-                            dedicated_pat_fallback_blocked = True
-                            safe = _safe_exception_fields(exc)
-                            _log.warning(
-                                "dedicated PAT fallback failed for thread=%s on %s#%s: "
-                                "class=%s status=%s",
-                                thread.id,
-                                repository,
-                                pr,
-                                safe["error_class"],
-                                safe["status"],
-                            )
-                            actions.append(
-                                Stage15Action(
-                                    mutation=Stage15Mutation.RESOLVE_REVIEW_THREAD,
-                                    threadId=thread.id,
-                                    result={
-                                        "applied": False,
-                                        "operation": "resolveReviewThread",
-                                        "error_class": safe["error_class"],
-                                        "status": safe["status"],
-                                        "verifier_app": CLEARANCE_AGENT_SLUG,
-                                        "countdown_app_baseline": {
-                                            "viewerCanResolve": False,
-                                            "viewerCanReply": True,
-                                            "isResolved": False,
-                                            "isOutdated": False,
-                                        },
-                                        "resolver_app": DEDICATED_PAT_FALLBACK_SLUG,
-                                        "resolver_login": DEDICATED_PAT_FALLBACK_PUBLIC_ACTOR,
-                                        "resolver_actor_class": ("dedicated_machine_user_fallback"),
-                                        "fallback": True,
-                                        "fallback_type": "dedicated_pat",
-                                    },
-                                )
-                            )
-                            continue
-                        finally:
-                            if pat_client is not None:
-                                await pat_client.aclose()
-                    else:
-                        dedicated_pat_fallback_blocked = True
-                        actions.append(
-                            Stage15Action(
-                                mutation=Stage15Mutation.RESOLVE_REVIEW_THREAD,
-                                threadId=thread.id,
-                                result={
-                                    "applied": False,
-                                    "operation": "countdownDedicatedPatBaselineGate",
-                                    "error_class": "CountdownAppBaselineGateFailed",
-                                    "reason": (
-                                        "Countdown App baseline did not satisfy dedicated PAT "
-                                        "fallback gate"
-                                    ),
-                                    "verifier_app": CLEARANCE_AGENT_SLUG,
-                                    "countdown_app_baseline": _public_countdown_app_baseline(
-                                        countdown_baseline
-                                    ),
-                                    "resolver_app": DEDICATED_PAT_FALLBACK_SLUG,
-                                    "resolver_login": DEDICATED_PAT_FALLBACK_PUBLIC_ACTOR,
-                                    "resolver_actor_class": "dedicated_machine_user_fallback",
-                                    "fallback": True,
-                                    "fallback_type": "dedicated_pat",
-                                },
-                            )
-                        )
 
             skip_reason = (
                 f"Unsupported capability: Clearance cannot resolve thread "
@@ -2436,7 +2009,6 @@ async def compute_clearance_automation(
     known_limitation_store: KnownLimitationStore | None = None,
     default_profile_name: str | None = None,
     expected_sha: str | None = None,
-    cfg: Any | None = None,
 ) -> dict[str, Any]:
     """Run the SWM-1101 per-thread verdict pipeline for one webhook event.
 
@@ -2704,7 +2276,6 @@ async def compute_clearance_automation(
         head_repo=head_repo,
         is_fork_pr=is_fork_pr,
         pr_author_login=pr_author_login,
-        cfg=cfg,
     )
 
     investigator_fired = any(t.llm_verdict for t in threads)

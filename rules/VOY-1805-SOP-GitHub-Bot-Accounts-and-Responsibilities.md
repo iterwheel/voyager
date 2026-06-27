@@ -255,12 +255,13 @@ and VOY-1804.
     stop for that repository/thread; do not substitute Frank's personal PAT or a
     broad human credential as the production resolver.
 
-    The first resolver mode is diagnostic/canary-only. Operators may run
-    `vyg countdown review-thread-diagnostic` against selected canary PRs to
-    record Countdown's live `viewerCanResolve`, `viewerCanReply`, `isResolved`,
-    and `isOutdated` values before enabling any production pipeline handoff.
-    Production event wiring, where Clearance emits semantic evidence and
-    Countdown consumes it, requires a follow-up CHG.
+    Review-thread resolution runs via `vyg countdown resolve-conversation`,
+    which resolves conversations as the fixed machine account
+    `iterwheel-countdown-user` (token via `gh auth token --user …`, never
+    printed) with a viewer-login identity gate and a resolve-only operation
+    allowlist. The earlier diagnostic/canary mechanism (`review-thread-diagnostic`
+    and the dedicated-PAT route, VOY-1827/1828/1829) was superseded and removed
+    per VOY-1830.
 
 
 ## Examples

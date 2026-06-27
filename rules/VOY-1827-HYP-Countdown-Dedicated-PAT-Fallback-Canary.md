@@ -3,8 +3,9 @@
 **Applies to:** VOY project
 **Last updated:** 2026-06-25
 **Last reviewed:** 2026-06-25
-**Status:** Hypothesis
-**Related:** VOY-1805, VOY-1806, VOY-1807, VOY-1828
+**Status:** Superseded
+**Superseded by:** VOY-1830 (dedicated-PAT machinery removed in favor of the gh-login machine-account resolver, #222)
+**Related:** VOY-1805, VOY-1806, VOY-1807, VOY-1828, VOY-1830
 
 ---
 

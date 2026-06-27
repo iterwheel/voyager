@@ -83,18 +83,9 @@ kill_switch_path = "~/.voyager/review-fix.disabled"
 escalation = "request-human-review"
 verify_command = "pytest tests/unit"
 
-# Countdown dedicated machine-user PAT fallback. Default is disabled. This is
-# not `iterwheel-countdown[bot]` resolver capability; it is an explicit fallback
-# route used only after the Countdown App baseline for the same thread reports
-# viewerCanResolve=false, viewerCanReply=true, isResolved=false, and
-# isOutdated=false. Keep production repositories out of this allow-list until a
-# follow-up approval expands the route.
-#
-# [countdown.dedicated_pat_fallback]
-# enabled = false
-# allowed_repositories = ["iterwheel/voyager-sandbox"]
-# keychain_service = "voyager/countdown-dedicated-pat"
-# expected_login_env = "VOYAGER_PAT_ACCOUNT"
+# Review-thread resolution runs out-of-band via `vyg countdown resolve-conversation`
+# (machine account, identity-gated). The former `[countdown.dedicated_pat_fallback]`
+# section was removed per VOY-1830 and is no longer parsed.
 
 
 # --- GitHub Apps ---------------------------------------------------------

@@ -214,27 +214,15 @@ repositories, manage secrets, deploy production, or merge code directly.
    Future escalation attempts need a new, narrower hypothesis and must not
    repeat Contents write as the assumed fix.
 
-   Issue #204 verified a separate GitHub App user-to-server route on Wukong
-   with Voyager `v0.7.3`. That route must be evaluated as a human-authorized
-   App user credential, not as an `iterwheel-countdown[bot]` installation-token
-   resolver. Operators may use `vyg countdown user-device-code` and
-   `vyg countdown user-refresh-check` to collect safe token-lifetime and
-   refresh metadata. Both commands require an operator-selected secret-store
-   command for replacement refresh tokens, must preflight that command before
-   token rotation, and must fail closed without writing plaintext token material
-   if storage fails after rotation. Expected viewer checks may print only
-   boolean match metadata. They must not print access tokens, refresh tokens,
-   maintainer usernames, private PR numbers, or review-thread node IDs.
-
-   The known-good issue #204 path is a fresh Device Flow without
-   `--repository-id`: first refresh-token storage passed, `user-refresh-check`
-   rotated the token successfully, and replacement storage passed. A prior
-   repository-scoped token continued to return GitHub HTTP 500 even though the
-   refresh request used the documented shape without client secret or repository
-   id; treat that as a GitHub-side or undocumented repo-scoped refresh behavior,
-   not as the baseline operator route. If a later user-to-server canary resolves
-   a thread, record the actual `resolvedBy` actor and require a follow-up CHG
-   before production use.
+   Issue #204 historically verified a separate GitHub App user-to-server route
+   on Wukong (Voyager `v0.7.3`) via the `vyg countdown user-device-code` /
+   `user-refresh-check` helpers — a fresh Device Flow without `--repository-id`
+   rotated refresh tokens successfully, while a repository-scoped token returned
+   GitHub HTTP 500. That route was a human-authorized App user credential, never
+   `iterwheel-countdown[bot]` resolver capability, and never produced a passing
+   resolve mutation. Those helper commands were removed per VOY-1830; review-thread
+   resolution now runs via `vyg countdown resolve-conversation` (machine account
+   `iterwheel-countdown-user`, identity-gated, resolve-only).
 
    The 2026-06-23 user-to-server canary did not resolve a thread. The route
    could query a sandbox `PullRequestReviewThread` and saw

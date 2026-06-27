@@ -38,13 +38,3 @@ def test_config_example_records_review_fix_l3_enablement() -> None:
     assert cfg.review_fix.enablement.envelope.max_rounds == 3
     assert cfg.review_fix.enablement.envelope.max_fixes_per_round == 2
     assert str(cfg.review_fix.audit_dir).endswith("/.voyager/state/review-fix/audit")
-
-
-def test_config_example_keeps_countdown_dedicated_pat_fallback_disabled() -> None:
-    cfg = load_config("config.example.toml")
-
-    fallback = cfg.countdown.dedicated_pat_fallback
-    assert fallback.enabled is False
-    assert fallback.allowed_repositories == ()
-    assert fallback.keychain_service is None
-    assert fallback.expected_login_env is None

@@ -45,7 +45,7 @@ Current bridge write-back:
 | `iterwheel-blueprint` | `iterwheel/voyager`, `iterwheel/voyager-sandbox`, `frankyxhl/alfred`, `frankyxhl/babs`, `frankyxhl/fx_bin`, `frankyxhl/sweeping-monk`, `frankyxhl/trinity` | `issues.opened`, `issues.edited`, `issues.reopened`, or `/blueprint` issue comment | Validates issue title format and intake fields, maintains exactly one Blueprint state label from `blueprint-needed`, `blueprint-ready`, and `blueprint-requests-revision`, upserts one Blueprint intake comment, and adds a `rocket` issue reaction when the issue is Blueprint-ready |
 | `iterwheel-stack` | `iterwheel/voyager`, `iterwheel/voyager-sandbox`, `frankyxhl/alfred`, `frankyxhl/babs`, `frankyxhl/fx_bin`, `frankyxhl/sweeping-monk`, `frankyxhl/trinity` | `issues.opened`, `issues.edited`, `issues.reopened`, or `/stack` issue comment on a non-PR issue | Maintains one issue label from each Stack axis (`stack-type-*`, `stack-area-*`, `stack-size-*`, and `stack-risk-*`) when confident; otherwise applies `stack-needs-review`; upserts one Stack classification comment; adds `rocket` on successful issue classification and `eyes` when human review is needed |
 | `iterwheel-clearance` | `iterwheel/voyager`, `iterwheel/voyager-sandbox` | `pull_request.opened`, `pull_request.edited`, `pull_request.reopened`, `pull_request.ready_for_review`, `pull_request.converted_to_draft`, `pull_request.synchronize`, `pull_request_review.submitted`, `pull_request_review.dismissed`, `pull_request_review_comment.*`, or `/clearance` PR comment | Maintains one PR review-readiness label from `clearance-1-pending`, `clearance-2-blocked`, `clearance-3-ready-for-approval`, and `clearance-4-ready-for-merge`; upserts one Clearance comment; adds `rocket` when ready and `eyes` otherwise |
-| `iterwheel-countdown` | `iterwheel/voyager-sandbox` resolver canary only | Manual `vyg countdown review-thread-diagnostic` invocation. Production event wiring is deferred to a follow-up CHG. | Queries `PullRequestReviewThread.viewerCanResolve`, `viewerCanReply`, `isResolved`, and `isOutdated` as Countdown. With `--resolve`, calls `resolveReviewThread` only when the target thread belongs to the specified PR, is currently unresolved, and Countdown's live `viewerCanResolve=true`. |
+| `iterwheel-countdown` | `iterwheel/voyager`, `iterwheel/voyager-sandbox` resolver | Manual `vyg countdown resolve-conversation` invocation (machine-account, identity-gated). | Resolves PR review conversations as the fixed machine account `iterwheel-countdown-user` (token via `gh auth token --user …`, never printed). The only GraphQL mutation issued is `resolveReviewThread`, and only allowlisted repos may be targeted. The earlier dedicated-PAT canary (`review-thread-diagnostic`, VOY-1827/1828/1829) was superseded and removed per VOY-1830. |
 | `iterwheel-assembly` | `iterwheel/voyager`, `iterwheel/voyager-sandbox`, `frankyxhl/alfred`, `frankyxhl/trinity` | `/assembly` or `/implement` issue comment on a `blueprint-ready` allow-listed issue. | When `ASSEMBLY_EXECUTION_BACKEND` produces commits, creates a `<issue#>-<slug>` branch ref on the source repo, opens or updates a PR with `Closes #N`, posts `@codex review` after each push, and upserts an Assembly progress comment on both the issue and the PR. Never merges, approves, resolves review threads, or applies Clearance/Countdown labels. Initial allow-list ships empty; `iterwheel/voyager-sandbox` is the intended first production target via `BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_ASSEMBLY`. Requires actor authorization per VOY-1818; default deny when `BRIDGE_ASSEMBLY_AUTHORIZED_ACTORS` and `BRIDGE_ASSEMBLY_AUTHORIZED_ASSOCIATIONS` are unset. Operators run the end-to-end issue-to-PR loop using VOY-1822. |
 
 Cross-account installation:
@@ -54,7 +54,15 @@ Cross-account installation:
 |---------|------------|----------|--------|
 | `frankyxhl` | `frankyxhl/alfred`, `frankyxhl/babs`, `frankyxhl/fx_bin`, `frankyxhl/sweeping-monk`, `frankyxhl/trinity` | Reuse existing `iterwheel-*` Apps by making them installable on selected repositories outside the owning organization. | `iterwheel-blueprint` installed as selected-repository installation `130696149`; `iterwheel-stack` installed as selected-repository installation `130716196`; `iterwheel-assembly` installed on `frankyxhl/alfred` and `frankyxhl/trinity` as selected-repository installation `134830000`; Static Fire, Clearance, and Countdown remain sandbox-only |
 
-Countdown resolver canary status:
+Countdown resolver canary status (historical — superseded by VOY-1830):
+
+> The dedicated-PAT and user-to-server canaries below are a historical evidence
+> log. Those routes and their CLI helpers (`review-thread-diagnostic`,
+> `user-device-code`, `user-refresh-check`, `user-review-thread-diagnostic`) were
+> removed per VOY-1830. Review-thread resolution now runs via `vyg countdown
+> resolve-conversation` (machine account `iterwheel-countdown-user`, identity-gated,
+> resolve-only). The rows are retained as the record of what was tried and why.
+
 
 | Check | Status | Evidence |
 |-------|--------|----------|

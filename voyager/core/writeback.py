@@ -476,7 +476,6 @@ async def dispatch_route_writeback(
                     investigator=investigator,
                     known_limitation_store=KnownLimitationStore(),
                     expected_sha=webhook_head_sha,
-                    cfg=cfg,
                 )
             except Exception as exc:
                 safe = _safe_exception_fields(exc)

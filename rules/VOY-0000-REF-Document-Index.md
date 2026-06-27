@@ -1,8 +1,8 @@
 # REF-0000: Document Index
 
 **Applies to:** VOY project
-**Last updated:** 2026-06-25
-**Last reviewed:** 2026-06-25
+**Last updated:** 2026-06-28
+**Last reviewed:** 2026-06-28
 **Status:** Active
 
 ---
@@ -39,7 +39,8 @@
 | 1826 | CHG | Clearance Manual-Close Dedupe (Completed) |
 | 1827 | HYP | Countdown Dedicated PAT Fallback Canary |
 | 1828 | SOP | Countdown Dedicated PAT Wukong Canary |
-| 1829 | CHG | Countdown Dedicated PAT Fallback Production Gate (Proposed) |
+| 1829 | CHG | Countdown Dedicated PAT Fallback Production Gate (Rolled Back) |
+| 1830 | CHG | Remove Countdown Dedicated PAT and User-Token Canary Machinery (Proposed) |
 
 ---
 
@@ -58,3 +59,4 @@
 | 2026-06-25 | Added VOY-1827 Countdown Dedicated PAT Fallback Canary HYP | Codex |
 | 2026-06-25 | Added VOY-1828 Countdown Dedicated PAT Wukong Canary SOP | Codex |
 | 2026-06-25 | Added VOY-1829 Countdown Dedicated PAT Fallback Production Gate CHG | Codex |
+| 2026-06-28 | Added VOY-1830 (remove dedicated-PAT + user-token canary); marked VOY-1827/1828/1829 superseded; retracted VOY-1831 | Claude Code |
