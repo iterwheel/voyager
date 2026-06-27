@@ -1,0 +1,543 @@
+"""
+countdown_loop — multi-repo review-thread resolve loop, run as the fixed machine
+account on top of the #222 ``resolve_conversation`` resolver (PRP VOY-1831).
+
+For each allowlisted repo: enumerate open PRs, deterministically prefilter the
+threads the machine account can resolve, ask an LLM **should-resolve gate** whether
+each candidate is actually addressed, and resolve only the approved ones — under a
+single-instance lock, a ``max_resolves`` blast-radius cap, and a redacted audit
+trail.
+
+Safety model (see PRP §Safety model): the LLM gate is a FAIL-CLOSED VETO on top of
+the deterministic candidate set. It can only veto a mechanically-resolvable thread,
+never promote a non-candidate; any gate error / parse failure / refusal defaults to
+skip. The authoritative resolve is still ``resolve_conversations`` (identity-gated,
+resolve-only). Non-sandbox repos never emit raw PR numbers / thread node IDs
+(VOY-1828).
+"""
+
+from __future__ import annotations
+
+import errno
+import fcntl
+import json
+import os
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, Protocol
+
+import httpx
+
+from voyager.core.resolve_conversation import (
+    RESOLVE_ALLOWED_REPOS,
+    ResolveConversationError,
+    ThreadState,
+    _assert_machine_identity,
+    _parse_thread_node,
+    _should_resolve,
+    resolve_conversations,
+)
+
+DEFAULT_LOCK_PATH = Path.home() / ".voyager" / "countdown-resolve-loop.lock"
+DEFAULT_AUDIT_PATH = Path.home() / ".voyager" / "countdown-resolve-loop.audit.jsonl"
+DEFAULT_MAX_RESOLVES = 20
+
+# Repos whose raw PR numbers / thread node IDs MAY appear in output (VOY-1828).
+# Sandbox only — NEVER add iterwheel/voyager here.
+_RAW_IDENTIFIER_REPOS: frozenset[str] = frozenset({"iterwheel/voyager-sandbox"})
+
+# Per-target failures we tolerate (skip the target, keep scanning) rather than
+# abort the whole multi-repo run.
+_TOLERATED_ERRORS = (httpx.HTTPError, TimeoutError, ResolveConversationError, RuntimeError)
+
+
+class AlreadyRunningError(RuntimeError):
+    """Raised when another resolve-loop instance already holds the lock."""
+
+
+class ReadGqlFn(Protocol):
+    async def __call__(self, query: str, variables: dict[str, Any]) -> dict[str, Any]: ...
+
+
+class ShouldResolveGate(Protocol):
+    """Decides whether a mechanically-resolvable candidate should actually resolve."""
+
+    async def should_resolve(self, candidate: Candidate) -> GateVerdict: ...
+
+
+_OPEN_PR_NUMBERS_QUERY = """
+query OpenPullRequestNumbers($owner: String!, $name: String!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(states: OPEN, first: 100, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes { number }
+    }
+  }
+}
+"""
+
+_PR_THREADS_WITH_COMMENTS_QUERY = """
+query ReviewThreadsWithComments($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id
+          isResolved
+          isOutdated
+          viewerCanResolve
+          viewerCanReply
+          comments(first: 20) {
+            nodes { author { login } body }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+@dataclass(frozen=True)
+class Candidate:
+    """A review thread that passed the deterministic (mechanically-resolvable) prefilter."""
+
+    repo: str
+    pr: int
+    thread_id: str
+    comments: tuple[tuple[str, str], ...]  # (author_login, body)
+
+
+@dataclass(frozen=True)
+class GateVerdict:
+    should_resolve: bool
+    reason: str
+
+
+@dataclass(frozen=True)
+class TargetError:
+    """A repo (or repo#pr) whose enumeration/resolve failed; the run skipped it."""
+
+    repo: str
+    message: str
+    pr: int | None = None
+
+    def public_target(self) -> str:
+        if self.pr is None:
+            return self.repo
+        # Redaction keys ONLY on repo membership (VOY-1828) — no operator override.
+        if self.repo in _RAW_IDENTIFIER_REPOS:
+            return f"{self.repo}#{self.pr}"
+        return f"{self.repo}#<redacted>"
+
+
+@dataclass(frozen=True)
+class Decision:
+    """One per-candidate outcome, for the summary and the audit trail."""
+
+    repo: str
+    pr: int
+    thread_id: str
+    action: str  # resolved | would_resolve | vetoed | skipped_stale | resolve_failed
+    reason: str
+
+    def public(self) -> dict[str, Any]:
+        # Redaction keys ONLY on repo membership (VOY-1828) — no operator override.
+        out: dict[str, Any] = {"repo": self.repo, "action": self.action, "reason": self.reason}
+        if self.repo in _RAW_IDENTIFIER_REPOS:
+            out["pr"] = self.pr
+            out["thread_id"] = self.thread_id
+        else:
+            out["redacted"] = True
+        return out
+
+
+@dataclass(frozen=True)
+class LoopSummary:
+    repos_scanned: tuple[str, ...]
+    repos_skipped: tuple[str, ...]
+    prs_scanned: int
+    decisions: tuple[Decision, ...]
+    capped: bool
+    dry_run: bool
+    errors: tuple[TargetError, ...] = ()
+    repos_enumerated: int = 0
+    prs_enumerated: int = 0
+
+    @property
+    def resolved(self) -> int:
+        return sum(1 for d in self.decisions if d.action == "resolved")
+
+    @property
+    def would_resolve(self) -> int:
+        return sum(1 for d in self.decisions if d.action == "would_resolve")
+
+    @property
+    def systemic_failure(self) -> bool:
+        """The whole scan failed at some scope (likely a global auth/config fault),
+        so the caller should fail rather than report a clean zero-candidate run."""
+        if not self.repos_scanned:
+            return False
+        if self.repos_enumerated == 0:
+            return True
+        return self.prs_scanned > 0 and self.prs_enumerated == 0
+
+    def to_public_dict(self) -> dict[str, Any]:
+        return {
+            "repos_scanned": list(self.repos_scanned),
+            "repos_skipped": list(self.repos_skipped),
+            "prs_scanned": self.prs_scanned,
+            "resolved": self.resolved,
+            "would_resolve": self.would_resolve,
+            "decision_count": len(self.decisions),
+            "capped": self.capped,
+            "dry_run": self.dry_run,
+            "systemic_failure": self.systemic_failure,
+            "errors": [{"target": e.public_target(), "message": e.message} for e in self.errors],
+            "decisions": [d.public() for d in self.decisions],
+        }
+
+
+# --------------------------------------------------------------------------- #
+# Lock / gate / repo-list (mechanism-agnostic; ported from #221, de-PAT'd)
+# --------------------------------------------------------------------------- #
+
+
+@contextmanager
+def single_instance_lock(path: Path = DEFAULT_LOCK_PATH) -> Iterator[None]:
+    """Hold a non-blocking ``flock``; raise :class:`AlreadyRunningError` if held."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno not in (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES):
+                raise  # operational fault (e.g. ENOLCK) — fail loud, not "already running"
+            raise AlreadyRunningError(f"another resolve-loop run holds {path}") from exc
+        os.ftruncate(fd, 0)
+        os.write(fd, f"{os.getpid()}\n".encode())
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
+def gate_repos(
+    requested: Sequence[str],
+    *,
+    ceiling: frozenset[str] = RESOLVE_ALLOWED_REPOS,
+) -> tuple[list[str], list[str]]:
+    """Split *requested* into ``(allowed, skipped)`` by the allowlist ceiling.
+
+    Order preserved, duplicates collapsed. A repo outside the ceiling is rejected
+    even if requested — the resolver allowlist is the only authorization boundary.
+    """
+    allowed: list[str] = []
+    skipped: list[str] = []
+    seen: set[str] = set()
+    for repo in requested:
+        if repo in seen:
+            continue
+        seen.add(repo)
+        (allowed if repo in ceiling else skipped).append(repo)
+    return allowed, skipped
+
+
+def load_repo_list(path: Path) -> list[str]:
+    """Read an ``OWNER/REPO``-per-line file; ``#`` comments and blanks ignored."""
+    repos: list[str] = []
+    for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        owner, sep, name = line.partition("/")
+        if not sep or not owner or not name or "/" in name:
+            raise ValueError(f"{path}:{lineno}: expected OWNER/REPO, got {line!r}")
+        repos.append(line.lower())
+    return repos
+
+
+# --------------------------------------------------------------------------- #
+# Read client (machine token; broad read-only queries, separate from resolve path)
+# --------------------------------------------------------------------------- #
+
+
+_ALLOWED_READ_QUERIES: frozenset[str] = frozenset(
+    {_OPEN_PR_NUMBERS_QUERY, _PR_THREADS_WITH_COMMENTS_QUERY}
+)
+
+
+def _default_async_client_factory() -> httpx.AsyncClient:
+    return httpx.AsyncClient(timeout=20)
+
+
+def make_read_gql(
+    token: str,
+    *,
+    client_factory: Any = _default_async_client_factory,
+) -> ReadGqlFn:
+    """Async GraphQL read client bound to *token* (never logged)."""
+
+    async def _gql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
+        # Defense-in-depth: the read client may only run the two known read queries.
+        # It binds a write-capable token, so an accidental mutation must be impossible.
+        if query not in _ALLOWED_READ_QUERIES:
+            raise ResolveConversationError("read client refusing an unknown GraphQL operation")
+        try:
+            async with client_factory() as client:
+                resp = await client.post(
+                    "https://api.github.com/graphql",
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Accept": "application/vnd.github+json",
+                    },
+                    json={"query": query, "variables": variables},
+                )
+                resp.raise_for_status()
+                body: dict[str, Any] = resp.json()
+        except httpx.HTTPStatusError as exc:
+            raise ResolveConversationError(
+                f"read GraphQL HTTP {exc.response.status_code}"
+            ) from None
+        except httpx.HTTPError:
+            raise ResolveConversationError("read GraphQL request failed") from None
+        except ValueError:
+            raise ResolveConversationError("read GraphQL returned a non-JSON response") from None
+        errors = body.get("errors")
+        if errors:
+            raise ResolveConversationError(f"read GraphQL returned {len(errors)} error(s)")
+        return body.get("data") or {}
+
+    return _gql
+
+
+async def _list_open_pr_numbers(gql: ReadGqlFn, repo: str) -> list[int]:
+    owner, name = repo.split("/", 1)
+    numbers: list[int] = []
+    after: str | None = None
+    seen_cursors: set[str] = set()
+    while True:
+        data = await gql(_OPEN_PR_NUMBERS_QUERY, {"owner": owner, "name": name, "after": after})
+        conn = (((data or {}).get("repository") or {}).get("pullRequests")) or {}
+        for node in conn.get("nodes") or []:
+            number = node.get("number")
+            if isinstance(number, int):
+                numbers.append(number)
+        page = conn.get("pageInfo") or {}
+        if not page.get("hasNextPage"):
+            break
+        after = page.get("endCursor")
+        if not after or after in seen_cursors:
+            break
+        seen_cursors.add(after)
+    return numbers
+
+
+def _thread_comments(node: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+    out: list[tuple[str, str]] = []
+    for c in ((node.get("comments") or {}).get("nodes")) or []:
+        author = ((c.get("author") or {}).get("login")) or "(unknown)"
+        body = c.get("body") or ""
+        out.append((str(author), str(body)))
+    return tuple(out)
+
+
+async def _candidates_for_pr(gql: ReadGqlFn, repo: str, pr: int) -> list[Candidate]:
+    """Enumerate a PR's review threads and keep only mechanically-resolvable ones."""
+    owner, name = repo.split("/", 1)
+    candidates: list[Candidate] = []
+    after: str | None = None
+    seen_cursors: set[str] = set()
+    while True:
+        data = await gql(
+            _PR_THREADS_WITH_COMMENTS_QUERY,
+            {"owner": owner, "name": name, "number": pr, "after": after},
+        )
+        pull = ((data or {}).get("repository") or {}).get("pullRequest")
+        if pull is None:
+            raise ResolveConversationError(f"PR not found in {repo!r}")
+        threads = pull.get("reviewThreads") or {}
+        for node in threads.get("nodes") or []:
+            ts: ThreadState = _parse_thread_node(node)
+            if not ts.thread_id or not _should_resolve(ts):
+                continue
+            candidates.append(
+                Candidate(
+                    repo=repo,
+                    pr=pr,
+                    thread_id=ts.thread_id,
+                    comments=_thread_comments(node),
+                )
+            )
+        page = threads.get("pageInfo") or {}
+        if not page.get("hasNextPage"):
+            break
+        after = page.get("endCursor")
+        if not after or after in seen_cursors:
+            break
+        seen_cursors.add(after)
+    return candidates
+
+
+# --------------------------------------------------------------------------- #
+# Audit
+# --------------------------------------------------------------------------- #
+
+
+def _append_audit(path: Path, record: dict[str, Any]) -> None:
+    """Append one redacted JSON line under an exclusive lock."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(record, separators=(",", ":")) + "\n"
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        os.write(fd, line.encode("utf-8"))
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
+# --------------------------------------------------------------------------- #
+# Loop
+# --------------------------------------------------------------------------- #
+
+
+async def run_resolve_loop(
+    *,
+    requested_repos: Sequence[str],
+    gate: ShouldResolveGate,
+    read_gql: ReadGqlFn,
+    resolve_gql: Any,
+    ceiling: frozenset[str] = RESOLVE_ALLOWED_REPOS,
+    max_resolves: int = DEFAULT_MAX_RESOLVES,
+    dry_run: bool = False,
+    timestamp: str | None = None,
+    audit_path: Path | None = DEFAULT_AUDIT_PATH,
+    resolve_fn: Any = None,
+) -> LoopSummary:
+    """Enumerate → deterministic prefilter → fail-closed LLM gate → resolve.
+
+    *gate*, *read_gql*, *resolve_gql* are injected (fakes in tests). *resolve_gql* is
+    the operation-allowlisted resolver client (``make_github_gql``); resolution goes
+    through ``resolve_conversations`` so the identity/resolve-only guarantees hold.
+    *resolve_fn* defaults to that path; tests inject a fake ``(Candidate, gql) -> Decision``.
+
+    ``max_resolves`` bounds the number of APPROVED candidates per run (resolves in
+    live mode, would-resolves in dry-run) — a single blast-radius/cost ceiling that
+    applies in both modes.
+    """
+    do_resolve = resolve_fn or _do_resolve
+    allowed, skipped = gate_repos(requested_repos, ceiling=ceiling)
+    when = timestamp or datetime.now(UTC).isoformat()
+
+    # Assert the resolver identity ONCE up front (real path only) so a wrong/expired
+    # machine credential aborts immediately instead of fanning out into one wasted
+    # LLM call + one resolve_failed per candidate across every repo.
+    if resolve_fn is None and not dry_run:
+        _assert_machine_identity(resolve_gql)
+
+    decisions: list[Decision] = []
+    scanned: list[str] = []
+    errors: list[TargetError] = []
+    prs_scanned = 0
+    repos_enumerated = 0
+    prs_enumerated = 0
+    capped = False
+
+    def _approved() -> int:
+        return sum(1 for d in decisions if d.action in ("resolved", "would_resolve"))
+
+    def _record(d: Decision) -> None:
+        decisions.append(d)
+        if audit_path is not None:
+            _append_audit(audit_path, {"ts": when, "dry_run": dry_run, **d.public()})
+
+    for repo in allowed:
+        if capped:
+            break
+        scanned.append(repo)
+        try:
+            pr_numbers = await _list_open_pr_numbers(read_gql, repo)
+        except _TOLERATED_ERRORS as exc:
+            errors.append(TargetError(repo=repo, message=str(exc)))
+            continue
+        repos_enumerated += 1
+        for pr in pr_numbers:
+            if capped:
+                break
+            prs_scanned += 1
+            try:
+                candidates = await _candidates_for_pr(read_gql, repo, pr)
+            except _TOLERATED_ERRORS as exc:
+                errors.append(TargetError(repo=repo, pr=pr, message=str(exc)))
+                continue
+            prs_enumerated += 1
+            for cand in candidates:
+                if _approved() >= max_resolves:
+                    capped = True
+                    break
+                verdict = await _gate_verdict(gate, cand)
+                if not verdict.should_resolve:
+                    _record(Decision(repo, pr, cand.thread_id, "vetoed", verdict.reason))
+                    continue
+                if dry_run:
+                    _record(Decision(repo, pr, cand.thread_id, "would_resolve", verdict.reason))
+                    continue
+                _record(_safe_resolve(do_resolve, cand, resolve_gql))
+
+    return LoopSummary(
+        repos_scanned=tuple(scanned),
+        repos_skipped=tuple(skipped),
+        prs_scanned=prs_scanned,
+        decisions=tuple(decisions),
+        capped=capped,
+        dry_run=dry_run,
+        errors=tuple(errors),
+        repos_enumerated=repos_enumerated,
+        prs_enumerated=prs_enumerated,
+    )
+
+
+async def _gate_verdict(gate: ShouldResolveGate, cand: Candidate) -> GateVerdict:
+    """Call the gate, FAIL CLOSED on any error/exception (default to veto/skip)."""
+    try:
+        verdict = await gate.should_resolve(cand)
+    except Exception as exc:
+        return GateVerdict(False, f"gate_error:{type(exc).__name__}")
+    if not isinstance(verdict, GateVerdict) or verdict.should_resolve is not True:
+        return GateVerdict(False, getattr(verdict, "reason", "gate_declined") or "gate_declined")
+    return verdict
+
+
+def _safe_resolve(do_resolve: Any, cand: Candidate, resolve_gql: Any) -> Decision:
+    """Run the resolve step with per-target isolation: any unexpected exception
+    becomes a ``resolve_failed`` decision rather than aborting the whole multi-repo run."""
+    try:
+        return do_resolve(cand, resolve_gql)  # type: ignore[no-any-return]
+    except _TOLERATED_ERRORS as exc:
+        return Decision(cand.repo, cand.pr, cand.thread_id, "resolve_failed", str(exc))
+
+
+def _do_resolve(cand: Candidate, resolve_gql: Any) -> Decision:
+    """Resolve a single approved candidate via the identity-gated resolver."""
+    try:
+        summary = resolve_conversations(repo=cand.repo, thread_id=cand.thread_id, gql=resolve_gql)
+    except ResolveConversationError as exc:
+        return Decision(cand.repo, cand.pr, cand.thread_id, "resolve_failed", str(exc))
+    if summary.resolved == 1:
+        return Decision(cand.repo, cand.pr, cand.thread_id, "resolved", "ok")
+    # resolved != 1: distinguish "mutation fired but GitHub did not confirm" (a real
+    # failure) from "thread was no longer resolvable at apply" (benign skip).
+    actions = {action for _tid, action in summary.details}
+    if "verify_failed" in actions:
+        return Decision(cand.repo, cand.pr, cand.thread_id, "resolve_failed", "verify_failed")
+    return Decision(cand.repo, cand.pr, cand.thread_id, "skipped_stale", "not_resolvable_at_apply")

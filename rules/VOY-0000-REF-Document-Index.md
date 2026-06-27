@@ -41,6 +41,7 @@
 | 1828 | SOP | Countdown Dedicated PAT Wukong Canary |
 | 1829 | CHG | Countdown Dedicated PAT Fallback Production Gate (Rolled Back) |
 | 1830 | CHG | Remove Countdown Dedicated PAT and User-Token Canary Machinery (Proposed) |
+| 1831 | PRP | Countdown Multi-Repo Resolve-Loop on Machine-Account Resolver (Draft) |
 
 ---
 
@@ -60,3 +61,4 @@
 | 2026-06-25 | Added VOY-1828 Countdown Dedicated PAT Wukong Canary SOP | Codex |
 | 2026-06-25 | Added VOY-1829 Countdown Dedicated PAT Fallback Production Gate CHG | Codex |
 | 2026-06-28 | Added VOY-1830 (remove dedicated-PAT + user-token canary); marked VOY-1827/1828/1829 superseded; retracted VOY-1831 | Claude Code |
+| 2026-06-28 | Added VOY-1831 PRP Countdown Multi-Repo Resolve-Loop (number reused; prior unmerged 1831 was retracted per VOY-1830) | Claude Code |

@@ -141,6 +141,78 @@ def resolve_conversation(
         typer.echo(f"dry_run:  {public['dry_run']}")
 
 
+@countdown_app.command("resolve-loop")
+def resolve_loop(
+    repos: str = typer.Option(..., "--repos", help="Path to an OWNER/REPO-per-line file."),
+    max_resolves: int = typer.Option(20, "--max-resolves", help="Cap on resolves per run."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Enumerate + judge; issue no mutation."),
+    as_json: bool = typer.Option(False, "--json", help="Emit the redacted JSON summary."),
+) -> None:
+    """Resolve review conversations across allowlisted repos as the machine account.
+
+    Enumerates open PRs, deterministically prefilters resolvable threads, applies a
+    fail-closed LLM should-resolve gate, and resolves only approved threads — under a
+    single-instance lock and a max-resolves cap. Identity is fixed to
+    iterwheel-countdown-user (token via gh, never printed).
+    """
+    import asyncio
+    from pathlib import Path
+
+    from voyager.core.countdown_gate import build_gate_from_env
+    from voyager.core.countdown_loop import (
+        AlreadyRunningError,
+        load_repo_list,
+        make_read_gql,
+        run_resolve_loop,
+        single_instance_lock,
+    )
+    from voyager.core.resolve_conversation import (
+        ResolveConversationError,
+        make_github_gql,
+        read_machine_token,
+    )
+
+    try:
+        requested = load_repo_list(Path(repos))
+        token = read_machine_token()
+        gate = build_gate_from_env()
+        read_gql = make_read_gql(token)
+        resolve_gql = make_github_gql(token)
+        with single_instance_lock():
+            summary = asyncio.run(
+                run_resolve_loop(
+                    requested_repos=requested,
+                    gate=gate,
+                    read_gql=read_gql,
+                    resolve_gql=resolve_gql,
+                    max_resolves=max_resolves,
+                    dry_run=dry_run,
+                )
+            )
+    except AlreadyRunningError as exc:
+        typer.echo(f"ERROR: {exc}")
+        raise typer.Exit(code=1) from exc
+    except (ResolveConversationError, OSError, ValueError, RuntimeError) as exc:
+        typer.echo(f"ERROR: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    public = summary.to_public_dict()
+    if as_json:
+        typer.echo(json.dumps(public))
+    else:
+        typer.echo(f"repos_scanned: {len(public['repos_scanned'])}")
+        typer.echo(f"repos_skipped: {public['repos_skipped']}")
+        typer.echo(f"prs_scanned:   {public['prs_scanned']}")
+        typer.echo(f"resolved:      {public['resolved']}")
+        typer.echo(f"would_resolve: {public['would_resolve']}")
+        typer.echo(f"capped:        {public['capped']}")
+        typer.echo(f"dry_run:       {public['dry_run']}")
+        typer.echo(f"errors:        {len(public['errors'])}")
+    if summary.systemic_failure:
+        typer.echo("ERROR: systemic failure — no repo/PR could be enumerated")
+        raise typer.Exit(code=1)
+
+
 def main() -> None:
     """Entry point for the ``vyg`` console script."""
     app()
