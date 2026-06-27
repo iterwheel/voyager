@@ -34,7 +34,20 @@ from voyager.core.github_app import GitHubGraphQLError
 
 # Per-target failures we tolerate (skip the target, keep scanning the rest)
 # rather than abort the whole multi-repo run.
-_TOLERATED_ENUMERATION_ERRORS = (GitHubGraphQLError, httpx.HTTPError, RuntimeError)
+#   - GitHubGraphQLError / httpx.HTTPError: transient API or per-repo access errors.
+#   - TimeoutError: builtin (not an httpx subclass) from the async stack.
+#   - RuntimeError: GitHubAppClient.installation_token raises it when a repo has no
+#     discoverable App installation (github_app.py:140); tolerating it lets an
+#     uninstalled/inaccessible repo be skipped instead of aborting the whole run.
+#     Trade-off: a genuine RuntimeError in enumeration is recorded as a per-target
+#     error rather than crashing — acceptable for a resilient multi-repo scan.
+_TOLERATED_ENUMERATION_ERRORS = (GitHubGraphQLError, httpx.HTTPError, TimeoutError, RuntimeError)
+
+# Repos whose raw PR numbers / thread node IDs MAY appear in CLI/JSON output.
+# Sandbox only — VOY-1828 forbids emitting private real-repo identifiers to
+# terminal transcripts. NEVER add iterwheel/voyager here; it would silently leak
+# once the resolve frozenset is expanded (issue C).
+_RAW_IDENTIFIER_REPOS = frozenset({"iterwheel/voyager-sandbox"})
 
 DEFAULT_LOCK_PATH = Path.home() / ".voyager" / "locks" / "countdown-resolve-loop.lock"
 DEFAULT_MAX_RESOLVES = 10
@@ -141,7 +154,9 @@ class LoopSummary:
     capped: bool
     errors: tuple[TargetError, ...] = ()
 
-    def to_public_dict(self) -> dict[str, Any]:
+    def to_public_dict(self, *, show_raw: bool = False) -> dict[str, Any]:
+        """Public summary. Raw PR numbers / thread IDs are emitted only for
+        sandbox repos (VOY-1828) unless ``show_raw`` is set (operator opt-in)."""
         return {
             "repos_scanned": list(self.repos_scanned),
             "repos_skipped": list(self.repos_skipped),
@@ -149,16 +164,22 @@ class LoopSummary:
             "candidate_count": len(self.candidates),
             "capped": self.capped,
             "errors": [{"target": e.target, "message": e.message} for e in self.errors],
-            "candidates": [
-                {"repo": c.repo, "pr": c.pr, "thread_id": c.thread_id} for c in self.candidates
-            ],
+            "candidates": [_candidate_public(c, show_raw=show_raw) for c in self.candidates],
         }
+
+
+def _candidate_public(candidate: Candidate, *, show_raw: bool) -> dict[str, Any]:
+    if show_raw or candidate.repo in _RAW_IDENTIFIER_REPOS:
+        return {"repo": candidate.repo, "pr": candidate.pr, "thread_id": candidate.thread_id}
+    # Non-sandbox: never put the raw private PR number / thread node ID in output.
+    return {"repo": candidate.repo, "pr": None, "thread_id": None, "redacted": True}
 
 
 async def _list_open_pr_numbers(client: LoopGitHubClient, app_slug: str, repo: str) -> list[int]:
     owner, name = repo.split("/", 1)
     numbers: list[int] = []
     after: str | None = None
+    seen_cursors: set[str] = set()
     while True:
         data = await client.graphql(
             app_slug,
@@ -175,8 +196,9 @@ async def _list_open_pr_numbers(client: LoopGitHubClient, app_slug: str, repo: s
         if not page_info.get("hasNextPage"):
             break
         after = page_info.get("endCursor")
-        if not after:
-            break
+        if not after or after in seen_cursors:
+            break  # missing or repeating cursor — stop rather than loop forever
+        seen_cursors.add(after)
     return numbers
 
 
@@ -271,10 +293,19 @@ async def run_resolve_loop(
 
 
 def load_repo_list(path: Path) -> list[str]:
-    """Read a repo list file: one ``OWNER/REPO`` per line; ``#`` comments and blanks ignored."""
+    """Read a repo list file: one ``OWNER/REPO`` per line; ``#`` comments and blanks ignored.
+
+    Each entry must be ``OWNER/REPO`` (exactly one ``/``, both halves non-empty);
+    a malformed line raises with the line number rather than failing opaquely deeper
+    in enumeration.
+    """
     repos: list[str] = []
-    for raw in path.read_text(encoding="utf-8").splitlines():
+    for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         line = raw.split("#", 1)[0].strip()
-        if line:
-            repos.append(line)
+        if not line:
+            continue
+        owner, sep, name = line.partition("/")
+        if not sep or not owner or not name or "/" in name:
+            raise ValueError(f"{path}:{lineno}: expected OWNER/REPO, got {line!r}")
+        repos.append(line)
     return repos

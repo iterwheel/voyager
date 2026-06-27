@@ -336,6 +336,14 @@ def resolve_loop(
     lock_path: Path = typer.Option(
         DEFAULT_LOCK_PATH, "--lock-path", help="Single-instance lock file path."
     ),
+    show_raw: bool = typer.Option(
+        False,
+        "--show-raw",
+        help=(
+            "Emit raw PR numbers / thread IDs for non-sandbox repos. Off by default "
+            "(VOY-1828: keep private identifiers out of terminal transcripts)."
+        ),
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
     """Enumerate + gate + prefilter resolvable review threads across repos (no resolve, no LLM)."""
@@ -343,6 +351,7 @@ def resolve_loop(
 
     from voyager.core.config import load_config
     from voyager.core.countdown_loop import (
+        _RAW_IDENTIFIER_REPOS,
         AlreadyRunningError,
         load_repo_list,
         run_resolve_loop,
@@ -388,7 +397,7 @@ def resolve_loop(
         return
 
     if json_output:
-        typer.echo(json.dumps(summary.to_public_dict(), indent=2, sort_keys=True))
+        typer.echo(json.dumps(summary.to_public_dict(show_raw=show_raw), indent=2, sort_keys=True))
         return
 
     typer.echo("Countdown resolve-loop (deterministic core; read-only — resolve lands in #218)")
@@ -403,7 +412,10 @@ def resolve_loop(
     capped = " (capped by --max-resolves)" if summary.capped else ""
     typer.echo(f"resolvable candidates: {len(summary.candidates)}{capped}")
     for candidate in summary.candidates:
-        typer.echo(f"- {candidate.repo}#{candidate.pr} thread={candidate.thread_id}")
+        if show_raw or candidate.repo in _RAW_IDENTIFIER_REPOS:
+            typer.echo(f"- {candidate.repo}#{candidate.pr} thread={candidate.thread_id}")
+        else:
+            typer.echo(f"- {candidate.repo} [pr/thread redacted — pass --show-raw]")
 
 
 @countdown_app.command("user-review-thread-diagnostic")
