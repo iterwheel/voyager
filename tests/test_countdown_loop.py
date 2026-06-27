@@ -399,11 +399,11 @@ import voyager.core.github_app as _gh_mod  # noqa: E402
 from voyager.cli import app as _cli_app  # noqa: E402
 
 
-def _fake_cfg(*, apps: dict[str, Any], allowed: tuple[str, ...]) -> Any:
+def _fake_cfg(*, apps: dict[str, Any], allowed: tuple[str, ...], enabled: bool = True) -> Any:
     return SimpleNamespace(
         apps=apps,
         countdown=SimpleNamespace(
-            dedicated_pat_fallback=SimpleNamespace(allowed_repositories=allowed)
+            dedicated_pat_fallback=SimpleNamespace(enabled=enabled, allowed_repositories=allowed)
         ),
     )
 
@@ -423,6 +423,27 @@ def test_cli_app_not_configured_exits_1(monkeypatch):
     result = CliRunner().invoke(_cli_app, ["countdown", "resolve-loop"])
     assert result.exit_code == 1
     assert "not configured" in result.output
+
+
+def test_cli_kill_switch_disabled_is_noop(monkeypatch):
+    from typer.testing import CliRunner
+
+    monkeypatch.setattr(
+        _config_mod,
+        "load_config",
+        lambda *_a, **_k: _fake_cfg(
+            apps={"iterwheel-countdown": object()}, allowed=(SANDBOX,), enabled=False
+        ),
+    )
+
+    # If the loop ran despite the kill switch, this would be invoked.
+    def _boom(*_a, **_k):
+        raise AssertionError("loop must not run when fallback disabled")
+
+    monkeypatch.setattr(_loop_mod, "single_instance_lock", _boom)
+    result = CliRunner().invoke(_cli_app, ["countdown", "resolve-loop"])
+    assert result.exit_code == 0
+    assert "disabled" in result.output
 
 
 def test_cli_already_running_exits_0(monkeypatch):

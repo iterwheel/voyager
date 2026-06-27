@@ -366,6 +366,17 @@ def resolve_loop(
         typer.echo(f"ERROR: app {app_slug!r} is not configured", err=True)
         raise typer.Exit(code=1)
 
+    # Operator kill switch: this loop only feeds the PAT-fallback resolver (#218), so
+    # honor [countdown.dedicated_pat_fallback].enabled the same way Clearance does
+    # (pipeline.py:124 returns early when disabled). Authoritative even with --repos —
+    # a kill switch a flag can bypass is not a kill switch.
+    if not cfg.countdown.dedicated_pat_fallback.enabled:
+        typer.echo(
+            "resolve-loop disabled: [countdown.dedicated_pat_fallback].enabled is false "
+            "(operator kill switch); nothing enumerated."
+        )
+        return
+
     if repos is not None:
         requested = load_repo_list(repos)
     else:
