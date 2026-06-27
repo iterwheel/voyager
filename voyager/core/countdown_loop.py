@@ -151,10 +151,14 @@ class Decision:
 
     def public(self) -> dict[str, Any]:
         # Redaction keys ONLY on repo membership (VOY-1828) — no operator override.
-        out: dict[str, Any] = {"repo": self.repo, "action": self.action, "reason": self.reason}
+        # `reason` is dropped for non-sandbox repos: veto/would_resolve reasons are
+        # LLM free-text over comment bodies and could echo a raw PR#/node-ID. `action`
+        # is a fixed enum, always safe. Sandbox keeps the reason for debugging.
+        out: dict[str, Any] = {"repo": self.repo, "action": self.action}
         if self.repo in _RAW_IDENTIFIER_REPOS:
             out["pr"] = self.pr
             out["thread_id"] = self.thread_id
+            out["reason"] = self.reason
         else:
             out["redacted"] = True
         return out
@@ -447,8 +451,10 @@ async def run_resolve_loop(
 
     # Assert the resolver identity ONCE up front (real path only) so a wrong/expired
     # machine credential aborts immediately instead of fanning out into one wasted
-    # LLM call + one resolve_failed per candidate across every repo.
-    if resolve_fn is None and not dry_run:
+    # LLM call per candidate across every repo. Done even in dry-run: that mode still
+    # enumerates threads and ships their comments to the LLM, so a wrong identity must
+    # abort there too (matches resolve_conversations, which gates identity regardless).
+    if resolve_fn is None:
         _assert_machine_identity(resolve_gql)
 
     decisions: list[Decision] = []

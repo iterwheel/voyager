@@ -329,6 +329,37 @@ class TestRedaction:
         assert pub["decisions"][0]["pr"] == 42
         assert pub["decisions"][0]["thread_id"] == "OK"
 
+    async def test_llm_reason_not_leaked_for_real_repo(self, tmp_path: Path) -> None:
+        # The gate's reason is LLM free-text over comment bodies; for non-sandbox repos
+        # it must never reach public output OR the audit (it could echo a raw PR#/node-ID).
+        leak = "PRRT_kwDOSECRETnodeid #1337"
+        audit = tmp_path / "audit.jsonl"
+        read = FakeReadGql({REAL: [1]}, {(REAL, 1): [_thread(tid="A")]})
+        await _run(read, FakeGate(GateVerdict(False, leak)), repos=[REAL], audit_path=audit)
+        # would have been recorded as a veto carrying `leak` as its reason
+        assert leak not in audit.read_text(encoding="utf-8")
+
+
+class TestIdentityGate:
+    async def test_dry_run_still_asserts_identity(self) -> None:
+        # dry-run enumerates threads and ships comments to the LLM, so a wrong machine
+        # identity must abort up front there too — not only on live resolves.
+        read = FakeReadGql({SANDBOX: [1]}, {(SANDBOX, 1): [_thread(tid="A")]})
+
+        def _wrong_identity_gql(query: str, variables: dict) -> dict:
+            return {"viewer": {"login": "ryosaeba1985"}}  # not the machine account
+
+        with pytest.raises(cl.ResolveConversationError):
+            await run_resolve_loop(
+                requested_repos=[SANDBOX],
+                gate=FakeGate(),
+                read_gql=read,
+                resolve_gql=_wrong_identity_gql,
+                resolve_fn=None,  # real path → identity asserted before any LLM call
+                dry_run=True,
+                audit_path=None,
+            )
+
 
 class TestSystemicFailure:
     async def test_all_repos_fail_enumeration_is_systemic(self) -> None:

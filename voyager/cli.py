@@ -209,7 +209,8 @@ def resolve_loop(
         typer.echo(f"dry_run:       {public['dry_run']}")
         typer.echo(f"errors:        {len(public['errors'])}")
     if summary.systemic_failure:
-        typer.echo("ERROR: systemic failure — no repo/PR could be enumerated")
+        # stderr, so --json stdout stays pure JSON exactly when it matters most.
+        typer.echo("ERROR: systemic failure — no repo/PR could be enumerated", err=True)
         raise typer.Exit(code=1)
 
 
