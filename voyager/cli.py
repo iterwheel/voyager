@@ -396,6 +396,10 @@ def resolve_loop(
     if summary.repos_skipped:
         typer.echo(f"repos skipped (outside frozenset ceiling): {', '.join(summary.repos_skipped)}")
     typer.echo(f"PRs scanned: {summary.prs_scanned}")
+    if summary.errors:
+        typer.echo(f"errors (target skipped, scan continued): {len(summary.errors)}")
+        for err in summary.errors:
+            typer.echo(f"! {err.target}: {err.message}")
     capped = " (capped by --max-resolves)" if summary.capped else ""
     typer.echo(f"resolvable candidates: {len(summary.candidates)}{capped}")
     for candidate in summary.candidates:

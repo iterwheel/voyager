@@ -16,6 +16,7 @@ from voyager.core.countdown_loop import (
     run_resolve_loop,
     single_instance_lock,
 )
+from voyager.core.github_app import GitHubGraphQLError
 
 SANDBOX = "iterwheel/voyager-sandbox"
 REAL = "iterwheel/voyager"
@@ -46,9 +47,11 @@ class FakeClient:
         *,
         prs_by_repo: dict[str, list[int]] | None = None,
         threads_by_pr: dict[tuple[str, int], list[dict[str, Any]]] | None = None,
+        raise_repos: set[str] | None = None,
     ) -> None:
         self.prs_by_repo = prs_by_repo or {}
         self.threads_by_pr = threads_by_pr or {}
+        self.raise_repos = raise_repos or set()
         self.graphql_repos: list[str] = []
         self.thread_calls: list[tuple[str, int]] = []
 
@@ -56,6 +59,8 @@ class FakeClient:
         self, app_slug: str, repository: str, *, query: str, variables: dict[str, Any]
     ) -> Any:
         self.graphql_repos.append(repository)
+        if repository in self.raise_repos:
+            raise GitHubGraphQLError([{"message": "boom"}])
         numbers = self.prs_by_repo.get(repository, [])
         return {
             "repository": {
@@ -141,6 +146,50 @@ async def test_max_resolves_caps_candidates_without_silent_truncation():
     summary = await run_resolve_loop(client, requested_repos=[SANDBOX], max_resolves=2)
     assert len(summary.candidates) == 2
     assert summary.capped is True
+
+
+# --- per-repo error isolation (codex bot finding #1) -------------------------
+
+
+async def test_repo_enumeration_error_is_isolated_and_scan_continues():
+    repo_a, repo_b = "iterwheel/a", "iterwheel/b"
+    ceiling = frozenset({repo_a, repo_b})
+    client = FakeClient(
+        prs_by_repo={repo_b: [9]},
+        threads_by_pr={(repo_b, 9): [_thread("ok")]},
+        raise_repos={repo_a},
+    )
+    summary = await run_resolve_loop(client, requested_repos=[repo_a, repo_b], ceiling=ceiling)
+    # repo_a failed but did not abort the run; repo_b still scanned and yielded a candidate.
+    assert [e.target for e in summary.errors] == [repo_a]
+    assert [c.thread_id for c in summary.candidates] == ["ok"]
+    assert summary.repos_scanned == (repo_a, repo_b)
+
+
+# --- cap must not over-report scanned repos (codex bot finding #2) ------------
+
+
+async def test_cap_does_not_report_unvisited_repos_as_scanned():
+    repo_a, repo_b = "iterwheel/a", "iterwheel/b"
+    ceiling = frozenset({repo_a, repo_b})
+    client = FakeClient(
+        prs_by_repo={repo_a: [1], repo_b: [2]},
+        threads_by_pr={
+            (repo_a, 1): [_thread(f"t{i}") for i in range(3)],
+            (repo_b, 2): [_thread("late")],
+        },
+        raise_repos=set(),
+    )
+    summary = await run_resolve_loop(
+        client, requested_repos=[repo_a, repo_b], ceiling=ceiling, max_resolves=2
+    )
+    assert summary.capped is True
+    assert len(summary.candidates) == 2
+    # repo_b was never visited (cap hit in repo_a) — must not be reported as scanned,
+    # nor enumerated at all.
+    assert summary.repos_scanned == (repo_a,)
+    assert repo_b not in client.graphql_repos
+    assert (repo_b, 2) not in client.thread_calls
 
 
 # --- single-instance lock ----------------------------------------------------

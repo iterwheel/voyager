@@ -22,12 +22,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+import httpx
+
 from voyager.core.countdown_diagnostic import (
     COUNTDOWN_AGENT_SLUG,
     DEDICATED_PAT_FALLBACK_RESOLVE_ALLOWED_REPOSITORIES,
     ReviewThreadCapability,
     _skip_reason,
 )
+from voyager.core.github_app import GitHubGraphQLError
+
+# Per-target failures we tolerate (skip the target, keep scanning the rest)
+# rather than abort the whole multi-repo run.
+_TOLERATED_ENUMERATION_ERRORS = (GitHubGraphQLError, httpx.HTTPError, RuntimeError)
 
 DEFAULT_LOCK_PATH = Path.home() / ".voyager" / "locks" / "countdown-resolve-loop.lock"
 DEFAULT_MAX_RESOLVES = 10
@@ -118,12 +125,21 @@ class Candidate:
 
 
 @dataclass(frozen=True)
+class TargetError:
+    """A repo (or repo#pr) whose enumeration failed; the run skipped it and continued."""
+
+    target: str
+    message: str
+
+
+@dataclass(frozen=True)
 class LoopSummary:
     repos_scanned: tuple[str, ...]
     repos_skipped: tuple[str, ...]
     prs_scanned: int
     candidates: tuple[Candidate, ...]
     capped: bool
+    errors: tuple[TargetError, ...] = ()
 
     def to_public_dict(self) -> dict[str, Any]:
         return {
@@ -132,6 +148,7 @@ class LoopSummary:
             "prs_scanned": self.prs_scanned,
             "candidate_count": len(self.candidates),
             "capped": self.capped,
+            "errors": [{"target": e.target, "message": e.message} for e in self.errors],
             "candidates": [
                 {"repo": c.repo, "pr": c.pr, "thread_id": c.thread_id} for c in self.candidates
             ],
@@ -212,14 +229,30 @@ async def run_resolve_loop(
     allowed, skipped = gate_repos(requested_repos, ceiling=ceiling)
 
     candidates: list[Candidate] = []
+    scanned: list[str] = []
+    errors: list[TargetError] = []
     prs_scanned = 0
     capped = False
     for repo in allowed:
         if capped:
             break
-        for pr in await _list_open_pr_numbers(client, app_slug, repo):
+        # Count the repo as scanned only once we actually start it, so a cap hit
+        # in an earlier repo does not report later (un-visited) repos as scanned.
+        scanned.append(repo)
+        try:
+            pr_numbers = await _list_open_pr_numbers(client, app_slug, repo)
+        except _TOLERATED_ENUMERATION_ERRORS as exc:
+            # One failing/inaccessible repo must not suppress the rest of the run.
+            errors.append(TargetError(target=repo, message=str(exc)))
+            continue
+        for pr in pr_numbers:
             prs_scanned += 1
-            for candidate in await _candidates_for_pr(client, app_slug, repo, pr):
+            try:
+                pr_candidates = await _candidates_for_pr(client, app_slug, repo, pr)
+            except _TOLERATED_ENUMERATION_ERRORS as exc:
+                errors.append(TargetError(target=f"{repo}#{pr}", message=str(exc)))
+                continue
+            for candidate in pr_candidates:
                 if len(candidates) >= max_resolves:
                     capped = True
                     break
@@ -228,11 +261,12 @@ async def run_resolve_loop(
                 break
 
     return LoopSummary(
-        repos_scanned=tuple(allowed),
+        repos_scanned=tuple(scanned),
         repos_skipped=tuple(skipped),
         prs_scanned=prs_scanned,
         candidates=tuple(candidates),
         capped=capped,
+        errors=tuple(errors),
     )
 
 
