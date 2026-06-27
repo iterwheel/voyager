@@ -393,8 +393,10 @@ def resolve_loop(
             "allowed_repositories or pass --repos"
         )
 
+    acquired = False
     try:
         with single_instance_lock(lock_path):
+            acquired = True  # past lock acquisition — later OSErrors are NOT lock failures
             client = GitHubAppClient(cfg.apps)
 
             async def _run() -> Any:
@@ -419,6 +421,11 @@ def resolve_loop(
         typer.echo(f"resolve-loop already running: {exc}", err=True)
         return
     except OSError as exc:
+        if acquired:
+            # OSError from enumeration/cleanup (e.g. PermissionError reading the App
+            # private key) — let it propagate with its real context instead of
+            # mislabeling it as a lock failure.
+            raise
         # Lock acquisition itself failed (e.g. ENOLCK, or mkdir on a read-only/sandboxed
         # home under launchd). Fail loud with a clear message rather than crash.
         _exit_with_error(f"cannot acquire resolve-loop lock at {lock_path}: {exc}")

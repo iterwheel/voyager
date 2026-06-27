@@ -548,3 +548,46 @@ def test_cli_repo_source_selection(monkeypatch, tmp_path, extra_args, expected):
     result = CliRunner().invoke(_cli_app, args)
     assert result.exit_code == 0, result.output
     assert captured["requested"] == expected
+
+
+def test_cli_lock_acquisition_oserror_exits_1(monkeypatch):
+    # An OSError while ACQUIRING the lock (ENOLCK, mkdir on read-only home) → clean exit-1.
+    import errno
+
+    from typer.testing import CliRunner
+
+    monkeypatch.setattr(
+        _config_mod,
+        "load_config",
+        lambda *_a, **_k: _fake_cfg(apps={"iterwheel-countdown": object()}, allowed=(SANDBOX,)),
+    )
+
+    def _lock_fails(_path):
+        raise OSError(errno.ENOLCK, "no locks available")
+
+    monkeypatch.setattr(_loop_mod, "single_instance_lock", _lock_fails)
+    result = CliRunner().invoke(_cli_app, ["countdown", "resolve-loop"])
+    assert result.exit_code == 1
+    assert "cannot acquire resolve-loop lock" in result.output
+
+
+def test_cli_body_oserror_propagates_with_real_context(monkeypatch):
+    # An OSError AFTER the lock is held (e.g. PermissionError reading the App key during
+    # enumeration) must propagate with its real context, not be mislabeled a lock failure.
+    from typer.testing import CliRunner
+
+    monkeypatch.setattr(
+        _config_mod,
+        "load_config",
+        lambda *_a, **_k: _fake_cfg(apps={"iterwheel-countdown": object()}, allowed=(SANDBOX,)),
+    )
+    monkeypatch.setattr(_loop_mod, "single_instance_lock", lambda _p: contextlib.nullcontext())
+    monkeypatch.setattr(_gh_mod, "GitHubAppClient", _FakeAppClient)
+
+    async def _boom(client, **_k):
+        raise PermissionError("reading App private key")
+
+    monkeypatch.setattr(_loop_mod, "run_resolve_loop", _boom)
+    result = CliRunner().invoke(_cli_app, ["countdown", "resolve-loop"])
+    assert isinstance(result.exception, PermissionError)
+    assert "cannot acquire resolve-loop lock" not in result.output
