@@ -83,7 +83,7 @@ class LoopGitHubClient(Protocol):
         self, app_slug: str, repository: str, *, query: str, variables: dict[str, Any]
     ) -> Any: ...
 
-    async def pull_request_review_threads(
+    async def pull_request_review_thread_capabilities(
         self, app_slug: str, repo: str, pull_number: int
     ) -> list[dict[str, Any]]: ...
 
@@ -284,7 +284,7 @@ def _fallback_skip_reason(
 async def _candidates_for_pr(
     client: LoopGitHubClient, app_slug: str, repo: str, pr: int
 ) -> list[Candidate]:
-    threads = await client.pull_request_review_threads(app_slug, repo, pr)
+    threads = await client.pull_request_review_thread_capabilities(app_slug, repo, pr)
     out: list[Candidate] = []
     for thread in threads:
         capability = _capability_from_thread(thread, repo=repo, pr=pr)
@@ -372,5 +372,8 @@ def load_repo_list(path: Path) -> list[str]:
         owner, sep, name = line.partition("/")
         if not sep or not owner or not name or "/" in name:
             raise ValueError(f"{path}:{lineno}: expected OWNER/REPO, got {line!r}")
-        repos.append(line)
+        # Lowercase so --repos follows the same allowlist semantics as the TOML source
+        # (config parsing lowercases) — otherwise `Iterwheel/Voyager-Sandbox` would miss
+        # the lowercase ceiling and the file override would become a silent no-op.
+        repos.append(line.lower())
     return repos

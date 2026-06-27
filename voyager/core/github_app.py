@@ -405,6 +405,55 @@ class GitHubAppClient:
 
         return threads
 
+    async def pull_request_review_thread_capabilities(
+        self, app_slug: str, repo: str, pull_number: int
+    ) -> list[dict[str, Any]]:
+        """Capability-only review-thread enumeration: id + the four resolve booleans.
+
+        Unlike :meth:`pull_request_review_threads`, this does NOT fetch comment bodies
+        or paginate per-thread comments — the deterministic resolve-loop prefilter only
+        needs ``id``/``isResolved``/``isOutdated``/``viewerCanResolve``/``viewerCanReply``.
+        Avoids spending GraphQL quota / risking timeouts on unused review text when
+        scanning many PRs across repos.
+        """
+        owner, name = repo.split("/", 1)
+        query = """
+        query PullRequestReviewThreadCapabilities($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+          repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+              reviewThreads(first: 100, after: $cursor) {
+                pageInfo { hasNextPage endCursor }
+                nodes {
+                  id
+                  isResolved
+                  isOutdated
+                  viewerCanResolve
+                  viewerCanReply
+                }
+              }
+            }
+          }
+        }
+        """
+        threads: list[dict[str, Any]] = []
+        cursor: str | None = None
+        while True:
+            data = await self.graphql(
+                app_slug,
+                repo,
+                query=query,
+                variables={"owner": owner, "name": name, "number": pull_number, "cursor": cursor},
+            )
+            connection = (((data or {}).get("repository") or {}).get("pullRequest") or {}).get(
+                "reviewThreads"
+            ) or {}
+            threads.extend(connection.get("nodes") or [])
+            page_info = connection.get("pageInfo") or {}
+            if not page_info.get("hasNextPage"):
+                break
+            cursor = page_info.get("endCursor")
+        return threads
+
     async def check_head_repo_accessible(self, app_slug: str, head_repo: str) -> bool:
         """Check whether *app_slug* has an installation that covers *head_repo*.
 

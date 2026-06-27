@@ -93,7 +93,7 @@ class FakeClient:
             }
         }
 
-    async def pull_request_review_threads(
+    async def pull_request_review_thread_capabilities(
         self, app_slug: str, repo: str, pull_number: int
     ) -> list[dict[str, Any]]:
         self.thread_calls.append((repo, pull_number))
@@ -386,6 +386,15 @@ def test_load_repo_list_ignores_comments_and_blanks(tmp_path):
         encoding="utf-8",
     )
     assert load_repo_list(f) == [SANDBOX, REAL]
+
+
+def test_load_repo_list_lowercases_for_consistent_gating(tmp_path):
+    # Mixed-case --repos must match the lowercase ceiling, same as the TOML source.
+    f = tmp_path / "repos.txt"
+    f.write_text("Iterwheel/Voyager-Sandbox\n", encoding="utf-8")
+    assert load_repo_list(f) == [SANDBOX]
+    allowed, _ = gate_repos(load_repo_list(f))
+    assert allowed == [SANDBOX]  # not silently skipped on a casing mismatch
 
 
 # --- CLI orchestration (trinity code-review: command was untested) ------------
