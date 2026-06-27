@@ -11,6 +11,10 @@ import click
 import typer
 import uvicorn
 
+# Module-level: these constants are referenced in a typer.Option default below,
+# which is evaluated at import time (so a lazy in-function import is too late).
+from voyager.core.countdown_loop import DEFAULT_LOCK_PATH, DEFAULT_MAX_RESOLVES
+
 app = typer.Typer(no_args_is_help=True)
 bridge_app = typer.Typer(no_args_is_help=True)
 countdown_app = typer.Typer(no_args_is_help=True)
@@ -302,6 +306,100 @@ def review_thread_diagnostic(
     typer.echo(f"actor: {public_result['actor_login']}")
     typer.echo(f"repo: {public_result['repo']}#{public_result['pr']}")
     _echo_thread_capabilities(public_result["threads"])
+
+
+@countdown_app.command("resolve-loop")
+def resolve_loop(
+    repos: Path | None = typer.Option(
+        None,
+        "--repos",
+        help=(
+            "Repo-list file (one OWNER/REPO per line). Overrides the TOML "
+            "[countdown.dedicated_pat_fallback].allowed_repositories default. "
+            "Not --config, which is the TOML config path."
+        ),
+    ),
+    config: Path | None = typer.Option(
+        None, "--config", help="Voyager config path. Defaults to VOYAGER_CONFIG_PATH/search order."
+    ),
+    app_slug: str = typer.Option(
+        "iterwheel-countdown", "--app", help="GitHub App slug used for enumeration."
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Report candidates only (the deterministic core is read-only; resolve lands in #218).",
+    ),
+    max_resolves: int = typer.Option(
+        DEFAULT_MAX_RESOLVES, "--max-resolves", min=1, help="Cap on candidates reported per run."
+    ),
+    lock_path: Path = typer.Option(
+        DEFAULT_LOCK_PATH, "--lock-path", help="Single-instance lock file path."
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Enumerate + gate + prefilter resolvable review threads across repos (no resolve, no LLM)."""
+    import asyncio
+
+    from voyager.core.config import load_config
+    from voyager.core.countdown_loop import (
+        AlreadyRunningError,
+        load_repo_list,
+        run_resolve_loop,
+        single_instance_lock,
+    )
+    from voyager.core.github_app import GitHubAppClient, GitHubGraphQLError
+
+    del dry_run  # deterministic core is read-only regardless; flag reserved for #218
+
+    cfg = load_config(config)
+    if app_slug not in cfg.apps:
+        typer.echo(f"ERROR: app {app_slug!r} is not configured", err=True)
+        raise typer.Exit(code=1)
+
+    if repos is not None:
+        requested = load_repo_list(repos)
+    else:
+        requested = list(cfg.countdown.dedicated_pat_fallback.allowed_repositories)
+
+    try:
+        with single_instance_lock(lock_path):
+            client = GitHubAppClient(cfg.apps)
+
+            async def _run() -> Any:
+                try:
+                    return await run_resolve_loop(
+                        client,
+                        requested_repos=requested,
+                        app_slug=app_slug,
+                        max_resolves=max_resolves,
+                    )
+                finally:
+                    await client.aclose()
+
+            try:
+                summary = asyncio.run(_run())
+            except GitHubGraphQLError as exc:
+                _exit_with_error(str(exc))
+            except RuntimeError as exc:
+                _exit_with_error(str(exc))
+    except AlreadyRunningError as exc:
+        typer.echo(f"resolve-loop already running: {exc}", err=True)
+        return
+
+    if json_output:
+        typer.echo(json.dumps(summary.to_public_dict(), indent=2, sort_keys=True))
+        return
+
+    typer.echo("Countdown resolve-loop (deterministic core; read-only — resolve lands in #218)")
+    typer.echo(f"repos scanned: {', '.join(summary.repos_scanned) or '(none)'}")
+    if summary.repos_skipped:
+        typer.echo(f"repos skipped (outside frozenset ceiling): {', '.join(summary.repos_skipped)}")
+    typer.echo(f"PRs scanned: {summary.prs_scanned}")
+    capped = " (capped by --max-resolves)" if summary.capped else ""
+    typer.echo(f"resolvable candidates: {len(summary.candidates)}{capped}")
+    for candidate in summary.candidates:
+        typer.echo(f"- {candidate.repo}#{candidate.pr} thread={candidate.thread_id}")
 
 
 @countdown_app.command("user-review-thread-diagnostic")
