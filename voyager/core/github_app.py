@@ -437,6 +437,7 @@ class GitHubAppClient:
         """
         threads: list[dict[str, Any]] = []
         cursor: str | None = None
+        seen_cursors: set[str] = set()
         while True:
             data = await self.graphql(
                 app_slug,
@@ -452,6 +453,11 @@ class GitHubAppClient:
             if not page_info.get("hasNextPage"):
                 break
             cursor = page_info.get("endCursor")
+            # Guard against a malformed page (null or repeated cursor) looping forever
+            # while the single-instance lock is held.
+            if not cursor or cursor in seen_cursors:
+                break
+            seen_cursors.add(cursor)
         return threads
 
     async def check_head_repo_accessible(self, app_slug: str, head_repo: str) -> bool:

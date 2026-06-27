@@ -130,7 +130,7 @@ expected_login_env = "VOYAGER_PAT_ACCOUNT"
         ),
         (
             "[countdown.dedicated_pat_fallback]\nenabled = true\n",
-            "[countdown.dedicated_pat_fallback].allowed_repositories",
+            "[countdown.dedicated_pat_fallback].keychain_service",
         ),
     ],
 )
@@ -144,6 +144,25 @@ def test_load_config_rejects_malformed_runtime_sections(
 
     with pytest.raises(ValueError, match=re.escape(message)):
         load_config(path)
+
+
+def test_load_config_allows_enabled_fallback_without_allowlist(tmp_path: Path) -> None:
+    # --repos can supply the repo list, so allowed_repositories is optional when enabled;
+    # keychain_service + expected_login_env remain mandatory.
+    path = tmp_path / "voyager.toml"
+    path.write_text(
+        "[countdown.dedicated_pat_fallback]\n"
+        "enabled = true\n"
+        'keychain_service = "voyager/countdown-dedicated-pat"\n'
+        'expected_login_env = "VOYAGER_PAT_ACCOUNT"\n',
+        encoding="utf-8",
+    )
+
+    cfg = load_config(path)
+
+    fallback = cfg.countdown.dedicated_pat_fallback
+    assert fallback.enabled is True
+    assert fallback.allowed_repositories == ()
 
 
 def test_dry_run_env_overrides_toml(monkeypatch: pytest.MonkeyPatch) -> None:

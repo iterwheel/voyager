@@ -452,10 +452,11 @@ def _parse_countdown(raw: dict[str, Any]) -> CountdownConfig:
         "expected_login_env",
         "[countdown.dedicated_pat_fallback]",
     )
-    if enabled_raw and not allowed_repositories:
-        raise ValueError(
-            "[countdown.dedicated_pat_fallback].allowed_repositories is required when enabled"
-        )
+    # allowed_repositories is intentionally NOT required when enabled: the resolve-loop
+    # can take its repo list from --repos, and the real authorization boundary is the
+    # frozenset ceiling (countdown_diagnostic.py) plus Clearance's fail-closed membership
+    # check (empty allowlist = no repo permitted). Requiring it here would make the
+    # documented --repos-only override unusable.
     if enabled_raw and not keychain_service:
         raise ValueError(
             "[countdown.dedicated_pat_fallback].keychain_service is required when enabled"
