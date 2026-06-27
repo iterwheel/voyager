@@ -91,6 +91,63 @@ def check_drift(
     asyncio.run(_run())
 
 
+@countdown_app.command("resolve-conversation")
+def resolve_conversation(
+    repo: str = typer.Option(..., "--repo", help="GitHub repository (owner/name); allowlisted."),
+    pr: int = typer.Option(0, "--pr", help="Pull request number (resolve all its threads)."),
+    thread_id: str = typer.Option("", "--thread-id", help="Single review thread node ID."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Report without issuing mutations."),
+    as_json: bool = typer.Option(False, "--json", help="Emit redacted JSON summary."),
+) -> None:
+    """Resolve PR review conversations as the fixed machine account.
+
+    Identity is fixed to iterwheel-countdown-user (token via gh, never printed).
+    The only GraphQL mutation issued is resolveReviewThread.
+    """
+    from voyager.core.resolve_conversation import (
+        RESOLVE_ALLOWED_REPOS,
+        ResolveConversationError,
+        make_github_gql,
+        read_machine_token,
+        resolve_conversations,
+    )
+
+    # Gate ALL usage errors (allowlist + target selection) BEFORE reading the
+    # machine token: a bad invocation must never touch the credential store, which
+    # would otherwise mask a usage error as an auth failure on gh-less hosts.
+    if repo not in RESOLVE_ALLOWED_REPOS:
+        typer.echo(f"ERROR: repo {repo!r} is not in the resolve allowlist")
+        raise typer.Exit(code=1)
+    pr_val = pr or None
+    thread_val = thread_id or None
+    if (pr_val is None) == (thread_val is None):
+        typer.echo("ERROR: provide exactly one of --pr or --thread-id")
+        raise typer.Exit(code=1)
+
+    try:
+        token = read_machine_token()
+        gql = make_github_gql(token)
+        summary = resolve_conversations(
+            repo=repo,
+            pr=pr_val,
+            thread_id=thread_val,
+            dry_run=dry_run,
+            gql=gql,
+        )
+    except ResolveConversationError as exc:
+        typer.echo(f"ERROR: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    public = summary.to_public_dict()
+    if as_json:
+        typer.echo(json.dumps(public))
+    else:
+        typer.echo(f"repo:     {public['repo']}")
+        typer.echo(f"resolved: {public['resolved']}")
+        typer.echo(f"skipped:  {public['skipped']}")
+        typer.echo(f"dry_run:  {public['dry_run']}")
+
+
 @countdown_app.command("review-thread-diagnostic")
 def review_thread_diagnostic(
     repo: str = typer.Option(..., "--repo", help="GitHub repository (owner/name)."),
