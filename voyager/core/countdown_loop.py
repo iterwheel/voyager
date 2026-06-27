@@ -33,6 +33,7 @@ from typing import Any, Protocol
 
 import httpx
 
+from voyager.core.countdown_constants import DEFAULT_LOCK_PATH, DEFAULT_MAX_RESOLVES
 from voyager.core.countdown_diagnostic import (
     COUNTDOWN_AGENT_SLUG,
     DEDICATED_PAT_FALLBACK_RESOLVE_ALLOWED_REPOSITORIES,
@@ -56,9 +57,6 @@ _TOLERATED_ENUMERATION_ERRORS = (GitHubGraphQLError, httpx.HTTPError, TimeoutErr
 # terminal transcripts. NEVER add iterwheel/voyager here; it would silently leak
 # once the resolve frozenset is expanded (issue C).
 _RAW_IDENTIFIER_REPOS = frozenset({"iterwheel/voyager-sandbox"})
-
-DEFAULT_LOCK_PATH = Path.home() / ".voyager" / "locks" / "countdown-resolve-loop.lock"
-DEFAULT_MAX_RESOLVES = 10
 
 _OPEN_PR_NUMBERS_QUERY = """
 query OpenPullRequestNumbers($owner: String!, $name: String!, $after: String) {
@@ -177,13 +175,26 @@ class LoopSummary:
     capped: bool
     errors: tuple[TargetError, ...] = ()
     repos_enumerated: int = 0
+    prs_enumerated: int = 0
 
     @property
     def systemic_failure(self) -> bool:
-        """Every attempted repo failed to even list its PRs — a likely global
-        auth/config fault (missing key, 401 on the installation token) rather
-        than isolated per-repo issues. The caller should fail, not report success."""
-        return bool(self.repos_scanned) and self.repos_enumerated == 0
+        """The whole scan failed at some scope — a likely global auth/config fault
+        (missing key, 401 on the installation token, App lacks review-thread access)
+        rather than isolated per-target issues. The caller should fail, not report
+        success. Two cases:
+
+        * no scanned repo could even list its PRs (``repos_enumerated == 0``); or
+        * PRs were found but NOT ONE could be thread-queried
+          (``prs_scanned > 0 and prs_enumerated == 0``) — e.g. the capability query
+          is rejected everywhere. Without this second case a 100%-review-thread-scope
+          fault would be reported as a clean zero-candidate scan.
+        """
+        if not self.repos_scanned:
+            return False
+        if self.repos_enumerated == 0:
+            return True
+        return self.prs_scanned > 0 and self.prs_enumerated == 0
 
     def to_public_dict(self, *, show_raw: bool = False) -> dict[str, Any]:
         """Public summary. Raw PR numbers / thread IDs are emitted only for
@@ -206,8 +217,10 @@ class LoopSummary:
 def _candidate_public(candidate: Candidate, *, show_raw: bool) -> dict[str, Any]:
     if show_raw or candidate.repo in _RAW_IDENTIFIER_REPOS:
         return {"repo": candidate.repo, "pr": candidate.pr, "thread_id": candidate.thread_id}
-    # Non-sandbox: never put the raw private PR number / thread node ID in output.
-    return {"repo": candidate.repo, "pr": None, "thread_id": None, "redacted": True}
+    # Non-sandbox: never put the raw private PR number / thread node ID in output. Omit the
+    # keys entirely (rather than emit null) so a consumer cannot misread a redacted entry as
+    # a real candidate with pr/thread_id == null.
+    return {"repo": candidate.repo, "redacted": True}
 
 
 async def _list_open_pr_numbers(client: LoopGitHubClient, app_slug: str, repo: str) -> list[int]:
@@ -256,19 +269,19 @@ def _capability_from_thread(
     )
 
 
-def _fallback_skip_reason(
-    capability: ReviewThreadCapability, *, repository: str, pr: int
-) -> str | None:
+def _fallback_skip_reason(capability: ReviewThreadCapability) -> str | None:
     """Reason to skip a thread as a PAT-fallback candidate, or None if eligible.
 
     Mirrors the App-baseline contract in ``cli._validate_pat_resolve_app_baseline``:
-    eligible threads belong to the target PR, are unresolved, not outdated, repliable
-    by the App, and — critically — NOT resolvable by the App (so the dedicated PAT is
-    the only path that can resolve them). ``None``/unknown booleans are treated as
-    "skip" (fail-closed): we never surface a thread whose state we could not confirm.
+    eligible threads are unresolved, not outdated, repliable by the App, and — critically
+    — NOT resolvable by the App (so the dedicated PAT is the only path that can resolve
+    them). ``None``/unknown booleans are treated as "skip" (fail-closed): we never surface
+    a thread whose state we could not confirm.
+
+    (No cross-PR guard is needed: the capability query is scoped to a single PR and
+    ``_capability_from_thread`` stamps ``repository``/``pr`` from the call args, so every
+    thread here belongs to the target PR by construction.)
     """
-    if capability.repository != repository or capability.pr != pr:
-        return "thread_not_on_target_pr"
     if capability.is_resolved is not False:
         return "resolved_or_unknown"
     if capability.is_outdated is not False:
@@ -290,7 +303,7 @@ async def _candidates_for_pr(
         capability = _capability_from_thread(thread, repo=repo, pr=pr)
         if not capability.thread_id:
             continue
-        if _fallback_skip_reason(capability, repository=repo, pr=pr) is None:
+        if _fallback_skip_reason(capability) is None:
             out.append(Candidate(repo=repo, pr=pr, thread_id=capability.thread_id))
     return out
 
@@ -315,6 +328,7 @@ async def run_resolve_loop(
     errors: list[TargetError] = []
     prs_scanned = 0
     repos_enumerated = 0
+    prs_enumerated = 0
     capped = False
     for repo in allowed:
         if capped:
@@ -338,6 +352,7 @@ async def run_resolve_loop(
             except _TOLERATED_ENUMERATION_ERRORS as exc:
                 errors.append(TargetError(repo=repo, pr=pr, message=str(exc)))
                 continue
+            prs_enumerated += 1
             for candidate in pr_candidates:
                 if len(candidates) >= max_resolves:
                     capped = True
@@ -354,6 +369,7 @@ async def run_resolve_loop(
         capped=capped,
         errors=tuple(errors),
         repos_enumerated=repos_enumerated,
+        prs_enumerated=prs_enumerated,
     )
 
 

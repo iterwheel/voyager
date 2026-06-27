@@ -262,6 +262,24 @@ async def test_systemic_failure_when_every_repo_fails_enumeration():
     assert len(summary.errors) == 2
 
 
+async def test_systemic_failure_when_every_thread_query_fails():
+    # PR lists succeed but EVERY review-thread query fails (e.g. App lacks thread access):
+    # repos_enumerated > 0, yet not one PR was thread-queried → still a systemic failure,
+    # not a clean zero-candidate scan. (codex round-9 / GLM independent P2.)
+    repo = "iterwheel/a"
+    ceiling = frozenset({repo})
+    client = FakeClient(
+        prs_by_repo={repo: [1, 2]},
+        raise_prs={(repo, 1), (repo, 2)},
+    )
+    summary = await run_resolve_loop(client, requested_repos=[repo], ceiling=ceiling)
+    assert summary.repos_enumerated == 1
+    assert summary.prs_scanned == 2
+    assert summary.prs_enumerated == 0
+    assert summary.candidates == ()
+    assert summary.systemic_failure is True
+
+
 def test_target_error_redacts_pr_for_non_sandbox():
     real_err = TargetError(repo=REAL, pr=42, message="boom")
     assert real_err.public_target(show_raw=False) == f"{REAL}#<redacted>"
@@ -300,8 +318,10 @@ def test_to_public_dict_redacts_non_sandbox_identifiers():
         capped=False,
     )
     entry = real.to_public_dict()["candidates"][0]
-    assert entry["pr"] is None
-    assert entry["thread_id"] is None
+    # Redacted entries omit pr/thread_id entirely so a consumer cannot misread a null as
+    # a real candidate value.
+    assert "pr" not in entry
+    assert "thread_id" not in entry
     assert entry["redacted"] is True
     # the raw private identifiers must not appear anywhere in default output
     import json
@@ -454,6 +474,26 @@ def test_cli_kill_switch_disabled_is_noop(monkeypatch):
     assert result.exit_code == 0
     assert "disabled" in result.output
     assert "not configured" not in result.output  # kill switch wins over app validation
+
+
+def test_cli_enabled_but_no_repos_exits_1(monkeypatch):
+    # Enabled fallback with an empty allowlist and no --repos is a misconfiguration:
+    # fail loud (exit 1), not a silent zero-candidate success. (GLM P2.)
+    from typer.testing import CliRunner
+
+    monkeypatch.setattr(
+        _config_mod,
+        "load_config",
+        lambda *_a, **_k: _fake_cfg(apps={"iterwheel-countdown": object()}, allowed=()),
+    )
+
+    def _boom(*_a, **_k):
+        raise AssertionError("loop must not run with no repositories")
+
+    monkeypatch.setattr(_loop_mod, "single_instance_lock", _boom)
+    result = CliRunner().invoke(_cli_app, ["countdown", "resolve-loop"])
+    assert result.exit_code == 1
+    assert "no repositories to scan" in result.output
 
 
 def test_cli_already_running_exits_0(monkeypatch):

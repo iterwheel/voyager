@@ -13,7 +13,7 @@ import uvicorn
 
 # Module-level: these constants are referenced in a typer.Option default below,
 # which is evaluated at import time (so a lazy in-function import is too late).
-from voyager.core.countdown_loop import DEFAULT_LOCK_PATH, DEFAULT_MAX_RESOLVES
+from voyager.core.countdown_constants import DEFAULT_LOCK_PATH, DEFAULT_MAX_RESOLVES
 
 app = typer.Typer(no_args_is_help=True)
 bridge_app = typer.Typer(no_args_is_help=True)
@@ -384,6 +384,15 @@ def resolve_loop(
     else:
         requested = list(cfg.countdown.dedicated_pat_fallback.allowed_repositories)
 
+    # Enabled but nothing to scan is a misconfiguration, not a clean no-op: fail loud so
+    # an empty [countdown.dedicated_pat_fallback].allowed_repositories with no --repos is
+    # not silently reported as a successful zero-candidate run.
+    if not requested:
+        _exit_with_error(
+            "no repositories to scan: set [countdown.dedicated_pat_fallback]."
+            "allowed_repositories or pass --repos"
+        )
+
     try:
         with single_instance_lock(lock_path):
             client = GitHubAppClient(cfg.apps)
@@ -402,12 +411,17 @@ def resolve_loop(
             try:
                 summary = asyncio.run(_run())
             except GitHubGraphQLError as exc:
-                _exit_with_error(str(exc))
-            except RuntimeError as exc:
+                # Only the known transient API error is a clean exit-1; an unexpected
+                # RuntimeError from run_resolve_loop is a real bug and must propagate
+                # (not be swallowed into a one-line message that hides the traceback).
                 _exit_with_error(str(exc))
     except AlreadyRunningError as exc:
         typer.echo(f"resolve-loop already running: {exc}", err=True)
         return
+    except OSError as exc:
+        # Lock acquisition itself failed (e.g. ENOLCK, or mkdir on a read-only/sandboxed
+        # home under launchd). Fail loud with a clear message rather than crash.
+        _exit_with_error(f"cannot acquire resolve-loop lock at {lock_path}: {exc}")
 
     if json_output:
         typer.echo(json.dumps(summary.to_public_dict(show_raw=show_raw), indent=2, sort_keys=True))
