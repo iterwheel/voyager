@@ -5,7 +5,15 @@ This module is the no-LLM, no-governance skeleton (PRP VOY-1830, issue A):
 * a non-blocking single-instance lock (so a second run exits instead of piling up),
 * a production gate (``effective = requested ∩ frozenset ceiling``),
 * open-PR + review-thread enumeration via the App-installation identity, and
-* a deterministic candidate prefilter that reuses ``_skip_reason``.
+* a deterministic candidate prefilter for PAT-fallback-eligible threads.
+
+The prefilter deliberately does NOT reuse ``countdown_diagnostic._skip_reason``:
+that predicate keeps threads the *current viewer can resolve*. Here the current
+viewer is the App installation, and the PAT fallback only applies to threads the
+App **cannot** resolve (``viewerCanResolve is False``) — exactly the contract
+``cli._validate_pat_resolve_app_baseline`` enforces before a PAT resolve. Reusing
+``_skip_reason`` would drop the fallback targets and keep the threads the PAT path
+would refuse, so we mirror the baseline contract in ``_fallback_skip_reason``.
 
 It intentionally does NOT decide *whether* a thread should be resolved (that is the
 LLM gate, issue B) and does NOT resolve anything. It reports the candidates a later
@@ -28,7 +36,6 @@ from voyager.core.countdown_diagnostic import (
     COUNTDOWN_AGENT_SLUG,
     DEDICATED_PAT_FALLBACK_RESOLVE_ALLOWED_REPOSITORIES,
     ReviewThreadCapability,
-    _skip_reason,
 )
 from voyager.core.github_app import GitHubGraphQLError
 
@@ -242,6 +249,31 @@ def _capability_from_thread(
     )
 
 
+def _fallback_skip_reason(
+    capability: ReviewThreadCapability, *, repository: str, pr: int
+) -> str | None:
+    """Reason to skip a thread as a PAT-fallback candidate, or None if eligible.
+
+    Mirrors the App-baseline contract in ``cli._validate_pat_resolve_app_baseline``:
+    eligible threads belong to the target PR, are unresolved, not outdated, repliable
+    by the App, and — critically — NOT resolvable by the App (so the dedicated PAT is
+    the only path that can resolve them). ``None``/unknown booleans are treated as
+    "skip" (fail-closed): we never surface a thread whose state we could not confirm.
+    """
+    if capability.repository != repository or capability.pr != pr:
+        return "thread_not_on_target_pr"
+    if capability.is_resolved is not False:
+        return "resolved_or_unknown"
+    if capability.is_outdated is not False:
+        return "outdated_or_unknown"
+    if capability.viewer_can_reply is not True:
+        return "app_cannot_reply"
+    if capability.viewer_can_resolve is not False:
+        # App can resolve (or unknown) → not a PAT-fallback target.
+        return "app_can_resolve_no_fallback_needed"
+    return None
+
+
 async def _candidates_for_pr(
     client: LoopGitHubClient, app_slug: str, repo: str, pr: int
 ) -> list[Candidate]:
@@ -251,7 +283,7 @@ async def _candidates_for_pr(
         capability = _capability_from_thread(thread, repo=repo, pr=pr)
         if not capability.thread_id:
             continue
-        if _skip_reason(capability, repository=repo, pr=pr) is None:
+        if _fallback_skip_reason(capability, repository=repo, pr=pr) is None:
             out.append(Candidate(repo=repo, pr=pr, thread_id=capability.thread_id))
     return out
 

@@ -30,7 +30,7 @@ def _thread(
     *,
     resolved: bool = False,
     outdated: bool = False,
-    can_resolve: bool = True,
+    can_resolve: bool = False,  # default = App CANNOT resolve → PAT-fallback candidate
     can_reply: bool = True,
 ) -> dict[str, Any]:
     return {
@@ -135,12 +135,14 @@ async def test_dark_state_rejects_real_repo_while_ceiling_sandbox_only():
 # --- prefilter ---------------------------------------------------------------
 
 
-async def test_prefilter_keeps_only_resolvable_current_unresolved():
+async def test_prefilter_keeps_only_pat_fallback_targets():
+    # Candidate = App canNOT resolve (PAT fallback applies), unresolved, current, repliable.
     threads = [
-        _thread("ok"),
+        _thread("ok"),  # can_resolve=False default → fallback target
         _thread("already", resolved=True),
         _thread("stale", outdated=True),
-        _thread("forbidden", can_resolve=False),
+        _thread("app_can_resolve", can_resolve=True),  # App resolves it → no fallback needed
+        _thread("no_reply", can_reply=False),
     ]
     client = FakeClient(prs_by_repo={SANDBOX: [7]}, threads_by_pr={(SANDBOX, 7): threads})
     summary = await run_resolve_loop(client, requested_repos=[SANDBOX])
