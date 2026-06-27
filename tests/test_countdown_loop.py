@@ -431,9 +431,9 @@ def test_cli_kill_switch_disabled_is_noop(monkeypatch):
     monkeypatch.setattr(
         _config_mod,
         "load_config",
-        lambda *_a, **_k: _fake_cfg(
-            apps={"iterwheel-countdown": object()}, allowed=(SANDBOX,), enabled=False
-        ),
+        # apps={} → kill switch must be honored BEFORE app validation, so a disabled
+        # loop is a clean no-op even where the app is intentionally not configured.
+        lambda *_a, **_k: _fake_cfg(apps={}, allowed=(SANDBOX,), enabled=False),
     )
 
     # If the loop ran despite the kill switch, this would be invoked.
@@ -444,6 +444,7 @@ def test_cli_kill_switch_disabled_is_noop(monkeypatch):
     result = CliRunner().invoke(_cli_app, ["countdown", "resolve-loop"])
     assert result.exit_code == 0
     assert "disabled" in result.output
+    assert "not configured" not in result.output  # kill switch wins over app validation
 
 
 def test_cli_already_running_exits_0(monkeypatch):

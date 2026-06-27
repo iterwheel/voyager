@@ -362,20 +362,22 @@ def resolve_loop(
     del dry_run  # deterministic core is read-only regardless; flag reserved for #218
 
     cfg = load_config(config)
-    if app_slug not in cfg.apps:
-        typer.echo(f"ERROR: app {app_slug!r} is not configured", err=True)
-        raise typer.Exit(code=1)
 
-    # Operator kill switch: this loop only feeds the PAT-fallback resolver (#218), so
-    # honor [countdown.dedicated_pat_fallback].enabled the same way Clearance does
-    # (pipeline.py:124 returns early when disabled). Authoritative even with --repos —
-    # a kill switch a flag can bypass is not a kill switch.
+    # Operator kill switch comes FIRST: this loop only feeds the PAT-fallback resolver
+    # (#218), so honor [countdown.dedicated_pat_fallback].enabled the same way Clearance
+    # does (pipeline.py:124 returns early when disabled). Authoritative even with --repos —
+    # a kill switch a flag can bypass is not a kill switch. Checked before app validation
+    # so a disabled loop is a clean no-op even in environments that never configure the app.
     if not cfg.countdown.dedicated_pat_fallback.enabled:
         typer.echo(
             "resolve-loop disabled: [countdown.dedicated_pat_fallback].enabled is false "
             "(operator kill switch); nothing enumerated."
         )
         return
+
+    if app_slug not in cfg.apps:
+        typer.echo(f"ERROR: app {app_slug!r} is not configured", err=True)
+        raise typer.Exit(code=1)
 
     if repos is not None:
         requested = load_repo_list(repos)
