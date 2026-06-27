@@ -508,6 +508,12 @@ async def run_resolve_loop(
                 if dry_run:
                     _record(Decision(repo, pr, cand.thread_id, "would_resolve", verdict.reason))
                     continue
+                # Write-ahead the resolve INTENT before mutating: if the audit sink is
+                # unwritable, _append_audit raises here and the run aborts BEFORE the
+                # thread is touched — no unattended mutation without a trail.
+                if audit_path is not None:
+                    intent = Decision(repo, pr, cand.thread_id, "resolving", verdict.reason)
+                    _append_audit(audit_path, {"ts": when, "dry_run": False, **intent.public()})
                 _record(_safe_resolve(do_resolve, cand, resolve_gql))
 
     return LoopSummary(

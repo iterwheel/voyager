@@ -100,3 +100,12 @@ class TestDeepSeekGate:
         gate = DeepSeekShouldResolveGate(client)
         v = await gate.should_resolve(_cand())
         assert v.should_resolve is False
+
+    async def test_overlong_body_fails_closed_without_calling_llm(self) -> None:
+        # A body past the truncation limit could hide a later "still broken" note → veto.
+        client = _FakeClient('{"should_resolve": true}')
+        gate = DeepSeekShouldResolveGate(client)
+        v = await gate.should_resolve(_cand([("reviewer", "x" * 5000)]))
+        assert v.should_resolve is False
+        assert v.reason == "comment_body_truncated"
+        assert client.calls == 0

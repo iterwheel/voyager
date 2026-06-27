@@ -361,6 +361,35 @@ class TestIdentityGate:
             )
 
 
+class TestAuditFailClosed:
+    async def test_unwritable_audit_aborts_before_mutation(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # Write-ahead intent: if the audit sink can't be written, the run must abort
+        # BEFORE resolving — no unattended mutation without a trail.
+        read = FakeReadGql({SANDBOX: [1]}, {(SANDBOX, 1): [_thread(tid="A")]})
+        attempts: list[Candidate] = []
+
+        def _track(cand: Candidate, _gql) -> Decision:
+            attempts.append(cand)
+            return Decision(cand.repo, cand.pr, cand.thread_id, "resolved", "ok")
+
+        def _boom(*_a, **_k):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(cl, "_append_audit", _boom)
+        with pytest.raises(OSError, match="disk full"):
+            await run_resolve_loop(
+                requested_repos=[SANDBOX],
+                gate=FakeGate(),
+                read_gql=read,
+                resolve_gql=object(),
+                resolve_fn=_track,
+                audit_path=tmp_path / "audit.jsonl",
+            )
+        assert attempts == []  # never mutated
+
+
 class TestSystemicFailure:
     async def test_all_repos_fail_enumeration_is_systemic(self) -> None:
         read = FakeReadGql({SANDBOX: [1]}, {}, fail_repos={SANDBOX})

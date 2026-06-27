@@ -119,6 +119,10 @@ class DeepSeekShouldResolveGate:
         # No thread comments to judge → nothing to confirm → fail closed.
         if not candidate.comments:
             return GateVerdict(False, "no_comments")
+        # An over-long body gets truncated in the prompt; a later "still broken" note
+        # past the cutoff would be invisible to the gate → fail closed instead.
+        if any(len(body) > _MAX_BODY_CHARS for _, body in candidate.comments):
+            return GateVerdict(False, "comment_body_truncated")
         from voyager.llm.deepseek import Message
 
         messages = [
