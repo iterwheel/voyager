@@ -22,6 +22,7 @@ stage would consider.
 
 from __future__ import annotations
 
+import errno
 import fcntl
 import os
 from collections.abc import Iterator, Sequence
@@ -101,6 +102,12 @@ def single_instance_lock(path: Path = DEFAULT_LOCK_PATH) -> Iterator[None]:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
+            # Only treat genuine contention (lock held elsewhere) as "already running".
+            # Other OSErrors (e.g. ENOLCK — locking unavailable on the filesystem) are
+            # operational faults: re-raise so a scheduled run fails loudly instead of
+            # silently skipping every invocation as exit-0 "already running".
+            if exc.errno not in (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES):
+                raise
             raise AlreadyRunningError(f"another resolve-loop run holds {path}") from exc
         os.ftruncate(fd, 0)
         os.write(fd, f"{os.getpid()}\n".encode())

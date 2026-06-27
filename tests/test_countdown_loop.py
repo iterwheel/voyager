@@ -355,6 +355,27 @@ def test_single_instance_lock_reacquirable_after_release(tmp_path):
         pass
 
 
+def test_single_instance_lock_propagates_non_contention_oserror(tmp_path, monkeypatch):
+    # ENOLCK (locking unavailable) must surface as an operational failure, NOT be
+    # swallowed as AlreadyRunningError (which the CLI treats as a clean exit 0).
+    import errno
+
+    import voyager.core.countdown_loop as loop_mod
+
+    def _boom(_fd, op):
+        if op & loop_mod.fcntl.LOCK_EX:  # only fail acquisition, let LOCK_UN succeed
+            raise OSError(errno.ENOLCK, "no locks available")
+
+    monkeypatch.setattr(loop_mod.fcntl, "flock", _boom)
+    with (
+        pytest.raises(OSError) as exc,
+        single_instance_lock(tmp_path / "loop.lock"),
+    ):
+        pass
+    assert exc.value.errno == errno.ENOLCK
+    assert not isinstance(exc.value, AlreadyRunningError)
+
+
 # --- repo list parsing -------------------------------------------------------
 
 

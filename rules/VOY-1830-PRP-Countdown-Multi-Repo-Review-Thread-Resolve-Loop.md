@@ -73,7 +73,11 @@ launchd/cron ─┐                ┌─ one-shot manual
   ④ per repo: enumerate open PRs via gh (App-installation token identity, NOT the PAT;
      PAT is reserved for the resolve step only) → paginate fully (no silent cap) →
      per PR: query_review_thread_capabilities (:291)
-  ⑤ deterministic prefilter via _skip_reason (:326): not resolved && not outdated && viewerCanResolve
+  ⑤ deterministic prefilter for PAT-fallback targets (_fallback_skip_reason): not resolved
+     && not outdated && App viewerCanReply && App viewerCanResolve==FALSE. The App is the
+     enumeration identity, and the PAT fallback only applies where the App CANNOT resolve
+     (matching cli._validate_pat_resolve_app_baseline). Do NOT reuse _skip_reason here — it
+     keeps the opposite set (App-resolvable threads) and would drop every fallback target.
   ⑥ LLM gate (claude -p, fed the decision SOP) on each candidate → {verdict, reason}
   ⑦ verdict==resolve only: App-baseline-then-PAT resolve (orchestration as in cli.py,
      reusing run_review_thread_resolve_canary (:345) one client at a time)
