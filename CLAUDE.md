@@ -1,6 +1,8 @@
 # CLAUDE.md — Voyager 🛰️
 
-Guidance for Claude Code working in this repository.
+Guidance for AI agents working in this repository. `AGENTS.md` is a symlink to
+this file, so keep instructions portable across fresh checkouts and non-Claude
+runtimes.
 
 > *"We don't ship code. We launch rockets."*
 
@@ -37,14 +39,16 @@ philosophy, mission, and bot/identity specs.
 
 ## Alfred Workflow (af)
 
-This project uses the `af` CLI (Alfred — Agent Runbook). Inherits all global rules
-from `~/.claude/CLAUDE.md`. Project-specific docs live in `rules/` with prefix **VOY**.
+This project uses the `af` CLI (Alfred — Agent Runbook). Project-specific docs
+live in `rules/` with prefix **VOY**. Claude Code may also load personal rules
+from `~/.claude/CLAUDE.md`, but this repository file must stand on its own for
+Codex and other agents.
 
 ### Session start
 
 1. Run `COR-1208` (sanity check: `pwd`, `git status --short --branch`, `git log -5`,
    smoke test, load tracker per `COR-1201`) — stop on anomalies until acknowledged
-2. Run `af guide --root /Users/frank/Projects/voyager` for routing
+2. Run `af guide --root .` from the repository root for routing
 3. For every task: identify SOPs → `af plan <SOP_IDs>` → declare active SOP per `COR-1402`
 
 ### Common commands
@@ -91,7 +95,7 @@ in VOY-1800 §Design Principles:
 
 ## GitHub Identity
 
-Per global rule (`~/.claude/CLAUDE.md` §"User-Level GitHub Identity Rule"):
+Per WUK-2100 user-level GitHub identity routing, loaded by `af guide`:
 
 - Public GitHub writes (PRs, issues, comments, reviews) must use `gh` CLI as `ryosaeba1985`
 - Verify with `gh auth status` before any public mutation
