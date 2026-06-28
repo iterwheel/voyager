@@ -11,8 +11,9 @@
 
 The procedure for driving the **Codex automated PR review** to a clean verdict: how
 to trigger a review, how to *reliably* detect its result, and how to close the
-resulting threads. The canonical implementation is `scripts/codex-review-watch.sh`;
-this SOP documents the contract that script encodes and why it exists.
+resulting threads. This SOP is the source of truth for the contract; a local helper
+`scripts/codex-review-watch.sh` (gitignored — not shipped) implements it today, and the
+tracked deliverable is the tested Python port (iterwheel/voyager issue #225).
 
 ## Why
 
@@ -77,9 +78,10 @@ Without a documented contract these mistakes recur every session.
 
 ### Reference implementation
 
-`scripts/codex-review-watch.sh <PR> [--repo OWNER/REPO] [--no-trigger] [--timeout-min N]`
-— exit `0` clean, `2` findings (printed), `1` error/timeout. A tested Python port is
-tracked as iterwheel/voyager issue #225 (adopt once it needs tests / grows / becomes a
+Local helper (gitignored, not shipped): `scripts/codex-review-watch.sh <PR>
+[--repo OWNER/REPO] [--no-trigger] [--timeout-min N] [--since ISO8601]` — exit `0` clean,
+`2` findings (printed), `1` error/timeout. The tracked deliverable is a tested Python
+port (iterwheel/voyager issue #225 — adopt once it needs tests / grows / becomes a
 `vyg codex watch` subcommand).
 
 ---
