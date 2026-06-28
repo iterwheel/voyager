@@ -26,7 +26,6 @@ from collections.abc import Awaitable, Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from enum import Enum
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -116,45 +115,21 @@ query ThreadFreshness($threadId: ID!) {
 """
 
 
-class State(Enum):
-    """Explicit candidate-level resolve-loop states."""
+ACTION_VETOED = "vetoed"
+ACTION_WOULD_RESOLVE = "would_resolve"
+ACTION_SKIPPED_STALE = "skipped_stale"
+ACTION_RESOLVED = "resolved"
+ACTION_RESOLVE_FAILED = "resolve_failed"
 
-    CAP_GUARD = "cap_guard"
-    GATE_GUARD = "gate_guard"
-    DRY_RUN_GUARD = "dry_run_guard"
-    FRESHNESS_GUARD = "freshness_guard"
-    AUDIT_WRITE_AHEAD = "audit_write_ahead"
-    RESOLVE = "resolve"
-    CAPPED = "capped"
-    VETOED = "vetoed"
-    WOULD_RESOLVE = "would_resolve"
-    SKIPPED_STALE = "skipped_stale"
-    RESOLVED = "resolved"
-    RESOLVE_FAILED = "resolve_failed"
-
-
-TERMINAL_STATES: frozenset[State] = frozenset(
+WIRE_DECISION_ACTIONS: frozenset[str] = frozenset(
     {
-        State.CAPPED,
-        State.VETOED,
-        State.WOULD_RESOLVE,
-        State.SKIPPED_STALE,
-        State.RESOLVED,
-        State.RESOLVE_FAILED,
+        ACTION_VETOED,
+        ACTION_WOULD_RESOLVE,
+        ACTION_SKIPPED_STALE,
+        ACTION_RESOLVED,
+        ACTION_RESOLVE_FAILED,
     }
 )
-
-TERMINAL_DECISION_ACTIONS: dict[State, str] = {
-    State.VETOED: "vetoed",
-    State.WOULD_RESOLVE: "would_resolve",
-    State.SKIPPED_STALE: "skipped_stale",
-    State.RESOLVED: "resolved",
-    State.RESOLVE_FAILED: "resolve_failed",
-}
-
-_DECISION_ACTION_TERMINALS: dict[str, State] = {
-    action: state for state, action in TERMINAL_DECISION_ACTIONS.items()
-}
 
 
 @dataclass(frozen=True)
@@ -233,16 +208,10 @@ class _CandidateFlow:
     timestamp: str
     audit_path: Path | None
     verdict: GateVerdict | None = None
-    decision: Decision | None = None
+    capped: bool = False
 
 
-@dataclass(frozen=True)
-class _CandidateFlowResult:
-    state: State
-    decision: Decision | None
-
-
-_Transition = Callable[[_CandidateFlow], Awaitable[State]]
+_Guard = Callable[[_CandidateFlow], Awaitable[Decision | None]]
 
 
 @dataclass(frozen=True)
@@ -526,82 +495,79 @@ def _append_audit(path: Path, record: dict[str, Any]) -> None:
             os.close(fd)
 
 
-async def _transition_cap_guard(ctx: _CandidateFlow) -> State:
+async def _cap_guard(ctx: _CandidateFlow) -> Decision | None:
     if ctx.approved_count >= ctx.max_resolves:
-        return State.CAPPED
-    return State.GATE_GUARD
+        ctx.capped = True
+    return None
 
 
-async def _transition_gate_guard(ctx: _CandidateFlow) -> State:
+async def _gate_guard(ctx: _CandidateFlow) -> Decision | None:
     ctx.verdict = await _gate_verdict(ctx.gate, ctx.candidate)
     if not ctx.verdict.should_resolve:
-        ctx.decision = Decision(
+        return Decision(
             ctx.repo,
             ctx.pr,
             ctx.candidate.thread_id,
-            TERMINAL_DECISION_ACTIONS[State.VETOED],
+            ACTION_VETOED,
             ctx.verdict.reason,
         )
-        return State.VETOED
-    return State.DRY_RUN_GUARD
+    return None
 
 
-async def _transition_dry_run_guard(ctx: _CandidateFlow) -> State:
+async def _dry_run_guard(ctx: _CandidateFlow) -> Decision | None:
     if not ctx.dry_run:
-        return State.FRESHNESS_GUARD
+        return None
     verdict = ctx.verdict or GateVerdict(True, "ok")
-    ctx.decision = Decision(
+    return Decision(
         ctx.repo,
         ctx.pr,
         ctx.candidate.thread_id,
-        TERMINAL_DECISION_ACTIONS[State.WOULD_RESOLVE],
+        ACTION_WOULD_RESOLVE,
         verdict.reason,
     )
-    return State.WOULD_RESOLVE
 
 
-async def _transition_freshness_guard(ctx: _CandidateFlow) -> State:
+async def _freshness_guard(ctx: _CandidateFlow) -> Decision | None:
     live_count = await _thread_comment_count(ctx.read_gql, ctx.candidate.thread_id)
     if live_count is None or live_count != len(ctx.candidate.comments):
-        ctx.decision = Decision(
+        return Decision(
             ctx.repo,
             ctx.pr,
             ctx.candidate.thread_id,
-            TERMINAL_DECISION_ACTIONS[State.SKIPPED_STALE],
+            ACTION_SKIPPED_STALE,
             "comments_changed",
         )
-        return State.SKIPPED_STALE
-    return State.AUDIT_WRITE_AHEAD
+    return None
 
 
-async def _transition_audit_write_ahead(ctx: _CandidateFlow) -> State:
+async def _audit_write_ahead_guard(ctx: _CandidateFlow) -> Decision | None:
     if ctx.audit_path is not None:
         verdict = ctx.verdict or GateVerdict(True, "ok")
         intent = Decision(ctx.repo, ctx.pr, ctx.candidate.thread_id, "resolving", verdict.reason)
         _append_audit(ctx.audit_path, {"ts": ctx.timestamp, "dry_run": False, **intent.public()})
-    return State.RESOLVE
+    return None
 
 
-async def _transition_resolve(ctx: _CandidateFlow) -> State:
-    ctx.decision = _safe_resolve(ctx.do_resolve, ctx.candidate, ctx.resolve_gql)
-    return _DECISION_ACTION_TERMINALS[ctx.decision.action]
+async def _resolve_guard(ctx: _CandidateFlow) -> Decision | None:
+    return _safe_resolve(ctx.do_resolve, ctx.candidate, ctx.resolve_gql)
 
 
-_TRANSITION_TABLE: dict[State, _Transition] = {
-    State.CAP_GUARD: _transition_cap_guard,
-    State.GATE_GUARD: _transition_gate_guard,
-    State.DRY_RUN_GUARD: _transition_dry_run_guard,
-    State.FRESHNESS_GUARD: _transition_freshness_guard,
-    State.AUDIT_WRITE_AHEAD: _transition_audit_write_ahead,
-    State.RESOLVE: _transition_resolve,
-}
+_CANDIDATE_GUARDS: tuple[_Guard, ...] = (
+    _cap_guard,
+    _gate_guard,
+    _dry_run_guard,
+    _freshness_guard,
+    _audit_write_ahead_guard,
+    _resolve_guard,
+)
 
 
-async def _drive_candidate_to_terminal(ctx: _CandidateFlow) -> _CandidateFlowResult:
-    state = State.CAP_GUARD
-    while state not in TERMINAL_STATES:
-        state = await _TRANSITION_TABLE[state](ctx)
-    return _CandidateFlowResult(state=state, decision=ctx.decision)
+async def _drive_candidate(ctx: _CandidateFlow) -> Decision | None:
+    for guard in _CANDIDATE_GUARDS:
+        decision = await guard(ctx)
+        if decision is not None or ctx.capped:
+            return decision
+    raise RuntimeError("candidate guard list did not reach a terminal decision")
 
 
 def _assert_resolver_identity_guard(resolve_fn: Any, resolve_gql: Any) -> None:
@@ -691,27 +657,26 @@ async def run_resolve_loop(
                 continue
             prs_enumerated += 1
             for cand in candidates:
-                result = await _drive_candidate_to_terminal(
-                    _CandidateFlow(
-                        repo=repo,
-                        pr=pr,
-                        candidate=cand,
-                        gate=gate,
-                        read_gql=read_gql,
-                        resolve_gql=resolve_gql,
-                        do_resolve=do_resolve,
-                        dry_run=dry_run,
-                        max_resolves=max_resolves,
-                        approved_count=_approved(),
-                        timestamp=when,
-                        audit_path=audit_path,
-                    )
+                flow = _CandidateFlow(
+                    repo=repo,
+                    pr=pr,
+                    candidate=cand,
+                    gate=gate,
+                    read_gql=read_gql,
+                    resolve_gql=resolve_gql,
+                    do_resolve=do_resolve,
+                    dry_run=dry_run,
+                    max_resolves=max_resolves,
+                    approved_count=_approved(),
+                    timestamp=when,
+                    audit_path=audit_path,
                 )
-                if result.state is State.CAPPED:
+                decision = await _drive_candidate(flow)
+                if flow.capped:
                     capped = True
                     break
-                if result.decision is not None:
-                    _record(result.decision)
+                if decision is not None:
+                    _record(decision)
 
     return LoopSummary(
         repos_scanned=tuple(scanned),

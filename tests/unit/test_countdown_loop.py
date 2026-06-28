@@ -543,11 +543,11 @@ class TestAudit:
 
 
 # --------------------------------------------------------------------------- #
-# Candidate FSM transitions
+# Candidate guard-list transitions
 # --------------------------------------------------------------------------- #
 
 
-def _fsm_context(
+def _guard_context(
     read_gql,
     gate,
     *,
@@ -574,43 +574,34 @@ def _fsm_context(
     )
 
 
-class TestCandidateFSM:
-    def test_terminal_states_preserve_wire_actions(self) -> None:
+class TestCandidateGuardList:
+    def test_wire_actions_preserved_without_fsm_indirection(self) -> None:
         assert {
-            cl.State.CAPPED,
-            cl.State.VETOED,
-            cl.State.WOULD_RESOLVE,
-            cl.State.SKIPPED_STALE,
-            cl.State.RESOLVED,
-            cl.State.RESOLVE_FAILED,
-        } == cl.TERMINAL_STATES
-        assert cl.TERMINAL_DECISION_ACTIONS == {
-            cl.State.VETOED: "vetoed",
-            cl.State.WOULD_RESOLVE: "would_resolve",
-            cl.State.SKIPPED_STALE: "skipped_stale",
-            cl.State.RESOLVED: "resolved",
-            cl.State.RESOLVE_FAILED: "resolve_failed",
-        }
+            "vetoed",
+            "would_resolve",
+            "skipped_stale",
+            "resolved",
+            "resolve_failed",
+        } == cl.WIRE_DECISION_ACTIONS
+        assert not hasattr(cl, "State")
+        assert not hasattr(cl, "_TRANSITION_TABLE")
+        assert not hasattr(cl, "_drive_candidate_to_terminal")
 
     async def test_cap_guard_terminal_does_not_call_gate(self) -> None:
         read = FakeReadGql({SANDBOX: [1]}, {(SANDBOX, 1): [_thread(tid="A")]})
         gate = FakeGate(GateVerdict(True, "ok"))
-        result = await cl._drive_candidate_to_terminal(
-            _fsm_context(read, gate, max_resolves=2, approved_count=2)
-        )
-        assert result.state is cl.State.CAPPED
-        assert result.decision is None
+        ctx = _guard_context(read, gate, max_resolves=2, approved_count=2)
+        decision = await cl._drive_candidate(ctx)
+        assert decision is None
+        assert ctx.capped is True
         assert gate.seen == []
 
     async def test_truncation_guard_vetoes_before_gate(self) -> None:
         read = FakeReadGql({SANDBOX: [1]}, {(SANDBOX, 1): [_thread(tid="A")]})
         gate = FakeGate(GateVerdict(True, "ok"))
         candidate = Candidate(SANDBOX, 1, "A", (("r", "please fix"),), comments_truncated=True)
-        result = await cl._drive_candidate_to_terminal(
-            _fsm_context(read, gate, candidate=candidate)
-        )
-        assert result.state is cl.State.VETOED
-        assert result.decision == Decision(SANDBOX, 1, "A", "vetoed", "comments_truncated")
+        decision = await cl._gate_guard(_guard_context(read, gate, candidate=candidate))
+        assert decision == Decision(SANDBOX, 1, "A", "vetoed", "comments_truncated")
         assert gate.seen == []
 
     async def test_dry_run_terminal_skips_freshness_and_resolve(self) -> None:
@@ -625,11 +616,10 @@ class TestCandidateFSM:
             attempts.append(cand)
             return Decision(cand.repo, cand.pr, cand.thread_id, "resolved", "ok")
 
-        result = await cl._drive_candidate_to_terminal(
-            _fsm_context(read, FakeGate(GateVerdict(True, "ok")), do_resolve=_track, dry_run=True)
+        decision = await cl._drive_candidate(
+            _guard_context(read, FakeGate(GateVerdict(True, "ok")), do_resolve=_track, dry_run=True)
         )
-        assert result.state is cl.State.WOULD_RESOLVE
-        assert result.decision == Decision(SANDBOX, 1, "A", "would_resolve", "ok")
+        assert decision == Decision(SANDBOX, 1, "A", "would_resolve", "ok")
         assert attempts == []
 
     async def test_freshness_guard_skips_stale_without_resolve(self) -> None:
@@ -644,11 +634,10 @@ class TestCandidateFSM:
             attempts.append(cand)
             return Decision(cand.repo, cand.pr, cand.thread_id, "resolved", "ok")
 
-        result = await cl._drive_candidate_to_terminal(
-            _fsm_context(read, FakeGate(GateVerdict(True, "ok")), do_resolve=_track)
+        decision = await cl._freshness_guard(
+            _guard_context(read, FakeGate(GateVerdict(True, "ok")), do_resolve=_track)
         )
-        assert result.state is cl.State.SKIPPED_STALE
-        assert result.decision == Decision(SANDBOX, 1, "A", "skipped_stale", "comments_changed")
+        assert decision == Decision(SANDBOX, 1, "A", "skipped_stale", "comments_changed")
         assert attempts == []
 
     async def test_write_ahead_audit_precedes_resolve(self, tmp_path: Path) -> None:
@@ -663,16 +652,15 @@ class TestCandidateFSM:
             events.append(audit.read_text(encoding="utf-8"))
             return Decision(cand.repo, cand.pr, cand.thread_id, "resolved", "ok")
 
-        result = await cl._drive_candidate_to_terminal(
-            _fsm_context(
+        decision = await cl._drive_candidate(
+            _guard_context(
                 read,
                 FakeGate(GateVerdict(True, "ok")),
                 do_resolve=_track,
                 audit_path=audit,
             )
         )
-        assert result.state is cl.State.RESOLVED
-        assert result.decision == Decision(SANDBOX, 1, "A", "resolved", "ok")
+        assert decision == Decision(SANDBOX, 1, "A", "resolved", "ok")
         assert '"action":"resolving"' in events[0]
 
 
