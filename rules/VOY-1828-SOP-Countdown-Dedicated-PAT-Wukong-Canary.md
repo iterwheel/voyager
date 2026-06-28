@@ -1,7 +1,7 @@
 # SOP-1828: Countdown Dedicated PAT Wukong Canary
 
 **Applies to:** Voyager Countdown resolver canary operators on Wukong
-**Last updated:** 2026-06-25
+**Last updated:** 2026-06-28
 **Last reviewed:** 2026-06-25
 **Status:** Deprecated
 **Superseded by:** VOY-1830 (dedicated-PAT machinery removed in favor of the gh-login machine-account resolver, #222)
@@ -19,6 +19,13 @@ App route still cannot resolve the same thread.
 This is a fallback canary. It does not authorize production use, does not close
 issue #200, and does not prove that `iterwheel-countdown[bot]` can resolve
 review threads.
+
+## Why
+
+This SOP is retained as a deprecated historical runbook so operators can audit
+what the Wukong canary did and why VOY-1830 later removed the dedicated-PAT
+machinery. It must not be used for new resolver work; the current route is the
+gh-login machine-account resolver documented after VOY-1830.
 
 ## Reader and Action
 
@@ -72,6 +79,12 @@ Before running the canary, confirm Wukong has:
 
 The private sandbox PR number and review-thread node ID are operator notes.
 Keep them in shell-local variables or a private note. Do not commit them.
+
+## Steps
+
+The steps below are retained for historical audit of the deprecated canary only.
+Do not run them for new work unless a later approved CHG explicitly reactivates
+this route.
 
 ## Step 1: Store or Confirm the PAT on Wukong
 
@@ -333,4 +346,5 @@ If the PAT leg returns `viewerCanResolve=false`:
 
 | Date | Change | By |
 |------|--------|----|
+| 2026-06-28 | Added standard Why and Steps sections required by SOP validation while preserving deprecated historical-runbook status. | Codex |
 | 2026-06-25 | Added Wukong operator SOP for the issue #214 dedicated PAT fallback canary, including same-thread App baseline, PAT query, controlled resolve, evidence, and rollback rules. | Codex |

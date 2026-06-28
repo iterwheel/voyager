@@ -8,7 +8,7 @@
 **Requested by:** Frank Xu
 **Priority:** Medium
 **Change Type:** Normal
-**Supersedes:** VOY-1827 (HYP), VOY-1828 (SOP), VOY-1829 (CHG)
+**Supersedes:** VOY-1827 (REF), VOY-1828 (SOP), VOY-1829 (CHG)
 **Retracts:** VOY-1831 (CHG, never merged)
 
 ---
@@ -89,4 +89,5 @@ The dedicated-PAT approach was retired in favor of gh-login as the machine accou
 
 | Date | Change | By |
 |------|--------|----|
+| 2026-06-28 | Updated VOY-1827 superseded reference after HYP was reclassified as REF for validation compatibility. | Codex |
 | 2026-06-28 | Initial version | Claude Code |

@@ -1,9 +1,9 @@
-# HYP-1827: Countdown Dedicated PAT Fallback Canary
+# REF-1827: Countdown Dedicated PAT Fallback Canary
 
 **Applies to:** VOY project
-**Last updated:** 2026-06-25
+**Last updated:** 2026-06-28
 **Last reviewed:** 2026-06-25
-**Status:** Superseded
+**Status:** Deprecated
 **Superseded by:** VOY-1830 (dedicated-PAT machinery removed in favor of the gh-login machine-account resolver, #222)
 **Related:** VOY-1805, VOY-1806, VOY-1807, VOY-1828, VOY-1830
 
@@ -11,12 +11,23 @@
 
 ## What Is It?
 
-This HYP records the operator SOP for testing a dedicated machine-user Personal
-Access Token as a Countdown review-thread resolver fallback.
+This REF preserves the now-superseded hypothesis and operator notes for testing
+a dedicated machine-user Personal Access Token as a Countdown review-thread
+resolver fallback.
 
 It is canary-only. It does not authorize production use, does not close the
 Countdown resolver design, and does not prove that `iterwheel-countdown[bot]`
 can resolve review threads.
+
+---
+
+## Why
+
+This document is historical reference material after VOY-1830 removed the
+dedicated-PAT machinery in favor of the gh-login machine-account resolver. It
+remains useful for understanding why the PAT route was explored, what boundaries
+were required during the canary, and why the route must not be treated as active
+operator guidance.
 
 ---
 
@@ -61,7 +72,7 @@ PAT becomes broader and must not be reused without a fresh access audit.
 
 ## When to Use
 
-Use this HYP only when all of these are true:
+Use this historical reference only when all of these are true:
 
 - Countdown's GitHub App installation token has already reported
   `viewerCanResolve=false` for the target review thread.
@@ -76,7 +87,7 @@ Use this HYP only when all of these are true:
 
 ## When NOT to Use
 
-Do not use this HYP to:
+Do not use this historical reference to:
 
 - Substitute a maintainer's personal PAT.
 - Give Countdown merge, approval, or ordinary comment-writing authority.
@@ -253,6 +264,7 @@ Before this route can become production behavior, a follow-up CHG must define:
 
 | Date | Change | By |
 |------|--------|----|
+| 2026-06-28 | Reclassified from unsupported HYP document type to deprecated REF and clarified superseded historical-reference status. | Codex |
 | 2026-06-25 | Initial HYP for the dedicated machine-user PAT fallback canary after fine-grained PAT resource-owner scoping proved unavailable for the outside-collaborator account shape. | Codex |
 | 2026-06-25 | Added the macOS Keychain service convention and safe save/read commands for the 30-day classic PAT canary. | Codex |
 | 2026-06-25 | Added the `vyg countdown review-thread-diagnostic --pat-token-command` canary entry point and documented that `--resolve` still requires the App-token baseline first. | Codex |
