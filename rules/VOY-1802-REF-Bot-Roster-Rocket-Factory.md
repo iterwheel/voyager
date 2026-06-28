@@ -1,8 +1,8 @@
 # REF-1802: Bot Roster (Rocket Factory)
 
 **Applies to:** VOY project
-**Last updated:** 2026-05-09
-**Last reviewed:** 2026-05-09
+**Last updated:** 2026-06-28
+**Last reviewed:** 2026-06-28
 **Status:** Active
 **Related:** VOY-1800 (Founding Philosophy), VOY-1803 (Visual & Voice), VOY-1804 (Naming Convention ADR)
 
@@ -55,12 +55,18 @@ Reserved expansion slots:
 | **Manifest** | Auto-label / classification | Payload manifest |
 | **Caliper** | PR size / complexity | Precision measurement |
 | **Tanking** | Pre-merge check / conflict detection | Fuel loading |
-| **Cargo** | Dependency / package management | Payload cargo |
+| **Cargo** 📦 | Dependency-bump PR preparation — *promotion **proposed**, see VOY-1834* | Payload cargo |
 | **Apogee** | Production monitoring | Apex of flight |
 | **Telemetry** | Metrics / observability | Telemetry stream |
 
 > Any new bot requires a fresh ADR: stating its space-mission stage,
 > single responsibility, and boundary against existing bots.
+
+> **Cargo 📦** has a drafted founding ADR — **VOY-1834** (*Proposed*). On acceptance
+> it moves to the Current Roster as a dependency-bump **side-station** (on-ramp:
+> Dependabot → Cargo → Static Fire → Countdown), with boundaries against Assembly
+> (no authored behavior), Countdown (no merge judgment), Tanking, Static Fire, and
+> Liftoff. Until the ADR is accepted, Cargo stays reserved here.
 
 ---
 
@@ -83,3 +89,4 @@ Reserved expansion slots:
 | 2026-05-09 | Translated to English (project standard: English-only docs)                                                                      | Claude Code      |
 | 2026-05-09 | Updated Blueprint, Stack, and Countdown responsibility boundaries to match the live GitHub App roster                            | Frank Xu + Codex |
 | 2026-05-23 | Added Assembly bot between Stack and Static Fire; updated pipeline, roster, and Stack metaphor (issue #67) | DeepSeek (via VOY-1811) |
+| 2026-06-28 | Drafted Cargo 📦 founding ADR (VOY-1834, *Proposed*); added a Future-roster pointer pending acceptance — Cargo promotes to Current only when the ADR is accepted (issue #238) | Claude Code |
