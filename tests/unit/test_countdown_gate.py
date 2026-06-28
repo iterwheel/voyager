@@ -89,38 +89,52 @@ class _FakeClient:
     def __init__(self, content: str | None) -> None:
         self._content = content
         self.calls = 0
+        self.closed = False
 
-    async def complete(self, messages):
+    def complete(self, messages):
         self.calls += 1
         self._messages = messages
         return _FakeTurn(self._content)
 
+    def close(self) -> None:
+        self.closed = True
+
 
 class TestDeepSeekGate:
-    async def test_no_comments_fails_closed_without_calling_llm(self) -> None:
+    def test_no_comments_fails_closed_without_calling_llm(self) -> None:
         client = _FakeClient('{"should_resolve": true}')
         gate = DeepSeekShouldResolveGate(client)
-        v = await gate.should_resolve(_cand(comments=()))
+        v = gate.should_resolve(_cand(comments=()))
         assert v.should_resolve is False
         assert client.calls == 0  # never bothered the model
 
-    async def test_approval_flows_through(self) -> None:
+    def test_approval_flows_through(self) -> None:
         client = _FakeClient('{"should_resolve": true, "reason": "addressed"}')
         gate = DeepSeekShouldResolveGate(client)
-        v = await gate.should_resolve(_cand())
+        v = gate.should_resolve(_cand())
         assert v.should_resolve is True
 
-    async def test_garbage_response_fails_closed(self) -> None:
+    def test_reuses_sync_client_without_event_loop_boundary(self) -> None:
+        client = _FakeClient('{"should_resolve": true, "reason": "addressed"}')
+        gate = DeepSeekShouldResolveGate(client)
+        gate.should_resolve(_cand())
+        gate.should_resolve(_cand())
+        gate.close()
+
+        assert client.calls == 2
+        assert client.closed is True
+
+    def test_garbage_response_fails_closed(self) -> None:
         client = _FakeClient("yeah sure resolve it")
         gate = DeepSeekShouldResolveGate(client)
-        v = await gate.should_resolve(_cand())
+        v = gate.should_resolve(_cand())
         assert v.should_resolve is False
 
-    async def test_overlong_body_fails_closed_without_calling_llm(self) -> None:
+    def test_overlong_body_fails_closed_without_calling_llm(self) -> None:
         # A body past the truncation limit could hide a later "still broken" note → veto.
         client = _FakeClient('{"should_resolve": true}')
         gate = DeepSeekShouldResolveGate(client)
-        v = await gate.should_resolve(_cand([("reviewer", "x" * 5000)]))
+        v = gate.should_resolve(_cand([("reviewer", "x" * 5000)]))
         assert v.should_resolve is False
         assert v.reason == "comment_body_truncated"
         assert client.calls == 0

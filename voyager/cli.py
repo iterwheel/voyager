@@ -155,7 +155,6 @@ def resolve_loop(
     single-instance lock and a max-resolves cap. Identity is fixed to
     iterwheel-countdown-user (token via gh, never printed).
     """
-    import asyncio
     from pathlib import Path
 
     from voyager.core.countdown_gate import build_gate_from_env
@@ -176,11 +175,11 @@ def resolve_loop(
         requested = load_repo_list(Path(repos))
         token = read_machine_token()
         gate = build_gate_from_env()
-        read_gql = make_read_gql(token)
-        resolve_gql = make_github_gql(token)
-        with single_instance_lock():
-            summary = asyncio.run(
-                run_resolve_loop(
+        try:
+            read_gql = make_read_gql(token)
+            resolve_gql = make_github_gql(token)
+            with single_instance_lock():
+                summary = run_resolve_loop(
                     requested_repos=requested,
                     gate=gate,
                     read_gql=read_gql,
@@ -188,7 +187,8 @@ def resolve_loop(
                     max_resolves=max_resolves,
                     dry_run=dry_run,
                 )
-            )
+        finally:
+            gate.close()
     except AlreadyRunningError as exc:
         typer.echo(f"ERROR: {exc}")
         raise typer.Exit(code=1) from exc

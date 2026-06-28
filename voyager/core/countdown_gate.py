@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 from voyager.core.countdown_loop import Candidate, GateVerdict
 
 if TYPE_CHECKING:
-    from voyager.llm.deepseek import DeepSeekClient
+    from voyager.llm.deepseek import SyncDeepSeekClient
 
 _DEFAULT_MODEL = "deepseek-v4-pro"
 _MAX_COMMENTS = 20
@@ -107,12 +107,16 @@ def parse_gate_response(text: str | None) -> GateVerdict:
 
 
 class DeepSeekShouldResolveGate:
-    """``ShouldResolveGate`` backed by ``voyager.llm.deepseek.DeepSeekClient``."""
+    """``ShouldResolveGate`` backed by ``voyager.llm.deepseek.SyncDeepSeekClient``."""
 
-    def __init__(self, client: DeepSeekClient) -> None:
+    def __init__(self, client: SyncDeepSeekClient) -> None:
         self._client = client
 
-    async def should_resolve(self, candidate: Candidate) -> GateVerdict:
+    def close(self) -> None:
+        """Close the DeepSeek client's cached HTTP client."""
+        self._client.close()
+
+    def should_resolve(self, candidate: Candidate) -> GateVerdict:
         # No thread comments to judge → nothing to confirm → fail closed.
         if not candidate.comments:
             return GateVerdict(False, "no_comments")
@@ -126,7 +130,7 @@ class DeepSeekShouldResolveGate:
             Message(role="system", content=_SYSTEM_PROMPT),
             Message(role="user", content=_build_user_prompt(candidate)),
         ]
-        turn = await self._client.complete(messages)
+        turn = self._client.complete(messages)
         return parse_gate_response(getattr(turn, "content", None))
 
 
@@ -135,7 +139,7 @@ def build_gate_from_env(model: str | None = None) -> DeepSeekShouldResolveGate:
     api_key = os.environ.get("VOYAGER_DEEPSEEK_API_KEY", "")
     if not api_key:
         raise RuntimeError("VOYAGER_DEEPSEEK_API_KEY is not set")
-    from voyager.llm.deepseek import DeepSeekClient
+    from voyager.llm.deepseek import SyncDeepSeekClient
 
     resolved_model = model or os.environ.get("VOYAGER_DEEPSEEK_MODEL") or _DEFAULT_MODEL
-    return DeepSeekShouldResolveGate(DeepSeekClient(api_key=api_key, model=resolved_model))
+    return DeepSeekShouldResolveGate(SyncDeepSeekClient(api_key=api_key, model=resolved_model))

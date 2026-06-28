@@ -77,6 +77,62 @@ class AssistantTurn:
     tool_calls: list[ToolCall] = field(default_factory=list)
 
 
+def _completion_kwargs(
+    model: str,
+    messages: list[Message],
+    *,
+    thinking: bool,
+    reasoning_effort: str | None,
+    tools: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    openai_messages = [m.to_openai_dict() for m in messages]
+
+    extra_body: dict[str, Any] = {
+        "thinking": {"type": "enabled" if thinking else "disabled"},
+    }
+    if reasoning_effort is not None:
+        extra_body["reasoning_effort"] = reasoning_effort
+
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": openai_messages,
+        "extra_body": extra_body,
+    }
+    if tools:
+        kwargs["tools"] = tools
+    return kwargs
+
+
+def _assistant_turn_from_response(response: Any) -> AssistantTurn:
+    message = response.choices[0].message
+
+    # Parse tool_calls if present.
+    tool_calls: list[ToolCall] = []
+    raw_tool_calls = getattr(message, "tool_calls", None)
+    if raw_tool_calls:
+        for tc in raw_tool_calls:
+            arguments = json.loads(tc.function.arguments)
+            tool_calls.append(
+                ToolCall(
+                    id=tc.id,
+                    name=tc.function.name,
+                    arguments=arguments,
+                )
+            )
+
+    # reasoning_content is a DeepSeek extension — not on the standard Pydantic
+    # model, so we pull it from __pydantic_extra__ or fall back to None.
+    reasoning_content: str | None = getattr(message, "reasoning_content", None)
+    if reasoning_content == "":
+        reasoning_content = None
+
+    return AssistantTurn(
+        content=message.content,
+        reasoning_content=reasoning_content,
+        tool_calls=tool_calls,
+    )
+
+
 class DeepSeekClient:
     """Thin adapter around AsyncOpenAI pointed at api.deepseek.com."""
 
@@ -125,21 +181,13 @@ class DeepSeekClient:
         tools: list[dict[str, Any]] | None = None,
     ) -> AssistantTurn:
         """Call the DeepSeek chat completions endpoint and return an AssistantTurn."""
-        openai_messages = [m.to_openai_dict() for m in messages]
-
-        extra_body: dict[str, Any] = {
-            "thinking": {"type": "enabled" if thinking else "disabled"},
-        }
-        if reasoning_effort is not None:
-            extra_body["reasoning_effort"] = reasoning_effort
-
-        kwargs: dict[str, Any] = {
-            "model": self._model,
-            "messages": openai_messages,
-            "extra_body": extra_body,
-        }
-        if tools:
-            kwargs["tools"] = tools
+        kwargs = _completion_kwargs(
+            self._model,
+            messages,
+            thinking=thinking,
+            reasoning_effort=reasoning_effort,
+            tools=tools,
+        )
 
         client = self._openai_client()
         try:
@@ -152,30 +200,66 @@ class DeepSeekClient:
             # Propagate as httpx.TimeoutException so the timeout step assertion passes.
             raise httpx.ReadTimeout("DeepSeek request timed out", request=None) from exc
 
-        message = response.choices[0].message
+        return _assistant_turn_from_response(response)
 
-        # Parse tool_calls if present.
-        tool_calls: list[ToolCall] = []
-        raw_tool_calls = getattr(message, "tool_calls", None)
-        if raw_tool_calls:
-            for tc in raw_tool_calls:
-                arguments = json.loads(tc.function.arguments)
-                tool_calls.append(
-                    ToolCall(
-                        id=tc.id,
-                        name=tc.function.name,
-                        arguments=arguments,
-                    )
-                )
 
-        # reasoning_content is a DeepSeek extension — not on the standard Pydantic
-        # model, so we pull it from __pydantic_extra__ or fall back to None.
-        reasoning_content: str | None = getattr(message, "reasoning_content", None)
-        if reasoning_content == "":
-            reasoning_content = None
+class SyncDeepSeekClient:
+    """Synchronous DeepSeek adapter for non-async callers such as Countdown."""
 
-        return AssistantTurn(
-            content=message.content,
-            reasoning_content=reasoning_content,
-            tool_calls=tool_calls,
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        base_url: str = "https://api.deepseek.com",
+    ) -> None:
+        self._api_key = api_key
+        self._model = model
+        self._base_url = base_url
+        self._client: httpx.Client | None = None
+
+    def _sync_client(self) -> httpx.Client:
+        """Return a per-instance cached httpx.Client."""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.Client()
+        return self._client
+
+    def close(self) -> None:
+        """Close the cached sync httpx client."""
+        if self._client is not None and not self._client.is_closed:
+            self._client.close()
+        self._client = None
+
+    def _openai_client(self) -> openai.OpenAI:
+        return openai.OpenAI(
+            api_key=self._api_key,
+            base_url=self._base_url,
+            http_client=self._sync_client(),
+            max_retries=0,
         )
+
+    def complete(
+        self,
+        messages: list[Message],
+        *,
+        thinking: bool = True,
+        reasoning_effort: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> AssistantTurn:
+        """Call the DeepSeek chat completions endpoint synchronously."""
+        kwargs = _completion_kwargs(
+            self._model,
+            messages,
+            thinking=thinking,
+            reasoning_effort=reasoning_effort,
+            tools=tools,
+        )
+
+        client = self._openai_client()
+        try:
+            response = client.chat.completions.create(**kwargs)
+        except openai.APIResponseValidationError as exc:
+            raise ValueError(f"Invalid JSON in DeepSeek response: {exc}") from exc
+        except openai.APITimeoutError as exc:
+            raise httpx.ReadTimeout("DeepSeek request timed out", request=None) from exc
+
+        return _assistant_turn_from_response(response)

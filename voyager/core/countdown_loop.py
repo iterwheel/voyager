@@ -22,7 +22,7 @@ import errno
 import fcntl
 import json
 import os
-from collections.abc import Awaitable, Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -59,13 +59,13 @@ class AlreadyRunningError(RuntimeError):
 
 
 class ReadGqlFn(Protocol):
-    async def __call__(self, query: str, variables: dict[str, Any]) -> dict[str, Any]: ...
+    def __call__(self, query: str, variables: dict[str, Any]) -> dict[str, Any]: ...
 
 
 class ShouldResolveGate(Protocol):
     """Decides whether a mechanically-resolvable candidate should actually resolve."""
 
-    async def should_resolve(self, candidate: Candidate) -> GateVerdict: ...
+    def should_resolve(self, candidate: Candidate) -> GateVerdict: ...
 
 
 _OPEN_PR_NUMBERS_QUERY = """
@@ -201,7 +201,7 @@ class _CandidateFlow:
     capped: bool = False
 
 
-_Guard = Callable[[_CandidateFlow], Awaitable[Decision | None]]
+_Guard = Callable[[_CandidateFlow], Decision | None]
 
 
 @dataclass(frozen=True)
@@ -322,25 +322,25 @@ _ALLOWED_READ_QUERIES: frozenset[str] = frozenset(
 )
 
 
-def _default_async_client_factory() -> httpx.AsyncClient:
-    return httpx.AsyncClient(timeout=20)
+def _default_client_factory() -> httpx.Client:
+    return httpx.Client(timeout=20)
 
 
 def make_read_gql(
     token: str,
     *,
-    client_factory: Any = _default_async_client_factory,
+    client_factory: Any = _default_client_factory,
 ) -> ReadGqlFn:
-    """Async GraphQL read client bound to *token* (never logged)."""
+    """GraphQL read client bound to *token* (never logged)."""
 
-    async def _gql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
+    def _gql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
         # Defense-in-depth: the read client may only run the two known read queries.
         # It binds a write-capable token, so an accidental mutation must be impossible.
         if query not in _ALLOWED_READ_QUERIES:
             raise ResolveConversationError("read client refusing an unknown GraphQL operation")
         try:
-            async with client_factory() as client:
-                resp = await client.post(
+            with client_factory() as client:
+                resp = client.post(
                     "https://api.github.com/graphql",
                     headers={
                         "Authorization": f"Bearer {token}",
@@ -366,14 +366,14 @@ def make_read_gql(
     return _gql
 
 
-async def _list_open_pr_numbers(gql: ReadGqlFn, repo: str) -> list[int]:
+def _list_open_pr_numbers(gql: ReadGqlFn, repo: str) -> list[int]:
     owner, name = repo.split("/", 1)
     numbers: list[int] = []
     seen_numbers: set[int] = set()
     after: str | None = None
     seen_cursors: set[str] = set()
     while True:
-        data = await gql(_OPEN_PR_NUMBERS_QUERY, {"owner": owner, "name": name, "after": after})
+        data = gql(_OPEN_PR_NUMBERS_QUERY, {"owner": owner, "name": name, "after": after})
         repository = (data or {}).get("repository")
         if repository is None:
             # A null repository (token lost access, repo renamed/deleted) must be a hard
@@ -405,14 +405,14 @@ def _thread_comments(node: dict[str, Any]) -> tuple[tuple[str, str], ...]:
     return tuple(out)
 
 
-async def _thread_comment_count(gql: ReadGqlFn, thread_id: str) -> int | None:
+def _thread_comment_count(gql: ReadGqlFn, thread_id: str) -> int | None:
     """Live comment count for one thread; None if it can't be read (fail closed).
 
     A transient read error must NOT abort the whole multi-repo run — it returns None so
     the caller records this single candidate as skipped_stale and keeps scanning.
     """
     try:
-        data = await gql(_THREAD_FRESHNESS_QUERY, {"threadId": thread_id})
+        data = gql(_THREAD_FRESHNESS_QUERY, {"threadId": thread_id})
     except _TOLERATED_ERRORS:
         return None
     node = (data or {}).get("node")
@@ -422,7 +422,7 @@ async def _thread_comment_count(gql: ReadGqlFn, thread_id: str) -> int | None:
     return total if isinstance(total, int) else None
 
 
-async def _candidates_for_pr(gql: ReadGqlFn, repo: str, pr: int) -> list[Candidate]:
+def _candidates_for_pr(gql: ReadGqlFn, repo: str, pr: int) -> list[Candidate]:
     """Enumerate a PR's review threads and keep only mechanically-resolvable ones."""
     owner, name = repo.split("/", 1)
     candidates: list[Candidate] = []
@@ -430,7 +430,7 @@ async def _candidates_for_pr(gql: ReadGqlFn, repo: str, pr: int) -> list[Candida
     after: str | None = None
     seen_cursors: set[str] = set()
     while True:
-        data = await gql(
+        data = gql(
             _PR_THREADS_WITH_COMMENTS_QUERY,
             {"owner": owner, "name": name, "number": pr, "after": after},
         )
@@ -485,14 +485,14 @@ def _append_audit(path: Path, record: dict[str, Any]) -> None:
             os.close(fd)
 
 
-async def _cap_guard(ctx: _CandidateFlow) -> Decision | None:
+def _cap_guard(ctx: _CandidateFlow) -> Decision | None:
     if ctx.approved_count >= ctx.max_resolves:
         ctx.capped = True
     return None
 
 
-async def _gate_guard(ctx: _CandidateFlow) -> Decision | None:
-    ctx.verdict = await _gate_verdict(ctx.gate, ctx.candidate)
+def _gate_guard(ctx: _CandidateFlow) -> Decision | None:
+    ctx.verdict = _gate_verdict(ctx.gate, ctx.candidate)
     if not ctx.verdict.should_resolve:
         return Decision(
             ctx.repo,
@@ -504,7 +504,7 @@ async def _gate_guard(ctx: _CandidateFlow) -> Decision | None:
     return None
 
 
-async def _dry_run_guard(ctx: _CandidateFlow) -> Decision | None:
+def _dry_run_guard(ctx: _CandidateFlow) -> Decision | None:
     if not ctx.dry_run:
         return None
     verdict = ctx.verdict or GateVerdict(True, "ok")
@@ -517,9 +517,9 @@ async def _dry_run_guard(ctx: _CandidateFlow) -> Decision | None:
     )
 
 
-async def _freshness_guard(ctx: _CandidateFlow) -> Decision | None:
+def _freshness_guard(ctx: _CandidateFlow) -> Decision | None:
     # TOCTOU guard: stale gate evidence must not resolve newly active reviewer dissent.
-    live_count = await _thread_comment_count(ctx.read_gql, ctx.candidate.thread_id)
+    live_count = _thread_comment_count(ctx.read_gql, ctx.candidate.thread_id)
     if live_count is None or live_count != len(ctx.candidate.comments):
         return Decision(
             ctx.repo,
@@ -531,7 +531,7 @@ async def _freshness_guard(ctx: _CandidateFlow) -> Decision | None:
     return None
 
 
-async def _audit_write_ahead_guard(ctx: _CandidateFlow) -> Decision | None:
+def _audit_write_ahead_guard(ctx: _CandidateFlow) -> Decision | None:
     # Write-ahead intent: if audit cannot persist, abort before mutating GitHub state.
     if ctx.audit_path is not None:
         verdict = ctx.verdict or GateVerdict(True, "ok")
@@ -540,7 +540,7 @@ async def _audit_write_ahead_guard(ctx: _CandidateFlow) -> Decision | None:
     return None
 
 
-async def _resolve_guard(ctx: _CandidateFlow) -> Decision | None:
+def _resolve_guard(ctx: _CandidateFlow) -> Decision | None:
     return _safe_resolve(ctx.do_resolve, ctx.candidate, ctx.resolve_gql)
 
 
@@ -554,9 +554,9 @@ _CANDIDATE_GUARDS: tuple[_Guard, ...] = (
 )
 
 
-async def _drive_candidate(ctx: _CandidateFlow) -> Decision | None:
+def _drive_candidate(ctx: _CandidateFlow) -> Decision | None:
     for guard in _CANDIDATE_GUARDS:
-        decision = await guard(ctx)
+        decision = guard(ctx)
         if decision is not None or ctx.capped:
             return decision
     raise RuntimeError("candidate guard list did not reach a terminal decision")
@@ -573,7 +573,7 @@ def _assert_resolver_identity_guard(resolve_fn: Any, resolve_gql: Any) -> None:
 # --------------------------------------------------------------------------- #
 
 
-async def run_resolve_loop(
+def run_resolve_loop(
     *,
     requested_repos: Sequence[str],
     gate: ShouldResolveGate,
@@ -633,7 +633,7 @@ async def run_resolve_loop(
             break
         scanned.append(repo)
         try:
-            pr_numbers = await _list_open_pr_numbers(read_gql, repo)
+            pr_numbers = _list_open_pr_numbers(read_gql, repo)
         except _TOLERATED_ERRORS as exc:
             errors.append(TargetError(repo=repo, message=str(exc)))
             continue
@@ -643,7 +643,7 @@ async def run_resolve_loop(
                 break
             prs_scanned += 1
             try:
-                candidates = await _candidates_for_pr(read_gql, repo, pr)
+                candidates = _candidates_for_pr(read_gql, repo, pr)
             except _TOLERATED_ERRORS as exc:
                 errors.append(TargetError(repo=repo, pr=pr, message=str(exc)))
                 continue
@@ -663,7 +663,7 @@ async def run_resolve_loop(
                     timestamp=when,
                     audit_path=audit_path,
                 )
-                decision = await _drive_candidate(flow)
+                decision = _drive_candidate(flow)
                 if flow.capped:
                     capped = True
                     break
@@ -683,14 +683,14 @@ async def run_resolve_loop(
     )
 
 
-async def _gate_verdict(gate: ShouldResolveGate, cand: Candidate) -> GateVerdict:
+def _gate_verdict(gate: ShouldResolveGate, cand: Candidate) -> GateVerdict:
     """Call the gate, FAIL CLOSED on any error/exception (default to veto/skip)."""
     # Truncated comment list → the gate would judge on a partial prefix; veto without
     # asking it, since a later "still broken" comment may be missing.
     if cand.comments_truncated:
         return GateVerdict(False, "comments_truncated")
     try:
-        verdict = await gate.should_resolve(cand)
+        verdict = gate.should_resolve(cand)
     except Exception as exc:
         return GateVerdict(False, f"gate_error:{type(exc).__name__}")
     if not isinstance(verdict, GateVerdict) or verdict.should_resolve is not True:

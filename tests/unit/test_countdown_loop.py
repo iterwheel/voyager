@@ -88,7 +88,7 @@ class FakeReadGql:
                     return len((n.get("comments") or {}).get("nodes") or [])
         return None
 
-    async def __call__(self, query: str, variables: dict) -> dict:
+    def __call__(self, query: str, variables: dict) -> dict:
         if "ThreadFreshness" in query:
             tid = variables["threadId"]
             if tid in self._freshness_raise:
@@ -131,7 +131,7 @@ class FakeGate:
         self._raises = raises
         self.seen: list[Candidate] = []
 
-    async def should_resolve(self, candidate: Candidate) -> GateVerdict:
+    def should_resolve(self, candidate: Candidate) -> GateVerdict:
         self.seen.append(candidate)
         if self._raises:
             raise RuntimeError("gate exploded")
@@ -148,11 +148,55 @@ def _fake_resolver():
     return _fn, resolved
 
 
-async def _run(read_gql, gate, **kw):
+def test_run_resolve_loop_returns_summary_synchronously() -> None:
+    summary = run_resolve_loop(
+        requested_repos=[SANDBOX],
+        gate=FakeGate(),
+        read_gql=FakeReadGql({SANDBOX: []}, {}),
+        resolve_gql=object(),
+        resolve_fn=_fake_resolver()[0],
+        audit_path=None,
+    )
+
+    assert summary.repos_scanned == (SANDBOX,)
+
+
+def test_make_read_gql_uses_sync_client_factory() -> None:
+    class _Response:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict:
+            return {"data": {"repository": {"pullRequests": {"pageInfo": {}, "nodes": []}}}}
+
+    class _Client:
+        def __init__(self) -> None:
+            self.posts = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc) -> None:
+            pass
+
+        def post(self, *_args, **_kwargs) -> _Response:
+            self.posts += 1
+            return _Response()
+
+    client = _Client()
+    gql = cl.make_read_gql("token", client_factory=lambda: client)
+
+    assert gql(cl._OPEN_PR_NUMBERS_QUERY, {"owner": "iterwheel", "name": "voyager"}) == {
+        "repository": {"pullRequests": {"pageInfo": {}, "nodes": []}}
+    }
+    assert client.posts == 1
+
+
+def _run(read_gql, gate, **kw):
     resolve_fn = kw.pop("resolve_fn", None)
     if resolve_fn is None:
         resolve_fn, _ = _fake_resolver()
-    return await run_resolve_loop(
+    return run_resolve_loop(
         requested_repos=kw.pop("repos", [SANDBOX]),
         gate=gate,
         read_gql=read_gql,
@@ -220,15 +264,15 @@ class TestRepoList:
 
 
 class TestListOpenPrNumbers:
-    async def test_null_repository_raises(self) -> None:
+    def test_null_repository_raises(self) -> None:
         # null repository (token lost access / repo renamed) must error, not look healthy.
-        async def gql(query: str, variables: dict) -> dict:
+        def gql(query: str, variables: dict) -> dict:
             return {"repository": None}
 
         with pytest.raises(cl.ResolveConversationError, match="repository not found"):
-            await cl._list_open_pr_numbers(gql, REAL)
+            cl._list_open_pr_numbers(gql, REAL)
 
-    async def test_dedupes_pr_numbers_across_pages(self) -> None:
+    def test_dedupes_pr_numbers_across_pages(self) -> None:
         # Overlapping/repeated pages must not double-enumerate the same PR.
         pages = [
             {
@@ -239,14 +283,14 @@ class TestListOpenPrNumbers:
         ]
         calls = {"n": 0}
 
-        async def gql(query: str, variables: dict) -> dict:
+        def gql(query: str, variables: dict) -> dict:
             page = pages[calls["n"]]
             calls["n"] += 1
             return {"repository": {"pullRequests": page}}
 
-        assert await cl._list_open_pr_numbers(gql, REAL) == [1, 2, 3]
+        assert cl._list_open_pr_numbers(gql, REAL) == [1, 2, 3]
 
-    async def test_candidates_dedupe_threads_across_pages(self) -> None:
+    def test_candidates_dedupe_threads_across_pages(self) -> None:
         # Overlapping/repeated reviewThreads pages must not double-gate a thread.
         pages = [
             {
@@ -257,17 +301,17 @@ class TestListOpenPrNumbers:
         ]
         calls = {"n": 0}
 
-        async def gql(query: str, variables: dict) -> dict:
+        def gql(query: str, variables: dict) -> dict:
             page = pages[calls["n"]]
             calls["n"] += 1
             return {"repository": {"pullRequest": {"reviewThreads": page}}}
 
-        cands = await cl._candidates_for_pr(gql, REAL, 1)
+        cands = cl._candidates_for_pr(gql, REAL, 1)
         assert [c.thread_id for c in cands] == ["T1", "T2", "T3"]
 
 
 class TestPrefilter:
-    async def test_only_resolvable_threads_become_candidates(self) -> None:
+    def test_only_resolvable_threads_become_candidates(self) -> None:
         threads = [
             _thread(tid="A"),  # resolvable
             _thread(tid="B", resolved=True),  # already resolved
@@ -277,12 +321,12 @@ class TestPrefilter:
         ]
         read = FakeReadGql({SANDBOX: [7]}, {(SANDBOX, 7): threads})
         gate = FakeGate(GateVerdict(True, "ok"))
-        await _run(read, gate)
+        _run(read, gate)
         assert [c.thread_id for c in gate.seen] == ["A", "C"]
 
-    async def test_pr_not_found_is_tolerated_target_error(self) -> None:
+    def test_pr_not_found_is_tolerated_target_error(self) -> None:
         read = FakeReadGql({SANDBOX: [9]}, {}, pull_missing={(SANDBOX, 9)})
-        summary = await _run(read, FakeGate())
+        summary = _run(read, FakeGate())
         assert summary.errors
         assert summary.errors[0].pr == 9
         assert summary.resolved == 0
@@ -294,36 +338,36 @@ class TestPrefilter:
 
 
 class TestGateVeto:
-    async def test_veto_means_no_resolve(self) -> None:
+    def test_veto_means_no_resolve(self) -> None:
         read = FakeReadGql({SANDBOX: [1]}, {(SANDBOX, 1): [_thread(tid="A")]})
         fn, resolved = _fake_resolver()
-        summary = await _run(read, FakeGate(GateVerdict(False, "not addressed")), resolve_fn=fn)
+        summary = _run(read, FakeGate(GateVerdict(False, "not addressed")), resolve_fn=fn)
         assert resolved == []
         assert summary.resolved == 0
         assert any(d.action == "vetoed" for d in summary.decisions)
 
-    async def test_gate_exception_fails_closed(self) -> None:
+    def test_gate_exception_fails_closed(self) -> None:
         read = FakeReadGql({SANDBOX: [1]}, {(SANDBOX, 1): [_thread(tid="A")]})
         fn, resolved = _fake_resolver()
-        summary = await _run(read, FakeGate(raises=True), resolve_fn=fn)
+        summary = _run(read, FakeGate(raises=True), resolve_fn=fn)
         assert resolved == []
         assert summary.resolved == 0
         assert all(d.action == "vetoed" for d in summary.decisions)
         assert "gate_error" in summary.decisions[0].reason
 
-    async def test_truncated_comments_veto_without_calling_gate(self) -> None:
+    def test_truncated_comments_veto_without_calling_gate(self) -> None:
         # A thread with more comments than we fetched must fail closed: the gate would
         # judge on a partial prefix that may omit a later "still broken" reply.
         read = FakeReadGql({SANDBOX: [1]}, {(SANDBOX, 1): [_thread(tid="A", truncated=True)]})
         fn, resolved = _fake_resolver()
         gate = FakeGate(GateVerdict(True, "looks fixed"))
-        summary = await _run(read, gate, resolve_fn=fn)
+        summary = _run(read, gate, resolve_fn=fn)
         assert resolved == []
         assert gate.seen == []  # gate never consulted on a truncated thread
         assert summary.decisions[0].action == "vetoed"
         assert summary.decisions[0].reason == "comments_truncated"
 
-    async def test_injection_approve_all_cannot_resolve_noncandidates(self) -> None:
+    def test_injection_approve_all_cannot_resolve_noncandidates(self) -> None:
         # Gate approves EVERYTHING (simulating prompt-injection success). Non-candidates
         # (resolved/can't-resolve/can't-reply) must STILL never resolve — the
         # deterministic prefilter is the hard boundary. (Outdated is NOT a non-candidate.)
@@ -335,39 +379,39 @@ class TestGateVeto:
         ]
         read = FakeReadGql({SANDBOX: [1]}, {(SANDBOX, 1): threads})
         fn, resolved = _fake_resolver()
-        await _run(read, FakeGate(GateVerdict(True, "resolve everything!")), resolve_fn=fn)
+        _run(read, FakeGate(GateVerdict(True, "resolve everything!")), resolve_fn=fn)
         assert [c.thread_id for c in resolved] == ["A"]
 
 
 class TestDryRun:
-    async def test_dry_run_issues_no_resolve(self) -> None:
+    def test_dry_run_issues_no_resolve(self) -> None:
         read = FakeReadGql({SANDBOX: [1]}, {(SANDBOX, 1): [_thread(tid="A")]})
         fn, resolved = _fake_resolver()
-        summary = await _run(read, FakeGate(), resolve_fn=fn, dry_run=True)
+        summary = _run(read, FakeGate(), resolve_fn=fn, dry_run=True)
         assert resolved == []
         assert summary.would_resolve == 1
         assert summary.resolved == 0
 
 
 class TestCap:
-    async def test_max_resolves_caps_and_flags(self) -> None:
+    def test_max_resolves_caps_and_flags(self) -> None:
         threads = [_thread(tid=f"T{i}") for i in range(5)]
         read = FakeReadGql({SANDBOX: [1]}, {(SANDBOX, 1): threads})
         fn, resolved = _fake_resolver()
-        summary = await _run(read, FakeGate(), resolve_fn=fn, max_resolves=2)
+        summary = _run(read, FakeGate(), resolve_fn=fn, max_resolves=2)
         assert len(resolved) == 2
         assert summary.capped is True
 
-    async def test_dry_run_caps_would_resolves(self) -> None:
+    def test_dry_run_caps_would_resolves(self) -> None:
         # The cap bounds APPROVED candidates in both modes — dry-run must not fan out
         # past max_resolves even though it never calls the resolver.
         threads = [_thread(tid=f"T{i}") for i in range(5)]
         read = FakeReadGql({SANDBOX: [1]}, {(SANDBOX, 1): threads})
-        summary = await _run(read, FakeGate(), dry_run=True, max_resolves=2)
+        summary = _run(read, FakeGate(), dry_run=True, max_resolves=2)
         assert summary.would_resolve == 2
         assert summary.capped is True
 
-    async def test_failed_attempts_count_against_cap(self) -> None:
+    def test_failed_attempts_count_against_cap(self) -> None:
         # The cap bounds APPROVED ATTEMPTS, not just successes: a resolver that keeps
         # failing must still stop the loop at max_resolves (blast-radius guarantee).
         threads = [_thread(tid=f"T{i}") for i in range(5)]
@@ -378,39 +422,39 @@ class TestCap:
             attempts.append(cand)
             return Decision(cand.repo, cand.pr, cand.thread_id, "resolve_failed", "boom")
 
-        summary = await _run(read, FakeGate(), resolve_fn=_always_fail, max_resolves=2)
+        summary = _run(read, FakeGate(), resolve_fn=_always_fail, max_resolves=2)
         assert len(attempts) == 2
         assert summary.capped is True
         assert summary.resolved == 0
 
 
 class TestCommentFreshness:
-    async def test_new_comment_between_gate_and_resolve_skips(self) -> None:
+    def test_new_comment_between_gate_and_resolve_skips(self) -> None:
         # Live count (2) differs from what the gate saw (1) → fail closed, no resolve.
         threads = [_thread(tid="A", comments=[("r", "please fix")])]
         read = FakeReadGql({SANDBOX: [1]}, {(SANDBOX, 1): threads}, comment_counts={"A": 2})
         fn, resolved = _fake_resolver()
-        summary = await _run(read, FakeGate(GateVerdict(True, "ok")), resolve_fn=fn)
+        summary = _run(read, FakeGate(GateVerdict(True, "ok")), resolve_fn=fn)
         assert resolved == []
         assert summary.decisions[0].action == "skipped_stale"
         assert summary.decisions[0].reason == "comments_changed"
 
-    async def test_unreadable_count_skips(self) -> None:
+    def test_unreadable_count_skips(self) -> None:
         threads = [_thread(tid="A", comments=[("r", "please fix")])]
         read = FakeReadGql({SANDBOX: [1]}, {(SANDBOX, 1): threads}, comment_counts={"A": None})
         fn, resolved = _fake_resolver()
-        summary = await _run(read, FakeGate(GateVerdict(True, "ok")), resolve_fn=fn)
+        summary = _run(read, FakeGate(GateVerdict(True, "ok")), resolve_fn=fn)
         assert resolved == []
         assert summary.decisions[0].action == "skipped_stale"
 
-    async def test_unchanged_count_resolves(self) -> None:
+    def test_unchanged_count_resolves(self) -> None:
         threads = [_thread(tid="A", comments=[("r", "please fix")])]
         read = FakeReadGql({SANDBOX: [1]}, {(SANDBOX, 1): threads})  # default count matches
         fn, resolved = _fake_resolver()
-        await _run(read, FakeGate(GateVerdict(True, "ok")), resolve_fn=fn)
+        _run(read, FakeGate(GateVerdict(True, "ok")), resolve_fn=fn)
         assert [c.thread_id for c in resolved] == ["A"]
 
-    async def test_freshness_error_skips_candidate_and_keeps_scanning(self) -> None:
+    def test_freshness_error_skips_candidate_and_keeps_scanning(self) -> None:
         # A transient freshness read error must skip THAT candidate, not abort the run.
         read = FakeReadGql(
             {SANDBOX: [1, 2]},
@@ -421,50 +465,50 @@ class TestCommentFreshness:
             freshness_raise={"A"},
         )
         fn, resolved = _fake_resolver()
-        summary = await _run(read, FakeGate(GateVerdict(True, "ok")), resolve_fn=fn)
+        summary = _run(read, FakeGate(GateVerdict(True, "ok")), resolve_fn=fn)
         assert [c.thread_id for c in resolved] == ["B"]  # PR 2 still scanned + resolved
         a = next(d for d in summary.decisions if d.thread_id == "A")
         assert a.action == "skipped_stale"
 
 
 class TestThreadCommentCount:
-    async def test_returns_none_on_read_error(self) -> None:
-        async def gql(query: str, variables: dict) -> dict:
+    def test_returns_none_on_read_error(self) -> None:
+        def gql(query: str, variables: dict) -> dict:
             raise cl.ResolveConversationError("transient")
 
-        assert await cl._thread_comment_count(gql, "T1") is None
+        assert cl._thread_comment_count(gql, "T1") is None
 
 
 class TestRedaction:
-    async def test_real_repo_redacts_identifiers(self) -> None:
+    def test_real_repo_redacts_identifiers(self) -> None:
         read = FakeReadGql({REAL: [1]}, {(REAL, 1): [_thread(tid="SECRET")]})
-        summary = await _run(read, FakeGate(), repos=[REAL])
+        summary = _run(read, FakeGate(), repos=[REAL])
         pub = summary.to_public_dict()
         blob = str(pub)
         assert "SECRET" not in blob
         assert all("pr" not in d for d in pub["decisions"])
         assert all(d.get("redacted") for d in pub["decisions"])
 
-    async def test_sandbox_shows_identifiers(self) -> None:
+    def test_sandbox_shows_identifiers(self) -> None:
         read = FakeReadGql({SANDBOX: [42]}, {(SANDBOX, 42): [_thread(tid="OK")]})
-        summary = await _run(read, FakeGate(), repos=[SANDBOX])
+        summary = _run(read, FakeGate(), repos=[SANDBOX])
         pub = summary.to_public_dict()
         assert pub["decisions"][0]["pr"] == 42
         assert pub["decisions"][0]["thread_id"] == "OK"
 
-    async def test_llm_reason_not_leaked_for_real_repo(self, tmp_path: Path) -> None:
+    def test_llm_reason_not_leaked_for_real_repo(self, tmp_path: Path) -> None:
         # The gate's reason is LLM free-text over comment bodies; for non-sandbox repos
         # it must never reach public output OR the audit (it could echo a raw PR#/node-ID).
         leak = "PRRT_kwDOSECRETnodeid #1337"
         audit = tmp_path / "audit.jsonl"
         read = FakeReadGql({REAL: [1]}, {(REAL, 1): [_thread(tid="A")]})
-        await _run(read, FakeGate(GateVerdict(False, leak)), repos=[REAL], audit_path=audit)
+        _run(read, FakeGate(GateVerdict(False, leak)), repos=[REAL], audit_path=audit)
         # would have been recorded as a veto carrying `leak` as its reason
         assert leak not in audit.read_text(encoding="utf-8")
 
 
 class TestIdentityGate:
-    async def test_dry_run_still_asserts_identity(self) -> None:
+    def test_dry_run_still_asserts_identity(self) -> None:
         # dry-run enumerates threads and ships comments to the LLM, so a wrong machine
         # identity must abort up front there too — not only on live resolves.
         read = FakeReadGql({SANDBOX: [1]}, {(SANDBOX, 1): [_thread(tid="A")]})
@@ -473,7 +517,7 @@ class TestIdentityGate:
             return {"viewer": {"login": "ryosaeba1985"}}  # not the machine account
 
         with pytest.raises(cl.ResolveConversationError):
-            await run_resolve_loop(
+            run_resolve_loop(
                 requested_repos=[SANDBOX],
                 gate=FakeGate(),
                 read_gql=read,
@@ -485,7 +529,7 @@ class TestIdentityGate:
 
 
 class TestAuditFailClosed:
-    async def test_unwritable_audit_aborts_before_mutation(
+    def test_unwritable_audit_aborts_before_mutation(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         # Write-ahead intent: if the audit sink can't be written, the run must abort
@@ -502,7 +546,7 @@ class TestAuditFailClosed:
 
         monkeypatch.setattr(cl, "_append_audit", _boom)
         with pytest.raises(OSError, match="disk full"):
-            await run_resolve_loop(
+            run_resolve_loop(
                 requested_repos=[SANDBOX],
                 gate=FakeGate(),
                 read_gql=read,
@@ -514,28 +558,28 @@ class TestAuditFailClosed:
 
 
 class TestSystemicFailure:
-    async def test_all_repos_fail_enumeration_is_systemic(self) -> None:
+    def test_all_repos_fail_enumeration_is_systemic(self) -> None:
         read = FakeReadGql({SANDBOX: [1]}, {}, fail_repos={SANDBOX})
-        summary = await _run(read, FakeGate())
+        summary = _run(read, FakeGate())
         assert summary.systemic_failure is True
 
-    async def test_one_repo_fails_others_continue(self) -> None:
+    def test_one_repo_fails_others_continue(self) -> None:
         read = FakeReadGql(
             {REAL: [1], SANDBOX: [2]},
             {(SANDBOX, 2): [_thread(tid="A")]},
             fail_repos={REAL},
         )
-        summary = await _run(read, FakeGate(), repos=[REAL, SANDBOX])
+        summary = _run(read, FakeGate(), repos=[REAL, SANDBOX])
         assert summary.systemic_failure is False
         assert summary.resolved == 1
         assert any(e.repo == REAL for e in summary.errors)
 
 
 class TestAudit:
-    async def test_audit_records_redacted_decisions(self, tmp_path: Path) -> None:
+    def test_audit_records_redacted_decisions(self, tmp_path: Path) -> None:
         audit = tmp_path / "audit.jsonl"
         read = FakeReadGql({REAL: [1]}, {(REAL, 1): [_thread(tid="SECRET")]})
-        await _run(read, FakeGate(), repos=[REAL], audit_path=audit)
+        _run(read, FakeGate(), repos=[REAL], audit_path=audit)
         text = audit.read_text(encoding="utf-8")
         assert text.strip()  # at least one line
         assert "SECRET" not in text  # redacted in audit too
@@ -587,24 +631,24 @@ class TestCandidateGuardList:
         assert not hasattr(cl, "_TRANSITION_TABLE")
         assert not hasattr(cl, "_drive_candidate_to_terminal")
 
-    async def test_cap_guard_terminal_does_not_call_gate(self) -> None:
+    def test_cap_guard_terminal_does_not_call_gate(self) -> None:
         read = FakeReadGql({SANDBOX: [1]}, {(SANDBOX, 1): [_thread(tid="A")]})
         gate = FakeGate(GateVerdict(True, "ok"))
         ctx = _guard_context(read, gate, max_resolves=2, approved_count=2)
-        decision = await cl._drive_candidate(ctx)
+        decision = cl._drive_candidate(ctx)
         assert decision is None
         assert ctx.capped is True
         assert gate.seen == []
 
-    async def test_truncation_guard_vetoes_before_gate(self) -> None:
+    def test_truncation_guard_vetoes_before_gate(self) -> None:
         read = FakeReadGql({SANDBOX: [1]}, {(SANDBOX, 1): [_thread(tid="A")]})
         gate = FakeGate(GateVerdict(True, "ok"))
         candidate = Candidate(SANDBOX, 1, "A", (("r", "please fix"),), comments_truncated=True)
-        decision = await cl._gate_guard(_guard_context(read, gate, candidate=candidate))
+        decision = cl._gate_guard(_guard_context(read, gate, candidate=candidate))
         assert decision == Decision(SANDBOX, 1, "A", "vetoed", "comments_truncated")
         assert gate.seen == []
 
-    async def test_dry_run_terminal_skips_freshness_and_resolve(self) -> None:
+    def test_dry_run_terminal_skips_freshness_and_resolve(self) -> None:
         read = FakeReadGql(
             {SANDBOX: [1]},
             {(SANDBOX, 1): [_thread(tid="A", comments=[("r", "please fix")])]},
@@ -616,13 +660,13 @@ class TestCandidateGuardList:
             attempts.append(cand)
             return Decision(cand.repo, cand.pr, cand.thread_id, "resolved", "ok")
 
-        decision = await cl._drive_candidate(
+        decision = cl._drive_candidate(
             _guard_context(read, FakeGate(GateVerdict(True, "ok")), do_resolve=_track, dry_run=True)
         )
         assert decision == Decision(SANDBOX, 1, "A", "would_resolve", "ok")
         assert attempts == []
 
-    async def test_freshness_guard_skips_stale_without_resolve(self) -> None:
+    def test_freshness_guard_skips_stale_without_resolve(self) -> None:
         read = FakeReadGql(
             {SANDBOX: [1]},
             {(SANDBOX, 1): [_thread(tid="A", comments=[("r", "please fix")])]},
@@ -634,13 +678,13 @@ class TestCandidateGuardList:
             attempts.append(cand)
             return Decision(cand.repo, cand.pr, cand.thread_id, "resolved", "ok")
 
-        decision = await cl._freshness_guard(
+        decision = cl._freshness_guard(
             _guard_context(read, FakeGate(GateVerdict(True, "ok")), do_resolve=_track)
         )
         assert decision == Decision(SANDBOX, 1, "A", "skipped_stale", "comments_changed")
         assert attempts == []
 
-    async def test_write_ahead_audit_precedes_resolve(self, tmp_path: Path) -> None:
+    def test_write_ahead_audit_precedes_resolve(self, tmp_path: Path) -> None:
         audit = tmp_path / "audit.jsonl"
         read = FakeReadGql(
             {SANDBOX: [1]},
@@ -652,7 +696,7 @@ class TestCandidateGuardList:
             events.append(audit.read_text(encoding="utf-8"))
             return Decision(cand.repo, cand.pr, cand.thread_id, "resolved", "ok")
 
-        decision = await cl._drive_candidate(
+        decision = cl._drive_candidate(
             _guard_context(
                 read,
                 FakeGate(GateVerdict(True, "ok")),
