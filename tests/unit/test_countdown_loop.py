@@ -717,7 +717,7 @@ class TestDoResolveIntegration:
     """Exercise the real resolve_conversations through _do_resolve with a fake gql
     that mimics the resolver's expected responses (identity + node + mutation)."""
 
-    def _resolver_gql(self, *, viewer="iterwheel-countdown-user", resolved_after=True):
+    def _resolver_gql(self, *, viewer="iterwheel-countdown-bot", resolved_after=True):
         def _gql(query: str, variables: dict) -> dict:
             if "query viewer" in query.lower():
                 return {"viewer": {"login": viewer}}
@@ -753,7 +753,7 @@ class TestDoResolveIntegration:
         # (resolved=0, action=skipped_guard) → benign skip, not a failure.
         def _gql(query: str, variables: dict) -> dict:
             if "query viewer" in query.lower():
-                return {"viewer": {"login": "iterwheel-countdown-user"}}
+                return {"viewer": {"login": "iterwheel-countdown-bot"}}
             return {
                 "node": {
                     "id": variables.get("threadId"),

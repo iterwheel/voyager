@@ -11,7 +11,7 @@
 ## What Is It?
 
 A multi-repo review-thread resolve loop, `vyg countdown resolve-loop`, that runs
-**as the fixed machine account** (`iterwheel-countdown-user`) on top of the #222
+**as the fixed machine account** (`iterwheel-countdown-bot`) on top of the #222
 `resolve_conversation` resolver — no dedicated PAT, no GitHub-App identity. For each
 allowlisted repo it enumerates open PRs, deterministically prefilters the threads the
 machine account can resolve, asks an **LLM should-resolve gate** whether each
@@ -56,7 +56,7 @@ addressed. A safety layer is required before unattended resolution is sane.
    `comments_changed`, fail-closed on an unreadable count) if it differs from what the
    gate judged — so a reviewer commenting between judgment and action is not overrun.
 5. **Identity gate.** The resolve mutation goes through `resolve_conversations`,
-   which hard-gates `viewer.login == iterwheel-countdown-user` and is resolve-only.
+   which hard-gates `viewer.login == iterwheel-countdown-bot` and is resolve-only.
 6. **Blast radius.** `--max-resolves` caps resolves per run (`capped=True`, never
    silent truncation). Single-instance `flock` prevents concurrent pile-ups.
 7. **Redaction (VOY-1828).** Non-sandbox repos never emit raw PR numbers / thread
@@ -128,4 +128,5 @@ lock → gate_repos(requested ∩ RESOLVE_ALLOWED_REPOS)
 
 | Date | Change | By |
 |------|--------|----|
+| 2026-06-28 | Updated the fixed machine-account resolver login to `iterwheel-countdown-bot` after issue #226 account rename | Codex |
 | 2026-06-28 | Initial PRP | Claude Code |

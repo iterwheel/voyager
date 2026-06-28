@@ -94,7 +94,7 @@ def resolve_conversation(
 ) -> None:
     """Resolve PR review conversations as the fixed machine account.
 
-    Identity is fixed to iterwheel-countdown-user (token via gh, never printed).
+    Identity is fixed to iterwheel-countdown-bot (token via gh, never printed).
     The only GraphQL mutation issued is resolveReviewThread.
     """
     from voyager.core.resolve_conversation import (
@@ -153,7 +153,7 @@ def resolve_loop(
     Enumerates open PRs, deterministically prefilters resolvable threads, applies a
     fail-closed LLM should-resolve gate, and resolves only approved threads — under a
     single-instance lock and a max-resolves cap. Identity is fixed to
-    iterwheel-countdown-user (token via gh, never printed).
+    iterwheel-countdown-bot (token via gh, never printed).
     """
     from pathlib import Path
 

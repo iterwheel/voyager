@@ -6,8 +6,8 @@ Hard constraints (enforced by construction):
 1. The ONLY GraphQL mutation this module may ever issue is ``resolveReviewThread``.
    No code path merges, closes, comments, or issues any other mutation.
 
-2. Identity is fixed to MACHINE_ACCOUNT = "iterwheel-countdown-user". The token is
-   obtained via ``gh auth token --user iterwheel-countdown-user`` and is never logged,
+2. Identity is fixed to MACHINE_ACCOUNT = "iterwheel-countdown-bot". The token is
+   obtained via ``gh auth token --user iterwheel-countdown-bot`` and is never logged,
    printed, or exposed in exceptions. The global gh active account is never modified.
 
 3. Only repos in RESOLVE_ALLOWED_REPOS may be targeted; any other repo raises
@@ -32,7 +32,7 @@ import httpx
 # credential, so they must be stripped before reading the machine account token.
 _AMBIENT_TOKEN_ENV = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")
 
-MACHINE_ACCOUNT: str = "iterwheel-countdown-user"
+MACHINE_ACCOUNT: str = "iterwheel-countdown-bot"
 RESOLVE_ALLOWED_REPOS: frozenset[str] = frozenset(
     {"iterwheel/voyager", "iterwheel/voyager-sandbox"}
 )
@@ -93,7 +93,7 @@ def read_machine_token(run: Callable[..., Any] = subprocess.run) -> str:
     """
     # Strip ambient GH_TOKEN/GITHUB_TOKEN: gh would otherwise return that token
     # (the owner could be anyone — e.g. a CI bot or the human) instead of the
-    # stored iterwheel-countdown-user credential, silently resolving as the
+    # stored iterwheel-countdown-bot credential, silently resolving as the
     # wrong identity. Belt to the viewer-login check in resolve_conversations.
     scrubbed_env = {k: v for k, v in os.environ.items() if k not in _AMBIENT_TOKEN_ENV}
     try:

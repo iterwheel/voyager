@@ -20,7 +20,7 @@ DEFAULT_PR = 1
 class CountdownScenario:
     threads: list[dict[str, Any]] = field(default_factory=list)
     live_comment_counts: dict[str, int | None] = field(default_factory=dict)
-    resolver_identity: str = "iterwheel-countdown-user"
+    resolver_identity: str = "iterwheel-countdown-bot"
     gate: Any | None = None
     summary: Any | None = None
     raised: BaseException | None = None

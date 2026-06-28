@@ -1,7 +1,7 @@
 # SOP-1805: GitHub Bot Accounts and Responsibilities
 
 **Applies to:** VOY project
-**Last updated:** 2026-06-22
+**Last updated:** 2026-06-28
 **Last reviewed:** 2026-06-22
 **Status:** Active
 **Related:** VOY-1802, VOY-1804
@@ -257,7 +257,7 @@ and VOY-1804.
 
     Review-thread resolution runs via `vyg countdown resolve-conversation`,
     which resolves conversations as the fixed machine account
-    `iterwheel-countdown-user` (token via `gh auth token --user …`, never
+    `iterwheel-countdown-bot` (token via `gh auth token --user …`, never
     printed) with a viewer-login identity gate and a resolve-only operation
     allowlist. The earlier diagnostic/canary mechanism (`review-thread-diagnostic`
     and the dedicated-PAT route, VOY-1827/1828/1829) was superseded and removed
@@ -325,3 +325,4 @@ review/gate stages for the Assembly-authored PR.
 | 2026-05-23 | Added Assembly bot: responsibilities, boundaries, allow/deny table, trigger model, rollout model, pipeline position, and examples (issue #67) | DeepSeek (via VOY-1811) |
 | 2026-05-23 | Added Actor Authorization for Assembly step (per VOY-1818): env-var policy, default-deny posture, bot precedence rule, unknown-metadata deny, refusal-disclosure non-goal | Claude (via VOY-1811 #76) |
 | 2026-06-22 | Designated Countdown as the final-gate review-thread resolver actor gated by Clearance evidence and live `viewerCanResolve` | Codex |
+| 2026-06-28 | Renamed the fixed Countdown machine-user resolver identity to `iterwheel-countdown-bot` for issue #226 | Codex |

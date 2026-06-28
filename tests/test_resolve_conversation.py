@@ -89,7 +89,7 @@ class _SmartGql:
         self,
         pages: list[dict],
         mutation_response: dict | None = None,
-        viewer_login: str = "iterwheel-countdown-user",
+        viewer_login: str = "iterwheel-countdown-bot",
     ) -> None:
         self._pages = list(pages)
         self._page_idx = 0
@@ -296,7 +296,7 @@ class TestReadMachineToken:
         return MagicMock(return_value=self._completed_process(returncode=returncode, stdout=stdout))
 
     def test_machine_account_constant_value(self) -> None:
-        assert MACHINE_ACCOUNT == "iterwheel-countdown-user"
+        assert MACHINE_ACCOUNT == "iterwheel-countdown-bot"
 
     def test_success_returns_stripped_token(self) -> None:
         run = self._make_run(returncode=0, stdout="ghp_abc123\n")
@@ -314,7 +314,7 @@ class TestReadMachineToken:
             "--hostname",
             "github.com",
             "--user",
-            "iterwheel-countdown-user",
+            "iterwheel-countdown-bot",
         ]
         assert kwargs["capture_output"] is True
         assert kwargs["text"] is True
