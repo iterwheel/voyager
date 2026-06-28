@@ -123,6 +123,19 @@ def test_voy_1807_user_to_server_route_fails_closed_without_plaintext_recovery()
     assert "recovery file" not in route_row.lower()
 
 
+def test_voy_1807_countdown_registry_row_mentions_scheduled_resolve_loop():
+    text = Path("rules/VOY-1807-REF-GitHub-App-Registry.md").read_text(encoding="utf-8")
+    rows = re.findall(r"(?m)^\| `iterwheel-countdown` \|[^\n]*$", text)
+    row = next((candidate for candidate in rows if "resolve" in candidate), None)
+
+    assert row is not None, "VOY-1807 missing iterwheel-countdown resolver registry row"
+
+    assert "Scheduled `vyg countdown resolve-loop`" in row
+    assert "Manual `vyg countdown resolve-conversation`" in row
+    assert "VOY-1835" in row
+    assert "iterwheel-countdown-bot" in row
+
+
 def test_voy_1807_user_to_server_route_records_live_refresh_evidence():
     text = Path("rules/VOY-1807-REF-GitHub-App-Registry.md").read_text(encoding="utf-8")
     route_row_match = re.search(

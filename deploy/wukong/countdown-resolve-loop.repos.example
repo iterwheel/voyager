@@ -1,0 +1,7 @@
+# OWNER/REPO per line for vyg countdown resolve-loop.
+#
+# Start with the sandbox during deployment validation. Uncomment production
+# repositories only after the dry-run gate and operator approval pass.
+
+iterwheel/voyager-sandbox
+# iterwheel/voyager
