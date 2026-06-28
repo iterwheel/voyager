@@ -76,7 +76,7 @@ Without a documented contract these mistakes recur every session.
 6. **Fix and re-loop.** Address findings, push, then return to Step 1 on the new head.
 7. **Resolve threads** once findings are fixed via the machine account — see
    `VOY-1828`-era redaction rules and the project memory `resolve-as-countdown-user`;
-   resolves run as `iterwheel-countdown-user`, never the human identity. Outdated
+   resolves run as `iterwheel-countdown-bot`, never the human identity. Outdated
    threads are resolvable by default (`VOY-1831`; `_should_resolve` does not gate on
    `isOutdated`).
 8. **Done** when Codex returns a clean verdict on the current head with zero open
@@ -127,6 +127,7 @@ gh api repos/iterwheel/voyager/pulls/224/comments \
 
 | Date | Change | By |
 |------|--------|----|
+| 2026-06-28 | Updated the machine-account resolver login to `iterwheel-countdown-bot` after issue #226 account rename | Codex |
 | 2026-06-28 | Accept Codex clean summary comments with matching `Reviewed commit:` as clean verdicts, not only thumbs-up reactions. | Codex |
 | 2026-06-28 | Initial version — codifies the PR #224 Codex-loop lessons (trigger dedupe, list-endpoint lag, comment re-anchoring) | Claude Code |
 | 2026-06-28 | Corrected root cause: pagination (30/page oldest-first, no auto-paginate) — the earlier "list-endpoint lag" framing was wrong; the 4 apparent "stalls" were missed later pages | Claude Code |

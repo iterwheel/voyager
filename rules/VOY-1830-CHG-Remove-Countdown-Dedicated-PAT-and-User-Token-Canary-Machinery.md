@@ -19,7 +19,7 @@ Remove the Countdown **dedicated-PAT** review-thread resolver and the **user OAu
 refresh-token** canary in full, now that PR #222 (`vyg countdown
 resolve-conversation`) provides the sanctioned resolve mechanism: resolve review
 conversations as the fixed machine account via `gh auth token --user
-iterwheel-countdown-user`, with a hard viewer-login identity gate and a
+iterwheel-countdown-bot`, with a hard viewer-login identity gate and a
 resolve-only operation allowlist.
 
 Removed surfaces:
@@ -89,5 +89,6 @@ The dedicated-PAT approach was retired in favor of gh-login as the machine accou
 
 | Date | Change | By |
 |------|--------|----|
+| 2026-06-28 | Updated the fixed machine-account resolver login to `iterwheel-countdown-bot` after issue #226 account rename | Codex |
 | 2026-06-28 | Updated VOY-1827 superseded reference after HYP was reclassified as REF for validation compatibility. | Codex |
 | 2026-06-28 | Initial version | Claude Code |

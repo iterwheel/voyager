@@ -1,7 +1,7 @@
 # SOP-1806: GitHub App Permission Matrix
 
 **Applies to:** VOY project
-**Last updated:** 2026-06-22
+**Last updated:** 2026-06-28
 **Last reviewed:** 2026-06-22
 **Status:** Active
 **Related:** VOY-1802, VOY-1804, VOY-1805
@@ -222,7 +222,7 @@ repositories, manage secrets, deploy production, or merge code directly.
    `iterwheel-countdown[bot]` resolver capability, and never produced a passing
    resolve mutation. Those helper commands were removed per VOY-1830; review-thread
    resolution now runs via `vyg countdown resolve-conversation` (machine account
-   `iterwheel-countdown-user`, identity-gated, resolve-only).
+   `iterwheel-countdown-bot`, identity-gated, resolve-only).
 
    The 2026-06-23 user-to-server canary did not resolve a thread. The route
    could query a sandbox `PullRequestReviewThread` and saw
@@ -271,3 +271,4 @@ modes.
 | 2026-05-23 | Added Assembly bot: app settings, permission row (Contents write exception with merge prohibition), webhook events, and note on dangerous defaults (issue #67) | DeepSeek (via VOY-1811) |
 | 2026-05-23 | Updated Assembly issue permission to read/write to match the created App and planned issue progress comments for issue #68 | Codex |
 | 2026-06-22 | Recorded Countdown resolver capability gates and canary proof requirements for issue #200 | Codex |
+| 2026-06-28 | Updated the Countdown resolver machine-user login to `iterwheel-countdown-bot` for issue #226 | Codex |
