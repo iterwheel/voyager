@@ -31,6 +31,7 @@ class FakeClient:
     inline_comments: list[dict[str, Any]] = field(default_factory=list)
     issue_comments: list[dict[str, Any]] = field(default_factory=list)
     issue_comment_batches: list[list[dict[str, Any]]] = field(default_factory=list)
+    reviews: list[dict[str, Any]] = field(default_factory=list)
     thumbs: list[dict[str, Any]] = field(default_factory=list)
     trigger_count: int = 0
 
@@ -70,6 +71,10 @@ class FakeClient:
         if self.issue_comment_batches:
             return self.issue_comment_batches.pop(0)
         return self.issue_comments
+
+    def pull_reviews(self, repo: str, pr: int) -> list[dict[str, Any]]:
+        del repo, pr
+        return self.reviews
 
 
 def _opts(**overrides: Any) -> WatchOptions:
@@ -238,6 +243,23 @@ def test_short_timeout_polls_with_ceiling_count() -> None:
     assert "signal @ iter 2" in result.output
 
 
+def test_clean_pr_review_body_is_a_verdict_surface() -> None:
+    client = FakeClient(
+        reviews=[
+            {
+                "user": {"login": BOT},
+                "submitted_at": "2026-06-28T10:00:03Z",
+                "body": "Codex Review: Didn't find any major issues.\n\nReviewed commit: abc1234",
+            }
+        ]
+    )
+
+    result = watch_codex_review(client, _opts())
+
+    assert result.exit_code == CODE_OK
+    assert "signal @ iter 1: clean_review=1" in result.output
+
+
 def test_gh_cli_uses_paginate_for_detection_lists() -> None:
     calls: list[list[str]] = []
 
@@ -250,11 +272,15 @@ def test_gh_cli_uses_paginate_for_detection_lists() -> None:
     assert client.pull_inline_comments("iterwheel/voyager", 225) == []
     assert client.issue_reactions("iterwheel/voyager", 225) == []
     assert client.pull_issue_comments("iterwheel/voyager", 225) == []
+    assert client.pull_reviews("iterwheel/voyager", 225) == []
 
     detection_calls = [
         args
         for args in calls
-        if any("pulls/225/comments" in arg or "issues/225" in arg for arg in args)
+        if any(
+            "pulls/225/comments" in arg or "pulls/225/reviews" in arg or "issues/225" in arg
+            for arg in args
+        )
     ]
     assert detection_calls
     assert all("--paginate" in args for args in detection_calls)

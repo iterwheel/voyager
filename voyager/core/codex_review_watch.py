@@ -48,6 +48,8 @@ class CodexReviewClient(Protocol):
 
     def pull_issue_comments(self, repo: str, pr: int) -> list[dict[str, Any]]: ...
 
+    def pull_reviews(self, repo: str, pr: int) -> list[dict[str, Any]]: ...
+
 
 @dataclass(frozen=True)
 class WatchOptions:
@@ -112,6 +114,9 @@ class GhCliClient:
 
     def pull_issue_comments(self, repo: str, pr: int) -> list[dict[str, Any]]:
         return self._paginated_records(f"repos/{repo}/issues/{pr}/comments")
+
+    def pull_reviews(self, repo: str, pr: int) -> list[dict[str, Any]]:
+        return self._paginated_records(f"repos/{repo}/pulls/{pr}/reviews")
 
     def _paginated_records(self, endpoint: str) -> list[dict[str, Any]]:
         raw = self._run(["gh", "api", "--paginate", endpoint, "--jq", ".[] | @base64"])
@@ -281,6 +286,16 @@ def _detect_signal(
     if clean_comments:
         return ("clean_comment", clean_comments)
 
+    clean_reviews = [
+        item
+        for item in _new_items(
+            client.pull_reviews(options.repo, options.pr), since, options.bot_login
+        )
+        if _is_clean_summary(str(item.get("body") or ""), head_sha)
+    ]
+    if clean_reviews:
+        return ("clean_review", clean_reviews)
+
     thumbs = [
         item
         for item in _new_items(
@@ -302,7 +317,7 @@ def _new_items(
     for item in items:
         if _login(item.get("user")) != bot_login:
             continue
-        created = _parse_time(str(item.get("created_at") or ""))
+        created = _parse_time(str(item.get("created_at") or item.get("submitted_at") or ""))
         if created > since:
             out.append(item)
     return out
@@ -343,7 +358,11 @@ def _is_trigger_comment(body: str) -> bool:
 
 
 def _signal_label(kind: str) -> str:
-    return "thumbs-up" if kind == "thumbs" else "clean comment"
+    if kind == "thumbs":
+        return "thumbs-up"
+    if kind == "clean_review":
+        return "clean review"
+    return "clean comment"
 
 
 def _login(user: object) -> str:
