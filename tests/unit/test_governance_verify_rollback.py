@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import shlex
-import shutil
 import stat
 import subprocess
 import sys
@@ -20,6 +19,22 @@ from voyager.governance.verify_rollback import (
 )
 
 _FIXED_NOW = datetime(2026, 6, 20, 3, 10, tzinfo=UTC)
+_REAL_GIT_CANDIDATES = (
+    Path("/usr/bin/git"),
+    Path("/opt/homebrew/bin/git"),
+    Path("/usr/local/bin/git"),
+)
+
+
+def test_real_git_executable_ignores_path_shim(tmp_path, monkeypatch) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    git_shim = bin_dir / "git"
+    git_shim.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
+    git_shim.chmod(git_shim.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    assert Path(_real_git_executable()).resolve() != git_shim.resolve()
 
 
 def test_verify_pass_keeps_commit_and_audits_kept(tmp_path, monkeypatch) -> None:
@@ -251,8 +266,7 @@ def test_dirty_worktree_before_verify_is_rejected(tmp_path) -> None:
 
 
 def _repo_with_fix_commit(tmp_path: Path) -> tuple[Path, str, str]:
-    real_git = shutil.which("git")
-    assert real_git is not None
+    real_git = _real_git_executable()
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -274,8 +288,7 @@ def _repo_with_fix_commit(tmp_path: Path) -> tuple[Path, str, str]:
 
 
 def _repo_with_conflicting_middle_commit(tmp_path: Path) -> tuple[Path, str, str]:
-    real_git = shutil.which("git")
-    assert real_git is not None
+    real_git = _real_git_executable()
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -336,6 +349,56 @@ def _assert_no_push(log_path: Path) -> None:
     commands = log_path.read_text(encoding="utf-8").splitlines()
     assert commands
     assert all("push" not in command.split() for command in commands)
+
+
+def _real_git_executable() -> str:
+    # Prefer executable Git binaries, not PATH shims that can re-enter the test wrapper.
+    for candidate in _real_git_candidates():
+        if _is_git_binary(candidate):
+            return str(candidate)
+    pytest.fail("real git executable not found")
+
+
+def _real_git_candidates() -> list[Path]:
+    candidates = [*_REAL_GIT_CANDIDATES, *(Path(entry) / "git" for entry in os.get_exec_path())]
+    unique: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        try:
+            key = candidate.resolve()
+        except OSError:
+            key = candidate
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(candidate)
+    return unique
+
+
+def _is_git_binary(candidate: Path) -> bool:
+    if not candidate.is_file() or not os.access(candidate, os.X_OK):
+        return False
+    if _has_shebang(candidate):
+        return False
+    try:
+        result = subprocess.run(
+            [str(candidate), "--version"],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0 and result.stdout.startswith("git version ")
+
+
+def _has_shebang(candidate: Path) -> bool:
+    try:
+        with candidate.open("rb") as handle:
+            return handle.read(2) == b"#!"
+    except OSError:
+        return False
 
 
 def _git(repo: Path, git: str, *args: str) -> str:
