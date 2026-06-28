@@ -178,17 +178,20 @@ class TestShouldResolve:
     def test_viewer_can_reply_none_fail_closed(self) -> None:
         assert _should_resolve(self._ts(False, True, None, False)) is False
 
-    def test_is_outdated_true_returns_false(self) -> None:
-        assert _should_resolve(self._ts(False, True, True, True)) is False
+    def test_is_outdated_true_still_resolves(self) -> None:
+        # Outdated is NOT a gate: viewerCanResolve authorizes; outdated only means the
+        # anchored line moved (often because the code was fixed).
+        assert _should_resolve(self._ts(False, True, True, True)) is True
 
-    def test_is_outdated_none_fail_closed(self) -> None:
-        assert _should_resolve(self._ts(False, True, True, None)) is False
+    def test_is_outdated_none_ignored(self) -> None:
+        # is_outdated is no longer consulted, so None for it does not fail closed.
+        assert _should_resolve(self._ts(False, True, True, None)) is True
 
     def test_all_none_returns_false(self) -> None:
         assert _should_resolve(self._ts(None, None, None, None)) is False
 
     def test_only_is_resolved_false_is_insufficient(self) -> None:
-        # Other fields are all "bad" — must still be False.
+        # The remaining gates (can_resolve / can_reply) are "bad" — must still be False.
         assert _should_resolve(self._ts(False, False, False, True)) is False
 
 
@@ -457,7 +460,8 @@ class TestOrchestration:
         result = resolve_conversations(repo="iterwheel/voyager", pr=3, gql=gql)
         assert result.resolved == 2
 
-    def test_outdated_thread_skipped_no_mutation(self) -> None:
+    def test_outdated_thread_is_resolved(self) -> None:
+        # Outdated threads ARE resolvable (anchored line just moved, often the fix).
         nodes = [
             _thread_node(
                 id="PRRT_OD", is_resolved=False, can_resolve=True, can_reply=True, is_outdated=True
@@ -465,9 +469,8 @@ class TestOrchestration:
         ]
         gql = _SmartGql([_pr_response(nodes)])
         result = resolve_conversations(repo="iterwheel/voyager", pr=2, gql=gql)
-        assert result.skipped == 1
-        assert result.resolved == 0
-        gql.assert_no_mutations()
+        assert result.resolved == 1
+        assert result.skipped == 0
 
 
 # ---------------------------------------------------------------------------
@@ -577,14 +580,15 @@ class TestSingleThreadId:
         assert result.resolved == 0
         assert result.skipped == 1
 
-    def test_outdated_thread_skipped(self) -> None:
+    def test_outdated_thread_is_resolved(self) -> None:
+        # Outdated single thread is resolvable (anchored line moved, not a skip reason).
         node = _thread_node(
             id="PRRT_S5", is_resolved=False, can_resolve=True, can_reply=True, is_outdated=True
         )
         gql = _SmartGql([_node_response(node)])
         result = resolve_conversations(repo="iterwheel/voyager", thread_id="PRRT_S5", gql=gql)
-        assert result.resolved == 0
-        assert result.skipped == 1
+        assert result.resolved == 1
+        assert result.skipped == 0
 
     def test_single_thread_mode_pr_is_none_in_summary(self) -> None:
         node = _thread_node(id="PRRT_S6", is_resolved=True)

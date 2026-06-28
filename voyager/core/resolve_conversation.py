@@ -165,13 +165,14 @@ def make_github_gql(
 
 
 def _should_resolve(t: ThreadState) -> bool:
-    """Return True only when ALL conditions pass; fail-closed on None."""
-    return (
-        t.is_resolved is False
-        and t.viewer_can_resolve is True
-        and t.viewer_can_reply is True
-        and t.is_outdated is False
-    )
+    """Return True only when ALL conditions pass; fail-closed on None.
+
+    NOTE: outdated threads ARE resolvable. ``viewerCanResolve`` is the authorization
+    boundary; ``isOutdated`` only means the anchored line moved (typically because the
+    code WAS changed — often the very fix), so excluding it just stranded addressed
+    findings. It is intentionally not a gate.
+    """
+    return t.is_resolved is False and t.viewer_can_resolve is True and t.viewer_can_reply is True
 
 
 def _parse_thread_node(node: dict[str, Any]) -> ThreadState:
