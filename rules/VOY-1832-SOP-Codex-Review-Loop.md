@@ -11,9 +11,8 @@
 
 The procedure for driving the **Codex automated PR review** to a clean verdict: how
 to trigger a review, how to *reliably* detect its result, and how to close the
-resulting threads. This SOP is the source of truth for the contract; a local helper
-`scripts/codex-review-watch.sh` (gitignored — not shipped) implements it today, and the
-tracked deliverable is the tested Python port (iterwheel/voyager issue #225).
+resulting threads. This SOP is the source of truth for the contract; the tested
+Python helper `scripts/codex_review_watch.py` implements the watch loop.
 
 ## Why
 
@@ -87,11 +86,11 @@ Without a documented contract these mistakes recur every session.
 
 ### Reference implementation
 
-Local helper (gitignored, not shipped): `scripts/codex-review-watch.sh <PR>
-[--repo OWNER/REPO] [--no-trigger] [--timeout-min N] [--since ISO8601]` — exit `0` clean,
-`2` findings (printed), `1` error/timeout. The tracked deliverable is a tested Python
-port (iterwheel/voyager issue #225 — adopt once it needs tests / grows / becomes a
-`vyg codex watch` subcommand).
+Tracked helper: `scripts/codex_review_watch.py <PR> [--repo OWNER/REPO]
+[--no-trigger] [--timeout-min N] [--since ISO8601]` — exit `0` clean, `2`
+findings (printed), `1` error/timeout. The implementation lives in
+`voyager.core.codex_review_watch` so verdict classification, pagination, retry, and
+head-move behavior stay covered by unit tests.
 
 ---
 
@@ -100,14 +99,14 @@ port (iterwheel/voyager issue #225 — adopt once it needs tests / grows / becom
 **Trigger and wait for a verdict on PR #224:**
 
 ```bash
-scripts/codex-review-watch.sh 224 --timeout-min 25
+scripts/codex_review_watch.py 224 --timeout-min 25
 # → exit 2 + printed findings, OR exit 0 with a clean Codex verdict for the current head
 ```
 
 **Keep waiting without re-triggering** (a trigger already fired this round):
 
 ```bash
-scripts/codex-review-watch.sh 224 --no-trigger
+scripts/codex_review_watch.py 224 --no-trigger
 ```
 
 **Anti-pattern (do NOT do this).** No `--paginate`, and keying on the head SHA:
@@ -127,6 +126,7 @@ gh api repos/iterwheel/voyager/pulls/224/comments \
 
 | Date | Change | By |
 |------|--------|----|
+| 2026-06-28 | Replaced the bash watch helper with tested Python helper `scripts/codex_review_watch.py` for issue #225. | Codex |
 | 2026-06-28 | Updated the machine-account resolver login to `iterwheel-countdown-bot` after issue #226 account rename | Codex |
 | 2026-06-28 | Accept Codex clean summary comments with matching `Reviewed commit:` as clean verdicts, not only thumbs-up reactions. | Codex |
 | 2026-06-28 | Initial version — codifies the PR #224 Codex-loop lessons (trigger dedupe, list-endpoint lag, comment re-anchoring) | Claude Code |
