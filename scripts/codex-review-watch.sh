@@ -50,10 +50,22 @@ head_sha() { api "repos/$REPO/pulls/$PR" --jq '.head.sha'; }
 #     so we emit one line per match and count with `wc -l` instead.
 #  2. RE-ANCHORING. An unresolved old comment is re-anchored to the new head, sharing its
 #     commit_id but keeping its old created_at — so key on created_at > trigger, NOT commit_id.
-new_inline() { api --paginate "repos/$REPO/pulls/$PR/comments" \
-  --jq ".[] | select(.user.login==\"$BOT\") | select(.created_at > \"$1\") | .id" 2>/dev/null | wc -l | tr -d ' '; }
-new_thumbs() { api --paginate "repos/$REPO/issues/$PR/reactions" \
-  --jq ".[] | select(.content==\"+1\" and .user.login==\"$BOT\") | select(.created_at > \"$1\") | .id" 2>/dev/null | wc -l | tr -d ' '; }
+# A transient gh/network failure during a long poll must NOT kill the watch (set -e +
+# pipefail): capture with `|| true` and count the captured lines, so a hiccup reads as 0.
+new_inline() {
+  local ids
+  ids="$(api --paginate "repos/$REPO/pulls/$PR/comments" \
+    --jq ".[] | select(.user.login==\"$BOT\") | select(.created_at > \"$1\") | .id" 2>/dev/null || true)"
+  [ -z "$ids" ] && { echo 0; return 0; }
+  printf '%s\n' "$ids" | wc -l | tr -d ' '
+}
+new_thumbs() {
+  local ids
+  ids="$(api --paginate "repos/$REPO/issues/$PR/reactions" \
+    --jq ".[] | select(.content==\"+1\" and .user.login==\"$BOT\") | select(.created_at > \"$1\") | .id" 2>/dev/null || true)"
+  [ -z "$ids" ] && { echo 0; return 0; }
+  printf '%s\n' "$ids" | wc -l | tr -d ' '
+}
 
 HEAD="$(head_sha)"
 SINCE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"   # default cutoff (used by --no-trigger)

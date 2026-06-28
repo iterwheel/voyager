@@ -67,7 +67,9 @@ class FakeReadGql:
         fail_repos: set[str] | None = None,
         pull_missing: set[tuple[str, int]] | None = None,
         comment_counts: dict[str, int | None] | None = None,
+        freshness_raise: set[str] | None = None,
     ) -> None:
+        self._freshness_raise = freshness_raise or set()
         self._pr_numbers = pr_numbers
         self._threads = threads
         self._head_sha = head_sha
@@ -89,6 +91,8 @@ class FakeReadGql:
     async def __call__(self, query: str, variables: dict) -> dict:
         if "ThreadFreshness" in query:
             tid = variables["threadId"]
+            if tid in self._freshness_raise:
+                raise cl.ResolveConversationError(f"boom freshness {tid}")
             if tid in self._comment_counts:
                 total = self._comment_counts[tid]
             else:
@@ -405,6 +409,30 @@ class TestCommentFreshness:
         fn, resolved = _fake_resolver()
         await _run(read, FakeGate(GateVerdict(True, "ok")), resolve_fn=fn)
         assert [c.thread_id for c in resolved] == ["A"]
+
+    async def test_freshness_error_skips_candidate_and_keeps_scanning(self) -> None:
+        # A transient freshness read error must skip THAT candidate, not abort the run.
+        read = FakeReadGql(
+            {SANDBOX: [1, 2]},
+            {
+                (SANDBOX, 1): [_thread(tid="A", comments=[("r", "x")])],
+                (SANDBOX, 2): [_thread(tid="B", comments=[("r", "y")])],
+            },
+            freshness_raise={"A"},
+        )
+        fn, resolved = _fake_resolver()
+        summary = await _run(read, FakeGate(GateVerdict(True, "ok")), resolve_fn=fn)
+        assert [c.thread_id for c in resolved] == ["B"]  # PR 2 still scanned + resolved
+        a = next(d for d in summary.decisions if d.thread_id == "A")
+        assert a.action == "skipped_stale"
+
+
+class TestThreadCommentCount:
+    async def test_returns_none_on_read_error(self) -> None:
+        async def gql(query: str, variables: dict) -> dict:
+            raise cl.ResolveConversationError("transient")
+
+        assert await cl._thread_comment_count(gql, "T1") is None
 
 
 class TestRedaction:

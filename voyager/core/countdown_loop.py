@@ -378,8 +378,15 @@ def _thread_comments(node: dict[str, Any]) -> tuple[tuple[str, str], ...]:
 
 
 async def _thread_comment_count(gql: ReadGqlFn, thread_id: str) -> int | None:
-    """Live comment count for one thread; None if it can't be read (fail closed)."""
-    data = await gql(_THREAD_FRESHNESS_QUERY, {"threadId": thread_id})
+    """Live comment count for one thread; None if it can't be read (fail closed).
+
+    A transient read error must NOT abort the whole multi-repo run — it returns None so
+    the caller records this single candidate as skipped_stale and keeps scanning.
+    """
+    try:
+        data = await gql(_THREAD_FRESHNESS_QUERY, {"threadId": thread_id})
+    except _TOLERATED_ERRORS:
+        return None
     node = (data or {}).get("node")
     if not node:
         return None
