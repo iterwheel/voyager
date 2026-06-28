@@ -147,6 +147,7 @@ set -a
 source /Users/frank/.voyager/countdown-resolve-loop.env
 set +a
 test -n "${VOYAGER_DEEPSEEK_API_KEY:-}"
+test "${VOYAGER_DEEPSEEK_API_KEY:-}" != "replace-with-deepseek-api-key"
 ```
 
 Run the resolve loop in dry-run mode:

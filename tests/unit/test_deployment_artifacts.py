@@ -137,7 +137,8 @@ def test_countdown_resolve_loop_examples_are_secret_safe() -> None:
     repos_text = COUNTDOWN_REPOS_PATH.read_text()
 
     assert "COUNTDOWN_RESOLVE_LOOP_ENABLED=false" in env_text
-    assert "VOYAGER_DEEPSEEK_API_KEY=replace-with-deepseek-api-key" in env_text
+    assert "VOYAGER_DEEPSEEK_API_KEY=" in env_text
+    assert "replace-with-deepseek-api-key" not in env_text
     assert "COUNTDOWN_MAX_RESOLVES=20" in env_text
     assert "iterwheel-countdown-bot" in env_text
     assert "iterwheel-countdown-user" not in env_text
@@ -161,6 +162,7 @@ def test_countdown_deploy_sop_covers_dry_run_live_audit_and_rollback() -> None:
         "deploy/wukong/countdown-resolve-loop.env.example",
         "deploy/wukong/countdown-resolve-loop.repos.example",
         "/Users/frank/.voyager/countdown-resolve-loop.audit.jsonl",
+        'test "${VOYAGER_DEEPSEEK_API_KEY:-}" != "replace-with-deepseek-api-key"',
         "vyg countdown resolve-loop --repos /Users/frank/.voyager/countdown-resolve-loop.repos --dry-run --json",
         "vyg countdown resolve-loop --repos /Users/frank/.voyager/countdown-resolve-loop.repos --json",
         "launchctl bootstrap gui/$(id -u)",
