@@ -26,6 +26,11 @@ This ADR is Phase 0 of a larger program (see §Decision #6): it founds Cargo via
 governance only — no code. The operational SOP and the implementation are
 downstream issues.
 
+> **Status gate:** while this ADR is `Proposed`, VOY-1802 keeps Cargo in the
+> **Future Roster** (reserved) with a pointer here. Cargo promotes to the **Current
+> Roster** only when this ADR is **Accepted** — so document status never contradicts
+> the roster.
+
 ---
 
 ## Context
