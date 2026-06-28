@@ -71,6 +71,9 @@ Without a documented contract these mistakes recur every session.
    threads are resolvable by default (`VOY-1831`; `_should_resolve` does not gate on
    `isOutdated`).
 8. **Done** when Codex returns a clean 👍 on the current head with zero open findings.
+   Before accepting a clean verdict, re-check the PR head SHA: the 👍 is a PR-level
+   reaction carrying no commit, so if a new commit landed mid-wait the 👍 is for the old
+   head — re-trigger on the new head rather than green-lighting it.
 
 ### Reference implementation
 

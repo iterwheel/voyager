@@ -104,7 +104,16 @@ if [ "${cmt:-0}" -gt 0 ]; then
           \"--- \(.path):\(.line // .original_line)\n\(.body)\n\""
   exit 2
 elif [ "${up:-0}" -gt 0 ]; then
-  echo "=== CLEAN — codex reacted 👍 on $REPO#$PR ==="
+  # The 👍 is a PR-level reaction with no commit SHA. If a new commit landed while we
+  # waited, that 👍 is for the OLD head — accepting it would green-light an unreviewed
+  # head. Re-check before declaring clean.
+  cur="$(head_sha)"
+  if [ "$cur" != "$HEAD" ]; then
+    echo "=== HEAD MOVED ${HEAD:0:7} → ${cur:0:7} during watch; 👍 is for the old head — NOT clean ===" >&2
+    echo "    re-run to review the new head" >&2
+    exit 1
+  fi
+  echo "=== CLEAN — codex reacted 👍 on $REPO#$PR @ ${HEAD:0:7} ==="
   exit 0
 else
   echo "=== TIMED OUT after ${TIMEOUT_MIN}m with no NEW verdict since $SINCE ===" >&2
