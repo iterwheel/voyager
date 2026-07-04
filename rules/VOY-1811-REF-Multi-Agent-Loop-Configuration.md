@@ -1,10 +1,10 @@
 # REF-1811: Multi-Agent Loop Configuration
 
 **Applies to:** VOY project (`iterwheel/voyager`)
-**Last updated:** 2026-06-28
+**Last updated:** 2026-07-04
 **Last reviewed:** 2026-06-20
 **Status:** Active
-**Related:** COR-1500 (TDD Development Workflow), COR-1617 (Multi-Agent Workflow Loop), COR-1618 (Out-of-Band Consent Auto-Pick), COR-1619 (Orchestrator vs Worker Dispatch), COR-1622 (Multi-Agent Loop Project Configuration), VOY-1805 (GitHub Bot Accounts), VOY-1807 (GitHub App Registry), VOY-1810 (Release Process), VOY-1825 (Loop-Convergence Policy), VOY-1833 (Voyager Multi-Agent Loop Operation)
+**Related:** COR-1500 (TDD Development Workflow), COR-1617 (Multi-Agent Workflow Loop), COR-1618 (Out-of-Band Consent Auto-Pick), COR-1619 (Orchestrator vs Worker Dispatch), COR-1622 (Multi-Agent Loop Project Configuration), COR-1628 (Sandboxed Worker CLI Dispatch), COR-1209 (Session Handoff Prompt), VOY-1805 (GitHub Bot Accounts), VOY-1807 (GitHub App Registry), VOY-1810 (Release Process), VOY-1825 (Loop-Convergence Policy), VOY-1833 (Voyager Multi-Agent Loop Operation)
 
 ---
 
@@ -81,7 +81,12 @@ runs one stable document to cite.
 
 These two Codex values rely on Codex loading personal custom agents from
 `~/.codex/agents/` and spawning separate sub-agent sessions for the two `name`
-values. When using the fallback rows, the RED-labelled worker may edit only
+values — a local optimization that is unavailable on clean checkouts. The
+portable lane is **COR-1628 (Sandboxed Worker CLI Dispatch)**: a one-shot
+sandboxed `codex exec --sandbox workspace-write` invocation carrying a written
+task brief (bundled in fx-alfred ≥ 1.25.0; 40+ dispatches exercised on the
+alfred reference loop). Prefer COR-1628 whenever the personal agents are
+absent. When using any fallback row, the RED-labelled worker may edit only
 tests/fixtures/test helpers, and the GREEN-labelled worker may edit production
 or supporting files but must not weaken the RED tests. All fallback dispatches
 must still keep RED and GREEN authorship distinct per COR-1500.
@@ -144,6 +149,31 @@ exempt — no `@codex review` trigger is needed.
 | `<wakeup-tool>` | Runtime-dependent; see Runtime Profile | Per COR-1622's `<wakeup-tool>` runtime escape-hatch language, `ScheduleWakeup` applies only to Claude Code-style runtimes. Other runtimes substitute their own wake or polling primitive. |
 | `<idle-cap>` | `12` | Default. |
 | `<merge-watch-cap>` | `24` | Default. |
+
+---
+
+## R-Round Fixes for Enumerable-Dimension Findings
+
+Adopted from the alfred reference loop (FXA-2276, generalized 2026-07-04 via
+alfred#318). **Trigger**: a review finding (bot, panel, or human) whose scope
+condition varies along one or more enumerable dimensions — any axis whose
+values form a small closed set (actor × timing window, ID origin × outcome,
+output mode × input class, platform × capability). If the finding's wording
+names a category ("when X is also Y", "only for Z-mode"), the rule applies.
+The fix round MUST:
+
+1. **Enumerate the full matrix before implementing** — every value of every
+   participating dimension, written out explicitly (into the COR-1628 task
+   brief when that lane is used), not held in the orchestrator's head.
+2. **Fix all cells in that single round.** Adjacent cells are presumed
+   defective until shown otherwise: a passing regression test for the cell in
+   the same round, or an explicit `n/a` row with one-line reasoning.
+3. **Land one regression test per applicable cell** in the same round.
+
+Evidence: alfred PR #290 (timing matrix, three avoidable rounds) and PR #307
+(provenance matrix, R3/R4/R5 one-cell-per-round drip) — both chains collapse
+to one round under this rule. Worked examples with full matrices live in
+alfred's FXA-2276 §"R-round fixes for enumerable-dimension findings".
 
 ---
 
@@ -499,6 +529,7 @@ completion-gate blocker rather than proceeding.
 
 | Date | Change | By |
 |------|--------|----|
+| 2026-07-04 | iterwheel/voyager#274: adopt FXA-2276's enumerable-dimension R-round matrix rule; document COR-1628 as the portable worker lane; add COR-1209 to Related. | Claude Code |
 | 2026-06-28 | Added VOY-1833 as the procedural SOP for executing this REF's multi-agent loop bindings. | Codex |
 | 2026-06-28 | Added explicit worker fallback rows to the dispatch table for clean Codex checkouts and non-Codex runtimes. | Codex |
 | 2026-06-28 | Added clean-checkout fallback dispatch guidance for the personal Codex `test_writer` and `implementer` custom agents. | Codex |
