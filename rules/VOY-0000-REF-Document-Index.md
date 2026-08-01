@@ -47,7 +47,7 @@
 | 1833 | SOP | Voyager Multi-Agent Loop Operation |
 | 1834 | ADR | Cargo Dependency-Bump Preparation Bot (Proposed) |
 | 1835 | SOP | Countdown Resolve Loop Launchd Deployment |
-| 1836 | CHG | Repair CI Baseline Drift (In Progress) |
+| 1836 | CHG | Repair CI Baseline Drift (Completed) |
 
 ---
 
