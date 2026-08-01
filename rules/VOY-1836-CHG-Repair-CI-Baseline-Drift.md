@@ -3,13 +3,13 @@
 **Applies to:** VOY project
 **Last updated:** 2026-08-02
 **Last reviewed:** 2026-08-02
-**Status:** In Progress
+**Status:** Completed
 **Date:** 2026-08-02
 **Requested by:** Frank Xu
 **Priority:** Medium
 **Change Type:** Normal
 **Scheduled:** 2026-08-02
-**Related:** PR #286, COR-1101, COR-1503, COR-1600
+**Related:** PR #286, PR #287, COR-1101, COR-1503, COR-1600
 
 ---
 
@@ -116,6 +116,8 @@ green CI result.
 | 2026-08-02 | COR-1600 implementation review scored 9.9/10 PASS. | Independent review found no blockers; remote CI and merge remain. |
 | 2026-08-02 | Ran GitHub Actions on PR #287. | Benchmark, lint, security, typecheck, and Python 3.11/3.12/3.13 tests all passed. |
 | 2026-08-02 | Codex reviewed PR #287 at `8732f0b`. | Restored the CHG and index to In Progress because merge and the subsequent PR #286 refresh remain delivery work. |
+| 2026-08-02 | Merged PR #287 as `d404255`. | The CI baseline repair reached `origin/main`. |
+| 2026-08-02 | Refreshed and delivered PR #286. | Merged current `origin/main` into the documentation branch; Alfred validation, Ruff lint/format, and 145 targeted tests passed locally; all six GitHub CI checks and Codex review passed on `c22693e`; PR #286 merged as `c7e6743`. |
 
 ## Post-Change Review
 
@@ -123,9 +125,12 @@ green CI result.
   review confirm the implementation meets the approved plan.
 - The newly exposed Ruff format drift required the planned scope expansion to
   three existing CHGs; all changes are formatting-only and traceable.
-- GitHub Actions passed all seven checks. No unexpected runtime side effects
-  were found; merge and the subsequent PR #286 refresh are the remaining
-  delivery operations.
+- GitHub Actions passed all seven checks on the repair PR and all six checks on
+  the refreshed documentation PR. No unexpected runtime side effects were
+  found.
+- PR #287 and the dependent PR #286 are both merged. The CI baseline repair and
+  VOY-1812 tracker closure are present on `origin/main`; no implementation-plan
+  delivery operation remains.
 
 ---
 
@@ -137,3 +142,4 @@ green CI result.
 | 2026-08-02 | Expanded the repair scope to the three formatting-only CHG updates exposed after the lint gate and added COR-1300 compliance. | Codex |
 | 2026-08-02 | Marked the change Completed after local, independent-review, and GitHub Actions verification passed. | Codex |
 | 2026-08-02 | Restored the status to In Progress after PR review identified that merge and PR #286 refresh were still pending. | Codex |
+| 2026-08-02 | Marked the change Completed after PR #287 and the refreshed PR #286 both merged to `origin/main`. | Codex |
