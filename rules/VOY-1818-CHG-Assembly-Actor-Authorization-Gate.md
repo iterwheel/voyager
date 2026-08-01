@@ -1,7 +1,7 @@
 # CHG-1818: Assembly Actor Authorization Gate
 
 **Applies to:** VOY project
-**Last updated:** 2026-05-23
+**Last updated:** 2026-08-02
 **Last reviewed:** 2026-05-23
 **Status:** Proposed
 **Date:** 2026-05-23
@@ -233,13 +233,13 @@ filter.
 @dataclass(frozen=True)
 class ActorAuthorization:
     ok: bool
-    reason: str | None             # None on pass, "unauthorized_actor" on fail
-    actor_login: str | None        # canonical lowercase comment.user.login (None when malformed)
+    reason: str | None  # None on pass, "unauthorized_actor" on fail
+    actor_login: str | None  # canonical lowercase comment.user.login (None when malformed)
     actor_association: str | None  # canonical upper-case association or None
-    actor_type: str | None         # "User" | "Bot" | None
-    actor_sender_login: str | None # canonical lowercase sender.login or None
-    sender_divergent: bool         # True when actor_login != actor_sender_login (both non-None)
-    matched_signal: str | None     # "allow_list" | "association" | None when refused
+    actor_type: str | None  # "User" | "Bot" | None
+    actor_sender_login: str | None  # canonical lowercase sender.login or None
+    sender_divergent: bool  # True when actor_login != actor_sender_login (both non-None)
+    matched_signal: str | None  # "allow_list" | "association" | None when refused
 ```
 
 The dataclass is `frozen=True` and exported from `voyager.bots.assembly`.
@@ -371,3 +371,4 @@ those fixtures continue to hold).
 |------|--------|----|
 | 2026-05-23 | Initial CHG draft for issue #76 — Assembly actor authorization gate. | Claude (via VOY-1811 #76) |
 | 2026-05-23 | Round 1 plan-review remediation (GLM 8.0 FIX, DeepSeek 8.6 FIX, MiniMax 9.3 PASS): **P1 fixes** — D7 precedence rule made explicit (bot check fires before allow-list/association; bot-on-allow-list still denied; Surface 1 logic + D7 reconciled to include the `[bot]`-suffix check on both sides; Surface 7 adds the bot-on-allow-list test case) [GLM #1/#2 + DeepSeek + MiniMax]; Gate Corner Table expanded from one collapsed AC− row into three explicit rows (AC−/AL+/DR+, AC−/AL+/DR−, AC−/AL−) so the audit-ring + comment-visibility claims are corner-accurate [GLM #3 + MiniMax]; D11 visibility scope clarified to AL+ subset only [GLM #3]; Surface 7 adds the D6 set-but-empty case and the D7 `[bot]`-suffix case [DeepSeek]; §Rollback plan extended with explicit orphan-env-var operator action and `grep -rn` verification [DeepSeek + MiniMax]. **P1/P2 hardening** — added D12 (refusal-comment disclosure non-goal; refusal MUST NOT enumerate allow-list / association set) and §Out of Scope row [DeepSeek]; added D13 (sender-vs-comment.user divergence logging + `actor_sender_login` / `sender_divergent` fields on `ActorAuthorization`) [DeepSeek + GLM]; Surface 8 adds negative-assertion case (existing refusal reasons must NOT carry actor fields) [DeepSeek]; Surface 9 adds DR+ and negative-assertion cases [DeepSeek]; D10 reversed from case-sensitive to case-insensitive login compare (lowercase canonicalization) [MiniMax]; Surface 7 / §Testing add `monkeypatch.setenv` env-isolation requirement + `pytest -n auto` regression check [MiniMax]; Surface 13 restates the independent-author rule one line + ties to the Phase 5 subagent split [MiniMax]; Surface 14 specifies the VOY-1805 step insertion point [GLM #6]; Surface 8 documents the `_comment_payload` helper update [self-noticed during review]; §Testing adds explicit RED-GREEN-REFACTOR cadence and a fixture-scope audit list [GLM #5/#7]. | Claude (via VOY-1811 #76) |
+| 2026-08-02 | Applied Ruff 0.16.1 formatting to an embedded code example; no semantic changes. | Codex |

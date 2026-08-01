@@ -1,7 +1,7 @@
 # CHG-1817: Assembly Bot MVP Implementation
 
 **Applies to:** VOY project
-**Last updated:** 2026-05-23
+**Last updated:** 2026-08-02
 **Last reviewed:** 2026-05-23
 **Status:** Proposed
 **Date:** 2026-05-23
@@ -207,19 +207,19 @@ routing decision.
 ```python
 @dataclass(frozen=True)
 class AssemblyJobContract:
-    repository: str                  # "iterwheel/voyager-sandbox"
-    issue_number: int                # 69
-    issue_url: str                   # html_url from payload
-    issue_title: str                 # "[Feature]: Implement Assembly..."
-    issue_body: str                  # full markdown body
-    branch_name: str                 # "69-implement-assembly-coding-bot"
-    base_branch: str                 # "main"
-    task_summary: str                # extracted from "Problem / Goal"
-    acceptance_criteria: list[str]   # extracted bullets
-    forbidden_operations: tuple[str, ...]   # canonical list from VOY-1805 §5
+    repository: str  # "iterwheel/voyager-sandbox"
+    issue_number: int  # 69
+    issue_url: str  # html_url from payload
+    issue_title: str  # "[Feature]: Implement Assembly..."
+    issue_body: str  # full markdown body
+    branch_name: str  # "69-implement-assembly-coding-bot"
+    base_branch: str  # "main"
+    task_summary: str  # extracted from "Problem / Goal"
+    acceptance_criteria: list[str]  # extracted bullets
+    forbidden_operations: tuple[str, ...]  # canonical list from VOY-1805 §5
     verification_commands: tuple[str, ...]  # ("pytest tests/", "ruff check .", "mypy voyager")
-    delivery_id: str                 # X-GitHub-Delivery
-    requested_at: str                # iso UTC
+    delivery_id: str  # X-GitHub-Delivery
+    requested_at: str  # iso UTC
 ```
 
 The `forbidden_operations` tuple is fixed by VOY-1805 §5 Deny column and is
@@ -229,33 +229,37 @@ not customizable per invocation.
 
 ```python
 {
-    "applied": bool,                # true when at least one mutation attempted
-    "dry_run": bool,                # echo of DRY_RUN
-    "execution_backend": str,       # "dry-run" | "pi-oh-my-pi-deepseek"
-    "refusal": {                    # only when preconditions failed
-        "reason": str,              # see refusal enum below
+    "applied": bool,  # true when at least one mutation attempted
+    "dry_run": bool,  # echo of DRY_RUN
+    "execution_backend": str,  # "dry-run" | "pi-oh-my-pi-deepseek"
+    "refusal": {  # only when preconditions failed
+        "reason": str,  # see refusal enum below
         "missing_labels": list[str],
         "outside_allow_list": bool,
-    } | None,
-    "contract": dict | None,        # serialized AssemblyJobContract or None on refusal
+    }
+    | None,
+    "contract": dict | None,  # serialized AssemblyJobContract or None on refusal
     "adapter_result": {
         "status": "dry_run" | "executed" | "no_changes" | "failed",
         "commit_shas": list[str],
         "summary": str,
-    } | None,
+    }
+    | None,
     "branch": {
         "name": str,
         "created": bool,
         "sha": str | None,
-    } | None,
+    }
+    | None,
     "pull_request": {
         "number": int,
         "url": str,
         "action": "opened" | "updated" | "skipped_no_changes",
-    } | None,
+    }
+    | None,
     "codex_review_comment_id": int | None,
     "assembly_comment_id": int | None,
-    "writeback_failures": [...]     # per CHG-1813
+    "writeback_failures": [...],  # per CHG-1813
 }
 ```
 
@@ -328,3 +332,4 @@ failure semantics is now resolved by D11.)
 | 2026-05-23 | Round 2 plan-review remediation (GLM 9.2 PASS, DeepSeek 9.2 PASS, MiniMax 9.83 PASS): P2 only — corrected Gate Corner Table install-scope wording (no webhook delivery rather than "401"); explicitly stated progress-comment-always-runs in D11; fixed Testing § "three scenarios" typo to "five scenarios". | Claude (via VOY-1811) |
 | 2026-05-23 | Phase 6 cross-test divergence fix (DeepSeek finding): Gate Corner Table Row 5 amended to match implementation — `pull_request: {action: "skipped_no_changes"}` instead of `null`. Rows 4 and 5 share the "no commits → no PR" code path; the BE=dry / BE=pi distinction is visible via `adapter_result.status` and the progress comment body, not the `pull_request` field. | Claude (via VOY-1811) |
 | 2026-05-23 | CHG-1819 amendment: added `issue_closed` to the refusal enum list (implementation-added during VOY-1817 Phase 5). | Claude (via CHG-1819) |
+| 2026-08-02 | Applied Ruff 0.16.1 formatting to embedded code examples; no semantic changes. | Codex |
