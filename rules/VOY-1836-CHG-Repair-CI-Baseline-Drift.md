@@ -3,7 +3,7 @@
 **Applies to:** VOY project
 **Last updated:** 2026-08-02
 **Last reviewed:** 2026-08-02
-**Status:** Completed
+**Status:** In Progress
 **Date:** 2026-08-02
 **Requested by:** Frank Xu
 **Priority:** Medium
@@ -115,6 +115,7 @@ green CI result.
 | 2026-08-02 | Ran local verification. | Ruff 0.16.1 lint/format passed; Python 3.11 audit moved from one duplicated advisory ID on setuptools 79.0.1 to zero setuptools findings on 83.0.0; mypy passed; pytest passed (`2016 passed`); changed-files pre-commit passed; Alfred validation reported 145 documents and 0 issues. |
 | 2026-08-02 | COR-1600 implementation review scored 9.9/10 PASS. | Independent review found no blockers; remote CI and merge remain. |
 | 2026-08-02 | Ran GitHub Actions on PR #287. | Benchmark, lint, security, typecheck, and Python 3.11/3.12/3.13 tests all passed. |
+| 2026-08-02 | Codex reviewed PR #287 at `8732f0b`. | Restored the CHG and index to In Progress because merge and the subsequent PR #286 refresh remain delivery work. |
 
 ## Post-Change Review
 
@@ -135,3 +136,4 @@ green CI result.
 | 2026-08-02 | Initial approved change plan for repairing the CI baseline. | Codex |
 | 2026-08-02 | Expanded the repair scope to the three formatting-only CHG updates exposed after the lint gate and added COR-1300 compliance. | Codex |
 | 2026-08-02 | Marked the change Completed after local, independent-review, and GitHub Actions verification passed. | Codex |
+| 2026-08-02 | Restored the status to In Progress after PR review identified that merge and PR #286 refresh were still pending. | Codex |
