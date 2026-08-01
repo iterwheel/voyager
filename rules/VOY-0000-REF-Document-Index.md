@@ -1,8 +1,8 @@
 # REF-0000: Document Index
 
 **Applies to:** VOY project
-**Last updated:** 2026-06-28
-**Last reviewed:** 2026-06-28
+**Last updated:** 2026-08-02
+**Last reviewed:** 2026-08-02
 **Status:** Active
 
 ---
@@ -47,6 +47,7 @@
 | 1833 | SOP | Voyager Multi-Agent Loop Operation |
 | 1834 | ADR | Cargo Dependency-Bump Preparation Bot (Proposed) |
 | 1835 | SOP | Countdown Resolve Loop Launchd Deployment |
+| 1836 | CHG | Repair CI Baseline Drift (In Progress) |
 
 ---
 
@@ -54,6 +55,7 @@
 
 | Date | Change | By |
 |------|--------|----|
+| 2026-08-02 | Added VOY-1836 CHG Repair CI Baseline Drift | Codex |
 | 2026-06-28 | Added VOY-1834 ADR Cargo Dependency-Bump Preparation Bot (Phase 0, issue #238) | Claude Code |
 | 2026-06-28 | Added VOY-1835 Countdown Resolve Loop Launchd Deployment SOP | Codex |
 | 2026-06-28 | Added VOY-1201 Session Retrospective for PR #230 agent runbook docs | Codex |
