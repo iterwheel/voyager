@@ -47,7 +47,7 @@
 | 1833 | SOP | Voyager Multi-Agent Loop Operation |
 | 1834 | ADR | Cargo Dependency-Bump Preparation Bot (Proposed) |
 | 1835 | SOP | Countdown Resolve Loop Launchd Deployment |
-| 1836 | CHG | Repair CI Baseline Drift (In Progress) |
+| 1836 | CHG | Repair CI Baseline Drift (Completed) |
 
 ---
 
@@ -55,6 +55,7 @@
 
 | Date | Change | By |
 |------|--------|----|
+| 2026-08-02 | Marked VOY-1836 Completed after PR #287 and PR #286 merged | Codex |
 | 2026-08-02 | Restored VOY-1836 to In Progress pending PR #287 merge and PR #286 refresh | Codex |
 | 2026-08-02 | Added VOY-1836 CHG Repair CI Baseline Drift | Codex |
 | 2026-06-28 | Added VOY-1834 ADR Cargo Dependency-Bump Preparation Bot (Phase 0, issue #238) | Claude Code |
