@@ -49,6 +49,7 @@
 | 1835 | SOP | Countdown Resolve Loop Launchd Deployment |
 | 1836 | CHG | Repair CI Baseline Drift (Completed) |
 | 1837 | CHG | Clearance Webhook Fan-out Dedupe (In Progress) |
+| 1838 | CHG | Suppress Stale Clearance Verdict Writeback (In Progress) |
 
 ---
 
@@ -56,6 +57,9 @@
 
 | Date | Change | By |
 |------|--------|----|
+| 2026-08-02 | Marked VOY-1838 In Progress after RED validation | Codex |
+| 2026-08-02 | Marked VOY-1838 Approved after Trinity plan review Round 2 | Codex |
+| 2026-08-02 | Added VOY-1838 Suppress Stale Clearance Verdict Writeback CHG | Codex |
 | 2026-08-02 | Marked VOY-1837 In Progress after implementation validation and COR-1610 review | Codex |
 | 2026-08-02 | Marked VOY-1837 Approved after Trinity plan review Round 2 | Codex |
 | 2026-08-02 | Added VOY-1837 Clearance Webhook Fan-out Dedupe CHG | Codex |

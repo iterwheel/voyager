@@ -50,6 +50,7 @@ from voyager.bots.clearance.constants import (
     CLEARANCE_BOT_LOGIN,
     CODEX_REVIEW_RESULT_PREFIX,
     is_codex_login,
+    logins_equivalent,
 )
 from voyager.bots.clearance.diff_excerpt import extract_anchor_excerpt
 from voyager.bots.clearance.investigator import (
@@ -245,6 +246,36 @@ def _comment_database_id(comment: dict[str, Any]) -> int:
         return int(raw)
     except (TypeError, ValueError):
         return 0
+
+
+def _new_thread_decision_evidence_comment_id(
+    fresh_threads: list[dict[str, Any]],
+    *,
+    thread_id: str,
+    observed_comment_ids: list[int] | None,
+    pr_author_login: str | None,
+) -> int | None:
+    """Return the lowest unobserved PR-author or Codex comment database ID."""
+    if observed_comment_ids is None:
+        return None
+
+    observed_ids = set(observed_comment_ids)
+    for item in fresh_threads:
+        if item.get("id") != thread_id:
+            continue
+        new_relevant_ids: list[int] = []
+        for comment in _comment_nodes(item):
+            comment_id = _comment_database_id(comment)
+            login = (comment.get("author") or {}).get("login")
+            if (
+                comment_id > 0
+                and comment_id not in observed_ids
+                and not _is_clearance_comment(comment)
+                and (is_codex_login(login) or logins_equivalent(login, pr_author_login))
+            ):
+                new_relevant_ids.append(comment_id)
+        return min(new_relevant_ids, default=None)
+    return None
 
 
 def _latest_manual_close_relevant_state(
@@ -902,6 +933,12 @@ async def _process_thread(
     if comment_id is None:
         return None
 
+    comments_nodes = _comment_nodes(thread_dict)
+    observed_thread_comment_ids = [
+        database_id
+        for comment in comments_nodes
+        if (database_id := _comment_database_id(comment)) > 0
+    ]
     state = classify_thread(thread_dict)
     reply = latest_author_reply(thread_dict, author_login=pr_author_login)
     followup = latest_codex_followup(thread_dict)
@@ -915,7 +952,6 @@ async def _process_thread(
     author_reply_body = (reply or {}).get("body")
 
     # Extract codex severity + finding_kind from review body
-    comments_nodes = (thread_dict.get("comments") or {}).get("nodes") or []
     codex_sev, finding_kind = extract_severity_and_kind(comments_nodes)
 
     # Evaluate severity demotion using the per-webhook branch_protected_state
@@ -1042,6 +1078,7 @@ async def _process_thread(
                     )
                 ],
                 evidence=Evidence(
+                    observed_thread_comment_ids=observed_thread_comment_ids,
                     thread_state=state,
                     codex_followed_up=False,
                 ),
@@ -1288,6 +1325,7 @@ async def _process_thread(
             VerdictHistoryEntry(ts=now, verdict=decision.verdict, reason=decision.reason)
         ],
         evidence=Evidence(
+            observed_thread_comment_ids=observed_thread_comment_ids,
             thread_state=state,
             author_reply_id=(reply or {}).get("databaseId"),
             author_reply_substantive=decision.substantive,
@@ -1407,6 +1445,7 @@ async def _maybe_post_thread_verdict_comments(
     head_sha: str,
     dry_run: bool,
     model: str | None = None,
+    pr_author_login: str | None = None,
 ) -> list[dict[str, Any]]:
     """Post per-head verdict comments for unresolved non-RESOLVED threads.
 
@@ -1452,6 +1491,41 @@ async def _maybe_post_thread_verdict_comments(
                     "skip_reason": skip_reason,
                 }
             )
+            continue
+
+        fresh_threads = verdict_reply_dedupe_cache.get("fresh_threads")
+        new_comment_id = (
+            _new_thread_decision_evidence_comment_id(
+                fresh_threads,
+                thread_id=thread.id,
+                observed_comment_ids=snap.evidence.observed_thread_comment_ids,
+                pr_author_login=pr_author_login,
+            )
+            if isinstance(fresh_threads, list)
+            else None
+        )
+        if new_comment_id is not None:
+            stale_result = {
+                **base_result,
+                "skipped": True,
+                "skip_reason": "new thread decision evidence after snapshot",
+                "new_comment_id": new_comment_id,
+            }
+            _log.info(
+                "stale_thread_evidence_skip: %s",
+                json.dumps(
+                    {
+                        "event": "stale_thread_evidence_skip",
+                        "repo": repository,
+                        "pr": pr,
+                        "thread_id": thread.id,
+                        "head_sha": head_sha,
+                        "verdict": thread.verdict.value,
+                        "new_comment_id": new_comment_id,
+                    }
+                ),
+            )
+            actions.append(stale_result)
             continue
 
         if dry_run:
@@ -2303,6 +2377,7 @@ async def _compute_clearance_automation_unlocked(
         pr=pr_number,
         head_sha=head_sha,
         dry_run=dry_run,
+        pr_author_login=pr_author_login,
     )
 
     sync_actions = await _maybe_sync_stage_15(

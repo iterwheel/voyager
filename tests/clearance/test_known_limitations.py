@@ -569,8 +569,9 @@ async def test_known_limitation_fast_path_preserves_existing_marker_flags(
     )
 
     assert processed is not None
-    thread, _snapshot = processed
+    thread, snapshot = processed
     assert thread.verdict == Verdict.RESOLVED
+    assert snapshot.evidence.observed_thread_comment_ids == [101, 102]
     assert thread.known_limitation_link == "https://github.com/org/repo/issues/42"
     assert thread.existing_close_reason_marker is True
     assert thread.existing_thread_conclusion_marker is True
