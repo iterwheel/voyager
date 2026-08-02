@@ -29,7 +29,7 @@ Feature: Clearance bot — PR review readiness verification and routing
     Then exactly one clearance route is produced
     And the clearance route targets the Clearance agent
 
-  Scenario: pull_request_review submitted event triggers Clearance evaluation
+  Scenario: pull_request_review submitted event with no inline findings triggers Clearance evaluation
     Given a webhook payload "clearance_pull_request_review_submitted"
     When Clearance receives the "pull_request_review" event
     Then exactly one clearance route is produced
@@ -40,10 +40,21 @@ Feature: Clearance bot — PR review readiness verification and routing
     When Clearance receives the "pull_request" event
     Then no clearance routes are produced
 
-  Scenario: pull_request_review_comment created triggers Clearance (Codex PR #9 P1 fix)
+  Scenario: root pull_request_review_comment created does not trigger Clearance
     Given a webhook payload "clearance_pull_request_review_comment"
     When Clearance receives the "pull_request_review_comment" event
+    Then no clearance routes are produced
+
+  Scenario: reply pull_request_review_comment created triggers Clearance
+    Given a webhook payload "clearance_pull_request_review_comment_reply"
+    When Clearance receives the "pull_request_review_comment" event
     Then exactly one clearance route is produced
+    And the clearance route targets the Clearance agent
+
+  Scenario: pull_request_review_comment edited does not trigger Clearance
+    Given a webhook payload "clearance_pull_request_review_comment_edited"
+    When Clearance receives the "pull_request_review_comment" event
+    Then no clearance routes are produced
 
   Scenario: check_run completed does not trigger Clearance
     Given a webhook payload "clearance_check_run_completed"
@@ -62,6 +73,16 @@ Feature: Clearance bot — PR review readiness verification and routing
   Scenario: pull_request_review submitted by Clearance bot does not self-trigger
     Given a webhook payload "clearance_review_from_clearance_bot"
     When Clearance receives the "pull_request_review" event
+    Then no clearance routes are produced
+
+  Scenario: root pull_request_review_comment by Clearance bot does not self-trigger
+    Given a webhook payload "clearance_pull_request_review_comment_from_clearance_bot"
+    When Clearance receives the "pull_request_review_comment" event
+    Then no clearance routes are produced
+
+  Scenario: reply pull_request_review_comment by Clearance bot does not self-trigger
+    Given a webhook payload "clearance_pull_request_review_comment_reply_from_clearance_bot"
+    When Clearance receives the "pull_request_review_comment" event
     Then no clearance routes are produced
 
   # ---------------------------------------------------------------------------
