@@ -123,8 +123,8 @@ async def test_compute_clearance_automation_serializes_same_repository_and_pr(
 @pytest.mark.parametrize(
     ("first_key", "second_key"),
     [
-        (("iterwheel/voyager", 292), ("iterwheel/voyager", 293)),
-        (("iterwheel/voyager", 292), ("other-org/voyager", 292)),
+        (("iterwheel/voyager", 293), ("iterwheel/voyager", 294)),
+        (("other-org/voyager", 295), ("another-org/voyager", 295)),
     ],
     ids=["same-repository-different-pr", "different-repository-same-pr-number"],
 )
@@ -152,7 +152,7 @@ async def test_compute_clearance_automation_allows_distinct_keys_to_enter_concur
 async def test_compute_clearance_automation_releases_same_key_after_fetch_exception(
     tmp_path: Path,
 ) -> None:
-    key = ("iterwheel/voyager", 292)
+    key = ("iterwheel/voyager", 296)
     client = _GatedPullRequestClient((key,), fail_first_fetch=True)
 
     first = asyncio.create_task(_compute(client, key, tmp_path))
