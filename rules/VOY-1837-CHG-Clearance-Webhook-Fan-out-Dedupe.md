@@ -24,9 +24,10 @@ The change has two layers:
 1. Route review-comment `created` events only when the comment is a reply to an
    existing review thread. Root inline comments are already represented by the
    submitted-review event.
-2. Serialize the stateful Clearance automation phase per `(repository, PR)` so
-   concurrent distinct deliveries cannot all pass the fresh-marker check before
-   the first write becomes visible.
+2. Serialize the stateful Clearance automation phase per `(running event loop,
+   repository, PR)` so concurrent same-loop deliveries cannot all pass the
+   fresh-marker check before the first write becomes visible. The registry keeps
+   weak lock values, so idle locks and their loop keys expire.
 
 ## Why
 
@@ -57,9 +58,9 @@ without changing either marker format.
   pipeline run, including investigator latency when it fires. D1 removes the
   normal N-inline-comment burst, so queued same-PR runs should be exceptional;
   different PRs and repositories retain independent concurrency.
-- **Memory impact:** One in-process `asyncio.Lock` per observed `(repository,
-  PR)` key until bridge restart, matching the bounded monotonic-lock precedent
-  already used by Assembly.
+- **Memory impact:** One live in-process `asyncio.Lock` per active `(running
+  event loop, repository, PR)` key. Weak values remove idle locks and their
+  loop-key entries; no monotonic registry growth is retained between deliveries.
 - **Rollback plan:** Revert the implementation commit and redeploy the prior
   bridge version. No migration is required; historical GitHub comments remain
   unchanged.
@@ -71,6 +72,9 @@ without changing either marker format.
 - Deleting historical duplicate comments from affected pull requests.
 - Distributed or cross-process locking. Voyager's deployed bridge is currently
   a single process; a future multi-worker deployment requires a durable claim.
+- Serialization across simultaneously running event loops. The normal bridge
+  deployment has one long-lived loop per worker; a cross-loop or cross-process
+  guarantee requires a different coordination primitive.
 - Treating GitHub delivery-ID dedupe as the primary fix. The reproducing
   deliveries have distinct IDs and are all legitimate events from one review.
 
@@ -80,10 +84,10 @@ without changing either marker format.
 |---|----------|-----------|
 | D1 | A `pull_request_review_comment.created` event routes only when `comment.in_reply_to_id` is non-null. | The route was introduced specifically so an author reply re-evaluates its thread. Root inline comments belong to the submitted review and otherwise double-trigger the same evaluation. |
 | D2 | Keep `pull_request_review.submitted` as the canonical trigger for a newly submitted review, regardless of how many inline comments it contains. | One review is one evaluation boundary; fan-out cardinality must not change the number of Clearance runs. |
-| D3 | Serialize the public `compute_clearance_automation` entry point, keyed by `tuple[str, int]` containing the full `owner/repo` repository name and integer PR number, while keeping its existing body as the private unlocked implementation. | The complete pipeline owns the first snapshot, every fresh-marker check, per-thread mutations, and persistence. Locking at the server would miss direct callers and couple Clearance concurrency to unrelated route batching. |
+| D3 | Serialize the public `compute_clearance_automation` entry point, keyed by `(running event loop, full `owner/repo`, integer PR number)`, while keeping its existing body as the private unlocked implementation. | The complete pipeline owns the first snapshot, every fresh-marker check, per-thread mutations, and persistence. `asyncio.Lock` becomes loop-bound under contention, so a module-cached lock must not be reused by a later event loop. Locking at the server would miss direct callers and couple Clearance concurrency to unrelated route batching. |
 | D4 | Use `async with` around the lock. | Normal return, exception, and task cancellation all release the lock through the async context manager. |
 | D5 | Use independent keys for different repositories or PR numbers. | A global lock would create unnecessary head-of-line blocking across unrelated review traffic. |
-| D6 | Keep a monotonic in-process lock map for this slice. | It matches the existing Assembly pattern and is small at Voyager's operating scale. Naively deleting an unlocked entry can split queued and newly arriving tasks across two locks; safe eviction would require reference counting and is not justified here. |
+| D6 | Use a weak-value in-process lock registry; do not `finally`-pop entries. | Values remain strongly referenced by active holders and waiters, preserving same-loop serialization. Once no caller retains the lock, its weak entry disappears together with the loop-bearing key. A `finally` pop has a release-to-waiter handoff window that can split queued and newly arriving tasks across two locks. A `WeakKeyDictionary[loop, locks]` is also unsuitable because a contended lock retains its bound loop through the value graph. |
 | D7 | Do not add a new dependency or durable store. | The current single-process bridge can satisfy the acceptance criteria with `asyncio.Lock`; distributed idempotency is explicitly deferred. |
 
 ## Event Matrix
@@ -102,9 +106,11 @@ without changing either marker format.
 
 | Repository | PR | Expected behavior |
 |------------|----|-------------------|
-| Same | Same | Second task waits until the first stateful automation phase exits |
+| Same loop, same repository | Same | Second task waits until the first stateful automation phase exits |
 | Same | Different | Both tasks can enter concurrently |
 | Different | Same number | Both tasks can enter concurrently |
+| Fresh loop after prior same-key contention | Same | A fresh loop obtains a distinct loop-scoped lock and can itself serialize same-key contenders without a bound-to-different-loop error |
+| Simultaneously running different loops | Same | No in-process cross-loop serialization guarantee; out of scope for this single-loop-per-worker deployment |
 | Any | Any | Exception or cancellation in the first task releases the key's lock |
 
 ## Surfaces
@@ -115,7 +121,7 @@ without changing either marker format.
 | 2 | `tests/fixtures/webhooks/clearance_pull_request_review_comment.json` | Keep this fixture as the root-comment shape and make the missing/null `in_reply_to_id` contract explicit. |
 | 3 | `tests/fixtures/webhooks/clearance_pull_request_review_comment_reply.json` | Add a reply fixture with a non-null `in_reply_to_id`. |
 | 4 | Clearance webhook fixture/step mapping | Register the new reply fixture and, if needed, a Clearance-authored reply fixture without weakening existing self-trigger coverage. |
-| 5 | `tests/clearance/test_pipeline_concurrency.py` | Add deterministic same-key serialization, distinct-key parallelism, and exception-release tests against the public pipeline entry. |
+| 5 | `tests/clearance/test_pipeline_concurrency.py` | Add deterministic same-key serialization, distinct-key parallelism, exception-release, and two-fresh-event-loop same-key-contention tests against the public pipeline entry. |
 | 6 | `voyager/bots/clearance/routing.py` | Gate review-comment `created` routing on a non-null `comment.in_reply_to_id`, after the existing actor guard. |
 | 7 | `voyager/bots/clearance/pipeline.py` | Add the keyed lock registry and preserve `compute_clearance_automation` as the locked public API over a private unlocked body. |
 
@@ -126,8 +132,10 @@ without changing either marker format.
    the root shape, add a reply fixture with `in_reply_to_id`, and add explicit
    scenarios for root=no route, reply=one route, submitted review with no inline
    findings=one route, and Clearance-authored root/reply=no route.
-2. Add a lazy per-`(repository, PR)` `asyncio.Lock` registry inside the Clearance
-   pipeline module, following the existing Assembly keyed-lock pattern.
+2. Add a lazy weak-value per-`(running event loop, repository, PR)`
+   `asyncio.Lock` registry inside the Clearance pipeline module. Capture the
+   running loop at lookup time; do not reuse a contended lock in a later loop,
+   and do not add a `finally` map-pop cleanup.
 3. Keep `compute_clearance_automation` as the locked public API and move its
    current body behind a private unlocked implementation. The lock covers the
    entire snapshot/classification/marker-read/thread-mutation/persistence
@@ -138,7 +146,8 @@ without changing either marker format.
    `pull_request` fetch with `asyncio.Event`; this seam exists before the fix,
    so RED requires no production stub or test-only API. Cover same-key
    serialization, same-repo/different-PR and different-repo/same-number
-   parallelism, plus exception release followed by successful same-key entry.
+   parallelism, exception release followed by successful same-key entry, and
+   same-key contention in each of two fresh event loops.
 6. Run focused tests, the full project validation stack, and independent code
    review before publishing a ready-for-review PR.
 
@@ -153,6 +162,8 @@ without changing either marker format.
    an unconditional sleep as synchronization. For the same key, assert exactly
    one task reaches the gated fetch before release and both eventually finish;
    for distinct keys, assert both reach their gates before either is released.
+   Also run two separate `asyncio.run` rounds with same-key contention in each;
+   the second round must not reuse a lock bound by the first loop.
    Run the focused tests and report the expected behavioral failures against
    current `origin/main`.
 2. **RED quality gate — orchestrator.** Confirm failures constrain missing
@@ -179,7 +190,8 @@ without changing either marker format.
   findings, root comment, thread reply, and Clearance-authored root/reply.
 - The focused concurrency run must include: same-key serialization,
   same-repository/different-PR parallelism, different-repository/same-number
-  parallelism, and exception release followed by later same-key progress.
+  parallelism, exception release followed by later same-key progress, and
+  same-key contention across two fresh event loops.
 - `uv run ruff check .`
 - `uv run ruff format --check .`
 - `uv run mypy voyager`
@@ -197,16 +209,23 @@ without changing either marker format.
 - [x] Clearance-authored review events still do not self-trigger.
 - [x] Clearance-authored root and reply review-comment events are both rejected
       before the new root/reply shape filter can schedule work.
-- [x] Two concurrent stateful Clearance evaluations for the same `(repository,
-      PR)` cannot enter the marker-check/writeback section together.
+- [x] Two concurrent stateful Clearance evaluations in the same running event
+      loop for the same `(repository, PR)` cannot enter the
+      marker-check/writeback section together.
 - [x] Evaluations for different PRs in the same repository can enter concurrently.
 - [x] Evaluations for the same PR number in different repositories can enter
       concurrently.
 - [x] An exception in one evaluation does not strand the lock or block a later
       delivery permanently.
+- [x] Same-key contention in each of two fresh event loops completes without a
+      lock-bound-to-a-different-loop error; each loop retains same-key
+      serialization.
 - [x] No reviewer/model configuration changes.
-- [x] Focused and full project validation pass.
-- [x] Independent implementation review passes at least 9.0/10 with no blockers.
+- [x] Final focused and CI-equivalent full validation, including the P2
+      fresh-loop regression, pass: 81 focused tests and 2025 full tests at
+      86.67% coverage; ruff, format, mypy, Alfred, and diff hygiene are clean.
+- [x] Final P2-delta implementation review passes at least 9.0/10 with no
+      blockers: GLM 9.3, DeepSeek 9.5, and MiniMax 9.5.
 
 ## Approval
 
@@ -214,8 +233,11 @@ without changing either marker format.
       plan and implementation review gates.
 - [x] Independent plan review Round 2 passed with no blockers: GLM 9.5,
       DeepSeek 9.4, and MiniMax 9.33 on 2026-08-02.
-- [x] Independent implementation review passed with no blockers: GLM 9.9,
-      DeepSeek 9.4, and MiniMax 9.5 on 2026-08-02.
+- [x] Pre-P2 independent implementation review passed with no blockers: GLM
+      9.9, DeepSeek 9.4, and MiniMax 9.5 on 2026-08-02.
+- [x] P2-delta COR-1610 review passed with no blockers: GLM 9.3, DeepSeek 9.5,
+      and MiniMax 9.5 on 2026-08-02; evidence is in
+      `.trinity/reviews/20260802-182719-voy-1837-p2-delta-cor1610-r1`.
 
 ## Execution Log
 
@@ -229,11 +251,18 @@ without changing either marker format.
 | 2026-08-02 | Ran the full validation stack. | 2024 tests passed; ruff check, ruff format, mypy, Alfred validation, and diff hygiene passed. Alfred reported only the repository's known tag-vocabulary warning. |
 | 2026-08-02 | Ran Trinity implementation review and COR-1610 scoring. | GLM 9.9, DeepSeek 9.4, and MiniMax 9.5 all passed with no blockers. |
 | 2026-08-02 | Remediated the initial PR CI release-readiness failure. | Added the #293 `[Unreleased]` changelog entry; the targeted release-readiness test and the CI-equivalent 2024-test coverage run passed locally. |
+| 2026-08-02 | Reproduced the Codex P2 fresh-event-loop regression. | A module-cached lock keyed only by repository and PR becomes bound when same-key work contends in the first `asyncio.run` loop; same-key contention in a second fresh loop then raises a bound-to-different-loop error. This is RED for the P2 contract. |
+| 2026-08-02 | Approved the P2 lock-registry remediation. | Lock identity is `(running event loop, full repository, PR)` and the registry uses weak values so idle locks and loop keys expire. No `finally` pop is permitted. The subsequent implementation, local GREEN validation, and P2-delta review are recorded below. |
+| 2026-08-02 | Implemented the P2 loop-qualified weak-lock registry. | `compute_clearance_automation` now uses a `WeakValueDictionary` keyed by running event loop, full repository, and PR; the fresh-loop regression is GREEN while same-loop serialization and distinct-key parallelism remain covered. |
+| 2026-08-02 | Ran final local P2 validation. | Focused suite: 81 passed. CI-equivalent full suite: 2025 passed at 86.67% coverage. Ruff check, ruff format check, mypy, Alfred validation, and `git diff --check` were clean. Remote GitHub Actions CI remains pending. |
+| 2026-08-02 | Ran P2-delta Trinity COR-1610 review. | GLM 9.3, DeepSeek 9.5, and MiniMax 9.5 all PASS with no blockers. Evidence: `.trinity/reviews/20260802-182719-voy-1837-p2-delta-cor1610-r1`. |
 
 ## Post-Change Review
 
-- Local implementation and validation are complete with a three-reviewer
-  COR-1610 PASS. PR review, merge, and deployment remain pending.
+- Pre-P2 and P2 local implementation, validation, and COR-1610 review are
+  complete. The P2 delta uses the loop-qualified weak registry and passed its
+  fresh-loop regression. Published-PR review, remote GitHub Actions CI, merge,
+  and deployment remain pending.
 
 ---
 
@@ -241,6 +270,8 @@ without changing either marker format.
 
 | Date | Change | By |
 |------|--------|----|
+| 2026-08-02 | Recorded completed P2 implementation, fresh-loop GREEN validation, CI-equivalent coverage, and delta COR-1610 evidence. | Codex |
+| 2026-08-02 | Added the Codex P2 loop-scoped weak-lock contract, fresh-event-loop RED regression, and pending final validation/review gates. | Codex |
 | 2026-08-02 | Marked In Progress after implementation, full validation, and three-reviewer COR-1610 review passed. | Codex |
 | 2026-08-02 | Marked Approved after all three Round 2 plan reviewers passed with no blockers; incorporated key-type and deterministic-assertion advisories. | Codex |
 | 2026-08-02 | Remediated Round 1 plan-review findings with explicit BDD fixture reversal, deterministic existing test seam, exception-release coverage, and latency/provenance notes. | Codex |

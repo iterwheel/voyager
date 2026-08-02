@@ -25,6 +25,7 @@ import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
+from weakref import WeakValueDictionary
 
 import httpx
 
@@ -81,11 +82,13 @@ from voyager.core.writeback import _safe_exception_fields, build_writeback_failu
 
 _log = logging.getLogger(__name__)
 
-_clearance_automation_locks: dict[tuple[str, int], asyncio.Lock] = {}
+_clearance_automation_locks: WeakValueDictionary[
+    tuple[asyncio.AbstractEventLoop, str, int], asyncio.Lock
+] = WeakValueDictionary()
 
 
 def _get_automation_lock(repository: str, pr_number: int) -> asyncio.Lock:
-    key = (repository, pr_number)
+    key = (asyncio.get_running_loop(), repository, pr_number)
     lock = _clearance_automation_locks.get(key)
     if lock is None:
         lock = asyncio.Lock()

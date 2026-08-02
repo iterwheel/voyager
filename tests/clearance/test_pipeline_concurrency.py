@@ -120,6 +120,39 @@ async def test_compute_clearance_automation_serializes_same_repository_and_pr(
     assert client.gated_entries == [key, key]
 
 
+def test_compute_clearance_automation_supports_same_key_contention_across_fresh_event_loops(
+    tmp_path: Path,
+) -> None:
+    key = ("iterwheel/voyager", 297)
+
+    async def run_contended_round(state_root: Path) -> None:
+        client = _GatedPullRequestClient((key,))
+
+        first = asyncio.create_task(_compute(client, key, state_root))
+        await client.entered[key].wait()
+
+        second_attempted = asyncio.Event()
+
+        async def run_second() -> dict[str, Any]:
+            second_attempted.set()
+            return await _compute(client, key, state_root)
+
+        second = asyncio.create_task(run_second())
+        await second_attempted.wait()
+
+        assert client.gated_entries == [key]
+
+        client.release[key].set()
+        first_result, second_result = await asyncio.gather(first, second)
+
+        assert first_result["enabled"] is True
+        assert second_result["enabled"] is True
+        assert client.gated_entries == [key, key]
+
+    asyncio.run(run_contended_round(tmp_path / "first-loop"))
+    asyncio.run(run_contended_round(tmp_path / "second-loop"))
+
+
 @pytest.mark.parametrize(
     ("first_key", "second_key"),
     [
