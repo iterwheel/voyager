@@ -8,10 +8,131 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
-### Changed — Dependency maintenance ([#208](https://github.com/iterwheel/voyager/pull/208))
+## [0.8.0] — 2026-08-02
 
-- Allowed FastAPI 0.138.x by widening the supported FastAPI dependency range
-  while keeping the lower bound at 0.136.
+### Added — Governed Countdown review-thread resolution
+
+- Added `vyg countdown resolve-conversation`, a resolve-only command that uses
+  the fixed `iterwheel-countdown-bot` machine account without changing the
+  operator's active `gh` identity. Repository allow-listing, a viewer-login
+  identity check, a single allowed GraphQL mutation, and identifier redaction
+  fail closed before any review thread is resolved. `--dry-run` and redacted
+  JSON output are available for attended preflight
+  ([#222](https://github.com/iterwheel/voyager/pull/222),
+  [#242](https://github.com/iterwheel/voyager/pull/242)).
+- Added `vyg countdown resolve-loop` for bounded multi-repository resolution.
+  The loop applies a deterministic candidate filter before a veto-only DeepSeek
+  gate, re-checks thread freshness, respects dry-run and maximum-resolution
+  limits, prevents concurrent runs with a file lock, and writes a redacted audit
+  trail. Gate errors, malformed output, stale evidence, and identity failures all
+  skip resolution ([#224](https://github.com/iterwheel/voyager/pull/224)).
+- Added default-off Wukong launchd artifacts and an adaptive scheduler for the
+  resolve loop. Candidate-bearing runs use a bounded fast-poll streak; idle or
+  failed runs back off to the slow interval. The wrapper re-loads its private
+  environment on every iteration and fails closed when that file is unavailable
+  or malformed. Runtime defaults are `COUNTDOWN_RESOLVE_LOOP_ENABLED=false`,
+  `COUNTDOWN_MAX_RESOLVES=20`, `COUNTDOWN_FAST_INTERVAL=300`,
+  `COUNTDOWN_SLOW_INTERVAL=3600`, and `COUNTDOWN_FAST_STREAK_MAX=6`
+  ([#243](https://github.com/iterwheel/voyager/pull/243),
+  [#280](https://github.com/iterwheel/voyager/pull/280)).
+- Added `VOYAGER_RESOLVE_EXTRA_REPOS` for operator-local allow-list extension
+  through comma- or whitespace-separated `owner/repo` values without checking
+  private repository names into the repository. Invalid entries abort instead
+  of being silently ignored. Keep the private environment file
+  access-controlled: public loop summaries retain repository names while
+  redacting PR/thread identifiers and reasons
+  ([#273](https://github.com/iterwheel/voyager/pull/273)).
+
+### Added — Codex review operations
+
+- Replaced the shell-based Codex review watcher with a tested Python watcher
+  that retries unacknowledged `@codex review` triggers, paginates GitHub results,
+  and rejects review signals that predate the current trigger. Its stable exit
+  codes are `0` for clean, `2` for findings, and `1` for error or timeout
+  ([#244](https://github.com/iterwheel/voyager/pull/244)).
+
+### Removed — Legacy Countdown credential tooling
+
+- **Breaking:** removed the v0.7.x `review-thread-diagnostic`,
+  `user-device-code`, and `user-refresh-check` CLI paths together with the
+  GitHub App user-refresh-token machinery. They are superseded by the fixed
+  machine-account `resolve-conversation` and `resolve-loop` commands
+  ([#223](https://github.com/iterwheel/voyager/pull/223)).
+- Operators upgrading from v0.7.3 must provision the
+  `iterwheel-countdown-bot` credential in the local `gh` credential store. The
+  resolver obtains it with `gh auth token --hostname github.com --user
+  iterwheel-countdown-bot`; tokens are never accepted through CLI flags or
+  printed in public output. Remove stale `[countdown.dedicated_pat_fallback]`
+  configuration and retire obsolete PAT/OAuth material after confirming no
+  other consumer still needs it.
+
+### Changed — Dependency maintenance
+
+- Allowed FastAPI releases through 0.138.2 by widening the supported dependency
+  range from
+  `>=0.136,<0.137.2` to `>=0.136,<0.138.3`
+  ([#208](https://github.com/iterwheel/voyager/pull/208),
+  [#245](https://github.com/iterwheel/voyager/pull/245)).
+
+### Security and hardening
+
+- Countdown scrubs ambient `GH_TOKEN` and `GITHUB_TOKEN` overrides, verifies the
+  authenticated machine-account viewer even during dry-run, blocks
+  cross-repository thread targeting, and refuses missing or ambiguous targets
+  ([#222](https://github.com/iterwheel/voyager/pull/222)).
+- The multi-repository loop frames review content as untrusted data, fails closed
+  on truncated evidence or invalid LLM output, writes audit intent before
+  mutation, rechecks comment freshness immediately before resolution, and counts
+  failed approved attempts toward its safety cap
+  ([#224](https://github.com/iterwheel/voyager/pull/224)).
+- The adaptive scheduler clears stale environment values when reload fails and
+  validates interval values to prevent busy loops and log storms
+  ([#280](https://github.com/iterwheel/voyager/pull/280)).
+
+### Operator notes
+
+- Both new Countdown commands perform live mutations unless `--dry-run` is
+  supplied explicitly. In particular, `resolve-conversation --pr` resolves all
+  mechanically eligible threads and does not use the resolve loop's DeepSeek
+  semantic gate; always run an attended dry-run first.
+- The scheduled Countdown loop remains disabled until
+  `COUNTDOWN_RESOLVE_LOOP_ENABLED=true` is set after the VOY-1835 dry-run and
+  identity preflight. It also requires `VOYAGER_DEEPSEEK_API_KEY`; deploying the
+  bridge alone does not opt an operator into automatic resolution. The optional
+  `VOYAGER_DEEPSEEK_MODEL` defaults to `deepseek-v4-pro` for this new Countdown
+  gate; the release does not change the existing Clearance profile selection.
+- A repository added through `VOYAGER_RESOLVE_EXTRA_REPOS` must also appear in
+  the resolve loop's `--repos` file. Review authors and bounded comment bodies
+  are sent to DeepSeek, so private-repository rollout requires explicit privacy
+  approval. Countdown audit JSONL and launchd logs currently have no automatic
+  rotation.
+- The checked-in scheduled-loop deployment templates are Wukong/macOS-specific
+  (`launchd`, zsh, and `/Users/frank` paths); other hosts need an adapted
+  service definition.
+- This release requires no state or database migration. The release PR does not
+  change Voyager's Clearance investigator model or default profile.
+
+### Known limitations
+
+- Clearance can still misclassify some negated follow-up phrases as RESOLVED,
+  and `/clearance` does not yet apply an equivalent privileged-actor gate. Do
+  not expose live Clearance writeback to untrusted contributors until
+  [#249](https://github.com/iterwheel/voyager/issues/249) and
+  [#253](https://github.com/iterwheel/voyager/issues/253) are resolved.
+- Untrusted PR content can influence LLM-derived Clearance verdicts and
+  review-fix contract structure. Keep those mutation paths limited to trusted
+  repositories and actors pending
+  [#254](https://github.com/iterwheel/voyager/issues/254).
+- `/assembly` currently ignores unknown flags; use the exact `--dry-run`
+  spelling and keep actor/repository allow-lists narrow until
+  [#260](https://github.com/iterwheel/voyager/issues/260) is resolved.
+- The Codex review watcher can miss a verdict that lands between its first
+  trigger and retry cutoff, resulting in a false timeout
+  ([#264](https://github.com/iterwheel/voyager/issues/264)).
+- The release-readiness helper can accept a malformed historical CHANGELOG in
+  one missing-heading case. The v0.8.0 release therefore also uses the release
+  workflow's independent exact-heading and version-pin checks
+  ([#269](https://github.com/iterwheel/voyager/issues/269)).
 
 ## [0.7.3] — 2026-06-23
 
@@ -763,7 +884,8 @@ auth, FastAPI webhook bridge, DeepSeek LLM adapter, rocket-factory
 pipeline state machine, SWM-1101 per-thread verdict pipeline. See
 `b2e4ca1` and prior history.
 
-[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.7.3...HEAD
+[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/iterwheel/voyager/compare/v0.7.3...v0.8.0
 [0.7.3]: https://github.com/iterwheel/voyager/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/iterwheel/voyager/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/iterwheel/voyager/compare/v0.7.0...v0.7.1
