@@ -8,11 +8,25 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+## [0.8.2] — 2026-08-02
+
 ### Fixed
 
 - Suppressed stale Clearance `OPEN` and `NEEDS_HUMAN_JUDGMENT` thread replies
   when the existing pre-writeback refresh observes a newer PR-author or Codex
-  comment that was not part of the classified snapshot.
+  comment that was not part of the classified snapshot
+  ([#295](https://github.com/iterwheel/voyager/pull/295)).
+
+### Operator notes
+
+- The change is limited to Clearance verdict-writeback freshness. It introduces
+  no model, dependency, configuration, environment-variable, or migration
+  changes.
+- Deploy v0.8.2 and restart long-running Voyager processes to activate the fix.
+  Existing contradictory comments are not removed automatically.
+- `RESOLVED` and Stage 1.5 behavior are unchanged. The guard narrows the
+  snapshot-to-write race window, but the fresh-read and GitHub reply-create
+  operations remain non-transactional.
 
 ## [0.8.1] — 2026-08-02
 
@@ -912,7 +926,8 @@ auth, FastAPI webhook bridge, DeepSeek LLM adapter, rocket-factory
 pipeline state machine, SWM-1101 per-thread verdict pipeline. See
 `b2e4ca1` and prior history.
 
-[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/iterwheel/voyager/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/iterwheel/voyager/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/iterwheel/voyager/compare/v0.7.3...v0.8.0
 [0.7.3]: https://github.com/iterwheel/voyager/compare/v0.7.2...v0.7.3
