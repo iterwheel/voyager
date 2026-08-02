@@ -228,6 +228,7 @@ without changing either marker format.
 | 2026-08-02 | Completed independent RED and GREEN phases. | RED reproduced three intended behavioral failures; the separate implementation worker changed only `routing.py` and `pipeline.py`, and the focused suite passed 80 tests. |
 | 2026-08-02 | Ran the full validation stack. | 2024 tests passed; ruff check, ruff format, mypy, Alfred validation, and diff hygiene passed. Alfred reported only the repository's known tag-vocabulary warning. |
 | 2026-08-02 | Ran Trinity implementation review and COR-1610 scoring. | GLM 9.9, DeepSeek 9.4, and MiniMax 9.5 all passed with no blockers. |
+| 2026-08-02 | Remediated the initial PR CI release-readiness failure. | Added the #293 `[Unreleased]` changelog entry; the targeted release-readiness test and the CI-equivalent 2024-test coverage run passed locally. |
 
 ## Post-Change Review
 
