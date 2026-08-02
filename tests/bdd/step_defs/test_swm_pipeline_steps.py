@@ -19,8 +19,10 @@ Stubs:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +36,19 @@ REPO = "iterwheel/sandbox"
 PR = 49
 THREAD_ID = "PRRT_codex_alpha"
 CODEX_COMMENT_ID = 100001
+PRIVATE_COMMENT_BODY_SENTINEL = "VOY1838_PRIVATE_COMMENT_BODY_SENTINEL"
+
+
+def _assert_no_comment_body_leak(value: Any) -> None:
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            assert "body" not in str(key).casefold(), f"body-like key leaked: {key!r}"
+            _assert_no_comment_body_leak(nested)
+    elif isinstance(value, (list, tuple)):
+        for nested in value:
+            _assert_no_comment_body_leak(nested)
+    else:
+        assert PRIVATE_COMMENT_BODY_SENTINEL not in str(value)
 
 
 # ---------------------------------------------------------------------------
@@ -52,6 +67,8 @@ class _StubGitHubAppClient:
 
     def __init__(self) -> None:
         self.threads: list[dict[str, Any]] = []
+        self.threads_second_fetch: list[dict[str, Any]] | None = None
+        self.pull_request_review_threads_call_count = 0
         self.reviews: list[dict[str, Any]] = []
         self.issue_comment_payloads: list[dict[str, Any]] = []
         self.pr_payload: dict[str, Any] = {
@@ -146,15 +163,23 @@ class _StubGitHubAppClient:
     async def pull_request_review_threads(
         self, app_slug: str, repo: str, pr: int
     ) -> list[dict[str, Any]]:
+        self.pull_request_review_threads_call_count += 1
+        threads = self.threads
+        if (
+            self.pull_request_review_threads_call_count >= 2
+            and self.threads_second_fetch is not None
+        ):
+            threads = self.threads_second_fetch
+        threads = deepcopy(threads)
         if app_slug in self.resolver_viewer_can_resolve_by_app:
             return [
                 {
                     **thread,
                     "viewerCanResolve": self.resolver_viewer_can_resolve_by_app[app_slug],
                 }
-                for thread in self.threads
+                for thread in threads
             ]
-        return list(self.threads)
+        return threads
 
     async def pull_request_reviews(self, app_slug: str, repo: str, pr: int) -> list[dict[str, Any]]:
         return list(self.reviews)
@@ -843,6 +868,63 @@ def then_automation_thread_verdict_comment_skipped_count(ctx, count: int) -> Non
     )
 
 
+@then(parsers.parse("review threads were fetched exactly {count:d} times"))
+def then_review_threads_fetched_count(ctx, count: int) -> None:
+    actual = ctx["client"].pull_request_review_threads_call_count
+    assert actual == count, f"pull_request_review_threads calls={actual}, expected {count}"
+
+
+@then(
+    parsers.parse(
+        "the stale thread evidence skip action identifies comment {comment_id:d} "
+        'for verdict "{verdict}"'
+    )
+)
+def then_stale_thread_evidence_skip_action(ctx, comment_id: int, verdict: str) -> None:
+    assert ctx["automation"] is not None, f"raised={ctx.get('raised')!r}"
+    actions = ctx["automation"].get("thread_verdict_comment_actions") or []
+    assert len(actions) == 1, f"thread verdict comment actions={actions!r}"
+    action = actions[0]
+    expected = {
+        "repo": REPO,
+        "pr": PR,
+        "thread_id": THREAD_ID,
+        "head_sha": "head-sha-abc1234",
+        "verdict": verdict,
+        "skipped": True,
+        "skip_reason": "new thread decision evidence after snapshot",
+        "new_comment_id": comment_id,
+    }
+    assert {key: action.get(key) for key in expected} == expected
+    _assert_no_comment_body_leak(action)
+
+
+@then(
+    parsers.parse(
+        'a stale_thread_evidence_skip log identifies comment {comment_id:d} for verdict "{verdict}"'
+    )
+)
+def then_stale_thread_evidence_skip_log(ctx, comment_id: int, verdict: str) -> None:
+    prefix = "stale_thread_evidence_skip: "
+    messages = [record.getMessage() for record in ctx.get("captured_logs", [])]
+    payloads = [
+        json.loads(message.split(prefix, 1)[1]) for message in messages if prefix in message
+    ]
+    assert len(payloads) == 1, f"stale evidence logs={payloads!r}; all logs={messages!r}"
+    expected = {
+        "event": "stale_thread_evidence_skip",
+        "repo": REPO,
+        "pr": PR,
+        "thread_id": THREAD_ID,
+        "head_sha": "head-sha-abc1234",
+        "verdict": verdict,
+        "new_comment_id": comment_id,
+    }
+    payload = payloads[0]
+    assert {key: payload.get(key) for key in expected} == expected
+    _assert_no_comment_body_leak(payload)
+
+
 @then(parsers.parse('the planned sync action mutation is "{mutation}"'))
 def then_planned_mutation(ctx, mutation: str) -> None:
     actions = ctx["automation"]["sync_actions"]
@@ -936,6 +1018,15 @@ def then_latest_snapshot_verdict(ctx, verdict: str) -> None:
     assert snap.verdict.value == verdict
 
 
+@then(parsers.parse("the latest snapshot observed thread comment IDs are [{ids}]"))
+def then_latest_snapshot_observed_thread_comment_ids(ctx, ids: str) -> None:
+    expected = [int(value.strip()) for value in ids.split(",") if value.strip()]
+    snap = ctx["store"].read_thread(REPO, PR, THREAD_ID)
+    assert snap is not None
+    actual = getattr(snap.evidence, "observed_thread_comment_ids", None)
+    assert actual == expected, f"observed_thread_comment_ids={actual!r}, expected {expected!r}"
+
+
 # ---------------------------------------------------------------------------
 # Then — resolve_review_thread mutation direct test
 # ---------------------------------------------------------------------------
@@ -1011,6 +1102,32 @@ def given_outdated_p3_codex_thread(ctx, repo: str, pr: int, path: str, line: int
 )
 def given_fresh_codex_thread(ctx, repo: str, pr: int, path: str) -> None:
     ctx["client"].threads = [_fresh_codex_thread(path=path)]
+
+
+@given("the second review-thread fetch contains a new PR-author reply")
+def given_second_fetch_pr_author_reply(ctx) -> None:
+    client = ctx["client"]
+    assert len(client.threads) == 1
+    initial_comments = client.threads[0]["comments"]["nodes"]
+    assert [comment["databaseId"] for comment in initial_comments] == [CODEX_COMMENT_ID]
+
+    fresh_threads = deepcopy(client.threads)
+    fresh_threads[0]["comments"]["nodes"].append(
+        {
+            "databaseId": CODEX_COMMENT_ID + 1,
+            "author": {"login": client.pr_payload["user"]["login"]},
+            "body": (
+                "Fixed in `parser.py` by adding the null guard before dereference. "
+                f"{PRIVATE_COMMENT_BODY_SENTINEL}"
+            ),
+            "url": "https://example/c/2",
+            "createdAt": "2026-05-11T12:03:05Z",
+        }
+    )
+    client.threads_second_fetch = fresh_threads
+
+    assert len(client.threads[0]["comments"]["nodes"]) == 1
+    assert len(client.threads_second_fetch[0]["comments"]["nodes"]) == 2
 
 
 @given(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -29,6 +30,7 @@ class _WritebackClient:
         self.resolve_calls: list[tuple[str, str, str]] = []
         self.thread_comments: list[dict[str, Any]] = []
         self.fail_pull_request_review_threads = False
+        self.pull_request_review_threads_call_count = 0
         self.resolver_viewer_can_resolve_by_app: dict[str, bool] = {
             "iterwheel-assembly": True,
         }
@@ -58,6 +60,7 @@ class _WritebackClient:
     async def pull_request_review_threads(
         self, app_slug: str, repository: str, pull_number: int
     ) -> list[dict[str, Any]]:
+        self.pull_request_review_threads_call_count += 1
         if self.fail_pull_request_review_threads:
             raise RuntimeError("simulated review thread fetch failure")
         return [
@@ -250,6 +253,178 @@ def test_latest_current_head_final_marker_state_uses_created_at() -> None:
         )
         == "thread-conclusion"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    (
+        "verdict",
+        "fresh_comments",
+        "refresh_fails",
+        "observed_comment_ids",
+        "expected_witness",
+    ),
+    [
+        pytest.param(
+            Verdict.OPEN,
+            [(100003, "ryosaeba1985"), (100002, "ryosaeba1985")],
+            False,
+            [100001],
+            100002,
+            id="open-author",
+        ),
+        pytest.param(
+            Verdict.OPEN,
+            [
+                (100003, "chatgpt-codex-connector"),
+                (100002, "chatgpt-codex-connector"),
+            ],
+            False,
+            [100001],
+            100002,
+            id="open-codex",
+        ),
+        pytest.param(
+            Verdict.NEEDS_HUMAN_JUDGMENT,
+            [(100003, "ryosaeba1985"), (100002, "ryosaeba1985")],
+            False,
+            [100001],
+            100002,
+            id="needs-human-judgment-author",
+        ),
+        pytest.param(
+            Verdict.NEEDS_HUMAN_JUDGMENT,
+            [
+                (100003, "chatgpt-codex-connector"),
+                (100002, "chatgpt-codex-connector"),
+            ],
+            False,
+            [100001],
+            100002,
+            id="needs-human-judgment-codex",
+        ),
+        pytest.param(
+            Verdict.OPEN,
+            [(100002, "unrelated-reviewer")],
+            False,
+            [100001],
+            None,
+            id="unrelated-reviewer-posts",
+        ),
+        pytest.param(
+            Verdict.NEEDS_HUMAN_JUDGMENT,
+            [],
+            True,
+            [100001],
+            None,
+            id="fresh-fetch-failure-fails-open",
+        ),
+        pytest.param(
+            Verdict.OPEN,
+            [],
+            False,
+            [100001],
+            None,
+            id="successful-fetch-with-no-new-comment-posts",
+        ),
+        pytest.param(
+            Verdict.OPEN,
+            [(100002, "iterwheel-clearance")],
+            False,
+            [100001],
+            None,
+            id="clearance-non-marker-comment-posts",
+        ),
+        pytest.param(
+            Verdict.OPEN,
+            [(100003, "ryosaeba1985"), (100002, "chatgpt-codex-connector")],
+            False,
+            [100001],
+            100002,
+            id="author-and-codex-use-lowest-cross-actor-id",
+        ),
+        pytest.param(
+            Verdict.OPEN,
+            [(100002, "ryosaeba1985")],
+            False,
+            None,
+            None,
+            id="legacy-evidence-without-observed-ids-posts",
+        ),
+    ],
+)
+async def test_non_resolved_verdict_writeback_rechecks_decision_evidence(
+    verdict: Verdict,
+    fresh_comments: list[tuple[int, str]],
+    refresh_fails: bool,
+    observed_comment_ids: list[int] | None,
+    expected_witness: int | None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = _WritebackClient()
+    client.fail_pull_request_review_threads = refresh_fails
+    client.thread_comments.append(
+        {
+            "databaseId": 100001,
+            "author": {"login": "chatgpt-codex-connector"},
+            "body": "**P1** please address this nullable handling.",
+            "createdAt": "2026-05-11T12:00:00Z",
+        }
+    )
+    # Parameter order is intentional: witness selection must not depend on
+    # comment order, timestamp order, or actor precedence.
+    client.thread_comments.extend(
+        {
+            "databaseId": comment_id,
+            "author": {"login": actor_login},
+            "body": f"Fresh non-marker comment {comment_id}.",
+            "createdAt": f"2026-05-11T12:03:{5 + index:02d}Z",
+        }
+        for index, (comment_id, actor_login) in enumerate(fresh_comments)
+    )
+    snapshot = _snapshot(
+        verdict=verdict,
+        evidence=Evidence(observed_thread_comment_ids=observed_comment_ids),
+    )
+
+    with caplog.at_level(logging.INFO, logger="voyager.bots.clearance.pipeline"):
+        actions = await _maybe_post_thread_verdict_comments(
+            client=client,  # type: ignore[arg-type]
+            repository="iterwheel/sandbox",
+            threads=[_thread(verdict)],
+            snapshots=[snapshot],
+            pr=49,
+            head_sha="head-sha-abc1234",
+            dry_run=False,
+            pr_author_login="ryosaeba1985",
+        )
+
+    assert client.pull_request_review_threads_call_count == 1
+    stale_logs = [
+        record.getMessage()
+        for record in caplog.records
+        if "stale_thread_evidence_skip" in record.getMessage()
+    ]
+    if expected_witness is not None:
+        assert client.reply_calls == []
+        assert len(actions) == 1
+        assert actions[0]["skipped"] is True
+        assert actions[0]["skip_reason"] == "new thread decision evidence after snapshot"
+        assert actions[0]["new_comment_id"] == expected_witness
+        assert actions[0]["repo"] == "iterwheel/sandbox"
+        assert actions[0]["pr"] == 49
+        assert actions[0]["thread_id"] == "PRRT_alpha"
+        assert actions[0]["head_sha"] == "head-sha-abc1234"
+        assert actions[0]["verdict"] == verdict.value
+        assert len(stale_logs) == 1
+        assert f'"new_comment_id": {expected_witness}' in stale_logs[0]
+    else:
+        assert len(client.reply_calls) == 1
+        assert len(actions) == 1
+        assert actions[0]["posted"] is True
+        assert stale_logs == []
+        if refresh_fails:
+            assert "fresh latest current-head final marker check failed" in caplog.text
 
 
 @pytest.mark.asyncio

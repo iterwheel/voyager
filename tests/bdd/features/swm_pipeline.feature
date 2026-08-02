@@ -838,6 +838,19 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     And the automation thread verdict count for "OPEN" is 1
     And the automation thread verdict comment posted count is 1
 
+  Scenario: VOY-1838 new author evidence suppresses stale OPEN writeback
+    Given the stub PR "iterwheel/sandbox" #49 has 1 fresh Codex thread (State A) at path "app.py"
+    And the second review-thread fetch contains a new PR-author reply
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "blocked"
+    And review threads were fetched exactly 2 times
+    And no in-thread reply was posted
+    And the automation thread verdict comment posted count is 0
+    And the automation thread verdict comment skipped count is 1
+    And the stale thread evidence skip action identifies comment 100002 for verdict "OPEN"
+    And a stale_thread_evidence_skip log identifies comment 100002 for verdict "OPEN"
+    And the latest snapshot observed thread comment IDs are [100001]
+
   Scenario: Issue #142 NEEDS_HUMAN_JUDGMENT verdict posts a thread-local evidence comment
     Given the stub PR "iterwheel/sandbox" #49 has 1 outdated Codex thread at path "app.py" line 10
     And a fake investigator returning verdict "NEEDS_HUMAN_JUDGMENT" confidence 0.60 reason "Ambiguous evidence"

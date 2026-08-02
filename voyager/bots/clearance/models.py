@@ -138,6 +138,7 @@ class Evidence(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
+    observed_thread_comment_ids: list[int] | None = None
     thread_state: ThreadState | None = None
     author_reply_id: int | None = None
     author_reply_substantive: bool | None = None

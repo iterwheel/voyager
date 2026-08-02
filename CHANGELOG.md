@@ -8,6 +8,12 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+### Fixed
+
+- Suppressed stale Clearance `OPEN` and `NEEDS_HUMAN_JUDGMENT` thread replies
+  when the existing pre-writeback refresh observes a newer PR-author or Codex
+  comment that was not part of the classified snapshot.
+
 ## [0.8.1] — 2026-08-02
 
 ### Fixed
