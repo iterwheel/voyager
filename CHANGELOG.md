@@ -8,6 +8,8 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-08-02
+
 ### Fixed
 
 - Prevented duplicate Clearance review-thread verdict replies when one submitted
@@ -16,6 +18,17 @@ release note for the explicit migration path.
   Clearance automation runs are serialized per repository and pull request;
   unrelated pull requests remain concurrent
   ([#293](https://github.com/iterwheel/voyager/pull/293)).
+
+### Operator notes
+
+- The change is limited to Clearance webhook routing and in-process automation
+  serialization. It introduces no configuration, environment-variable, model,
+  or migration changes.
+- Deploy v0.8.1 and restart long-running Voyager processes to activate the fix.
+  Existing duplicate comments are not removed and may be cleaned up manually.
+- Simultaneous Clearance automation across multiple event loops or operating
+  system processes remains out of scope; serialization applies within one event
+  loop and process.
 
 ## [0.8.0] — 2026-08-02
 
@@ -893,7 +906,8 @@ auth, FastAPI webhook bridge, DeepSeek LLM adapter, rocket-factory
 pipeline state machine, SWM-1101 per-thread verdict pipeline. See
 `b2e4ca1` and prior history.
 
-[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/iterwheel/voyager/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/iterwheel/voyager/compare/v0.7.3...v0.8.0
 [0.7.3]: https://github.com/iterwheel/voyager/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/iterwheel/voyager/compare/v0.7.1...v0.7.2
