@@ -1,8 +1,8 @@
 {
-  "action": "created",
+  "action": "edited",
   "comment": {
-    "body": "Inline finding.",
-    "in_reply_to_id": null,
+    "body": "Edited inline finding.",
+    "in_reply_to_id": 100001,
     "user": {"login": "reviewer"}
   },
   "pull_request": {

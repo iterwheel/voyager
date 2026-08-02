@@ -8,6 +8,15 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+### Fixed
+
+- Prevented duplicate Clearance review-thread verdict replies when one submitted
+  review fans out into a review event plus root review-comment events. Root
+  comments now defer to the canonical submitted-review trigger, while complete
+  Clearance automation runs are serialized per repository and pull request;
+  unrelated pull requests remain concurrent
+  ([#293](https://github.com/iterwheel/voyager/pull/293)).
+
 ## [0.8.0] — 2026-08-02
 
 ### Added — Governed Countdown review-thread resolution

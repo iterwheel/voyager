@@ -18,12 +18,14 @@ delivery processed by ``dispatch_route_writeback``.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
+from weakref import WeakValueDictionary
 
 import httpx
 
@@ -79,6 +81,19 @@ from voyager.core.review_identity import extract_known_limitation_rule_id
 from voyager.core.writeback import _safe_exception_fields, build_writeback_failure, dry_run_enabled
 
 _log = logging.getLogger(__name__)
+
+_clearance_automation_locks: WeakValueDictionary[
+    tuple[asyncio.AbstractEventLoop, str, int], asyncio.Lock
+] = WeakValueDictionary()
+
+
+def _get_automation_lock(repository: str, pr_number: int) -> asyncio.Lock:
+    key = (asyncio.get_running_loop(), repository, pr_number)
+    lock = _clearance_automation_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _clearance_automation_locks[key] = lock
+    return lock
 
 
 _AUTHORIZED_RESOLVER_APP_BY_PR_AUTHOR = {
@@ -2000,6 +2015,32 @@ def _writeback_failures(
 
 
 async def compute_clearance_automation(
+    client: GitHubAppClient,
+    route: dict[str, Any],
+    *,
+    repository: str,
+    store: StateStore,
+    investigator: ThreadInvestigator | None = None,
+    known_limitation_store: KnownLimitationStore | None = None,
+    default_profile_name: str | None = None,
+    expected_sha: str | None = None,
+) -> dict[str, Any]:
+    """Serialize and run Clearance automation for one repository and PR."""
+    pr_number = int(route["validation"]["pr_number"])
+    async with _get_automation_lock(repository, pr_number):
+        return await _compute_clearance_automation_unlocked(
+            client,
+            route,
+            repository=repository,
+            store=store,
+            investigator=investigator,
+            known_limitation_store=known_limitation_store,
+            default_profile_name=default_profile_name,
+            expected_sha=expected_sha,
+        )
+
+
+async def _compute_clearance_automation_unlocked(
     client: GitHubAppClient,
     route: dict[str, Any],
     *,

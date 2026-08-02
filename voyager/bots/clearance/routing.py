@@ -69,7 +69,7 @@ def should_run_clearance(event: str, payload: dict[str, Any]) -> bool:
     if event == "pull_request_review" and action in PULL_REQUEST_REVIEW_ACTIONS:
         return True
     if event == "pull_request_review_comment" and action == "created":
-        return True
+        return (payload.get("comment") or {}).get("in_reply_to_id") is not None
     if event == "issue_comment" and action == "created":
         issue = payload.get("issue") or {}
         body = str((payload.get("comment") or {}).get("body") or "")

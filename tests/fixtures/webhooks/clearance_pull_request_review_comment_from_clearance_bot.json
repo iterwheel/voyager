@@ -1,9 +1,9 @@
 {
   "action": "created",
   "comment": {
-    "body": "Inline finding.",
+    "body": "Clearance root comment.",
     "in_reply_to_id": null,
-    "user": {"login": "reviewer"}
+    "user": {"login": "iterwheel-clearance[bot]"}
   },
   "pull_request": {
     "number": 125,
