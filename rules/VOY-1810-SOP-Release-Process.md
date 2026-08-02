@@ -1,7 +1,7 @@
 # SOP-1810: Voyager Release Process
 
 **Applies to:** Voyager (`iterwheel/voyager`) public releases
-**Last updated:** 2026-05-17
+**Last updated:** 2026-08-02
 **Last reviewed:** 2026-05-17
 **Status:** Active
 **Related:** `.github/workflows/release.yml` (the automation that backs this SOP), VOY-1801 (Mission Charter), CHANGELOG.md (the canonical release-notes record)
@@ -88,6 +88,12 @@ gh pr create --repo iterwheel/voyager --base main --head ryosaeba1985:release/vX
   --title "release: vX.Y.Z — <one-line summary>" --body-file <(...)
 ```
 
+Release PRs **must be opened ready-for-review (non-draft) by default**.
+Use a draft only when the operator explicitly requests one or an applicable SOP
+declares a hard stop that prevents review. CI still running, known limitations,
+or pending merge approval do not by themselves require draft status;
+ready-for-review does not authorize merge.
+
 Per WUK-2100, `gh` must be authenticated as `ryosaeba1985`. The
 pre-push hook validates lint + format + tests locally before the push.
 This release flow intentionally uses a fork remote (`ryosaeba1985:release/vX.Y.Z`)
@@ -144,6 +150,8 @@ Before merging the release PR:
       matching the version string (the workflow's `awk` is exact-match).
 - [ ] The CHANGELOG section lists every operator-visible change: env
       vars, migrations, breaking changes, follow-up issues.
+- [ ] The release PR is ready-for-review, unless an allowed draft exception is
+      recorded in the PR body.
 - [ ] CI is green on the release PR.
 
 ---
@@ -196,3 +204,4 @@ Before merging the release PR:
 | 2026-05-17 | Initial version — accompanies `.github/workflows/release.yml` for v0.2.0+ releases. | Claude Opus 4.7 |
 | 2026-05-17 | Security/correctness hardening: replace HEAD~1 with github.event.before, shell-injection fix via env vars, strict version regex, idempotent tag-stranded recovery, awk literal index match, --latest=auto, commit-comment on failure. | Claude Sonnet 4.6 |
 | 2026-05-17 | Fix annotated-tag SHA comparison: query peeled ref (refs/tags/X^{}) then fall back to direct ref; update §Pitfalls "Tagging mid-flight" note. Codex bot PR #33 review. | Claude Sonnet 4.6 |
+| 2026-08-02 | Require release PRs to open ready-for-review by default; draft only by explicit operator request or SOP hard stop. | Frank + Codex |
