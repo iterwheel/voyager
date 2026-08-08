@@ -5,13 +5,17 @@ from __future__ import annotations
 import pytest
 
 from voyager.core.merge_loop import (
+    _AGENT_PR_PAGE_QUERY,
+    _PR_THREADS_QUERY,
     MERGE_ALLOWED_REPOS,
     MergeDecision,
     MergeLoopSummary,
     PrSnapshot,
+    make_merge_read_gql,
     merge_allowed_repos,
     parse_readiness,
     should_merge,
+    snapshots_for_repo,
 )
 from voyager.core.resolve_conversation import ResolveConversationError
 
@@ -158,3 +162,105 @@ class TestShouldMerge:
 
     def test_stage_4_ready_for_merge_also_ok(self):
         assert should_merge(snap(readiness_stage=4)) == "ok"
+
+
+def _pr_node(
+    number=1, author="ryosaeba1985", draft=False, checks="SUCCESS", head=HEAD, comments=()
+):
+    return {
+        "id": f"PR_{number}",
+        "number": number,
+        "isDraft": draft,
+        "headRefOid": head,
+        "author": {"login": author},
+        "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": checks}}}]},
+        "comments": {"nodes": list(comments)},
+    }
+
+
+def _fake_gql(pr_nodes, thread_pages=None):
+    """Return a gql callable serving one PR page and optional thread pages."""
+    thread_pages = thread_pages or {}
+
+    def gql(query, variables):
+        if query is _AGENT_PR_PAGE_QUERY:
+            return {
+                "repository": {
+                    "pullRequests": {
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        "nodes": pr_nodes,
+                    }
+                }
+            }
+        if query is _PR_THREADS_QUERY:
+            nodes = thread_pages.get(variables["number"], [])
+            return {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": nodes,
+                        }
+                    }
+                }
+            }
+        raise AssertionError(f"unexpected query: {query[:40]}")
+
+    return gql
+
+
+class TestSnapshotsForRepo:
+    def test_green_agent_pr_snapshot(self):
+        readiness = {
+            "author": {"login": "iterwheel-clearance"},
+            "body": READINESS_BODY.replace("a96782f4e41207e63d63bd552f9b4fa5399c7eb8", HEAD),
+        }
+        gql = _fake_gql(
+            [_pr_node(comments=[readiness])],
+            thread_pages={1: [{"isResolved": True}]},
+        )
+        (s,) = snapshots_for_repo(gql, "frankyxhl/fx_bin")
+        assert s.author == "ryosaeba1985"
+        assert s.unresolved_threads == 0
+        assert s.readiness_stage == 3
+        assert s.readiness_head == HEAD
+
+    def test_readiness_from_wrong_author_ignored(self):
+        impostor = {"author": {"login": "someone"}, "body": READINESS_BODY}
+        gql = _fake_gql([_pr_node(comments=[impostor])], thread_pages={1: []})
+        (s,) = snapshots_for_repo(gql, "frankyxhl/fx_bin")
+        assert s.readiness_stage is None
+
+    def test_non_agent_pr_skips_thread_fetch(self):
+        calls = []
+        inner = _fake_gql([_pr_node(author="frankyxhl")])
+
+        def spy(query, variables):
+            calls.append(query)
+            return inner(query, variables)
+
+        (s,) = snapshots_for_repo(spy, "frankyxhl/fx_bin")
+        assert s.unresolved_threads is None
+        assert _PR_THREADS_QUERY not in calls
+
+    def test_unresolved_threads_counted(self):
+        gql = _fake_gql(
+            [_pr_node()],
+            thread_pages={1: [{"isResolved": False}, {"isResolved": True}]},
+        )
+        (s,) = snapshots_for_repo(gql, "frankyxhl/fx_bin")
+        assert s.unresolved_threads == 1
+
+    def test_null_repository_raises(self):
+        def gql(query, variables):
+            return {"repository": None}
+
+        with pytest.raises(ResolveConversationError):
+            snapshots_for_repo(gql, "frankyxhl/fx_bin")
+
+
+class TestMergeReadGqlWhitelist:
+    def test_refuses_unknown_query(self):
+        gql = make_merge_read_gql("tok")
+        with pytest.raises(ResolveConversationError):
+            gql("query { viewer { login } }", {})

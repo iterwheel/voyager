@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 from voyager.bots.clearance.constants import CLEARANCE_COMMENT_MARKER
 from voyager.core.resolve_conversation import ResolveConversationError
@@ -154,3 +157,180 @@ def should_merge(s: PrSnapshot) -> str:
     if s.readiness_head != s.head_oid:
         return "readiness_stale_head"
     return "ok"
+
+
+GqlFn = Callable[[str, dict[str, Any]], dict[str, Any]]
+
+_AGENT_PR_PAGE_QUERY = """
+query AgentOpenPrs($owner: String!, $name: String!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(states: OPEN, first: 50, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        id
+        number
+        isDraft
+        headRefOid
+        author { login }
+        commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+        comments(last: 50) { nodes { author { login } body } }
+      }
+    }
+  }
+}
+"""
+
+_PR_THREADS_QUERY = """
+query PrThreadStates($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes { isResolved }
+      }
+    }
+  }
+}
+"""
+
+_ALLOWED_MERGE_READ_QUERIES = frozenset({_AGENT_PR_PAGE_QUERY, _PR_THREADS_QUERY})
+
+
+def _default_client_factory() -> httpx.Client:
+    return httpx.Client(timeout=20)
+
+
+def _post_gql(
+    token: str, query: str, variables: dict[str, Any], client_factory: Any
+) -> dict[str, Any]:
+    try:
+        with client_factory() as client:
+            resp = client.post(
+                "https://api.github.com/graphql",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/vnd.github+json",
+                },
+                json={"query": query, "variables": variables},
+            )
+            resp.raise_for_status()
+            body: dict[str, Any] = resp.json()
+    except httpx.HTTPStatusError as exc:
+        raise ResolveConversationError(
+            f"merge-loop GraphQL HTTP {exc.response.status_code}"
+        ) from None
+    except httpx.HTTPError:
+        raise ResolveConversationError("merge-loop GraphQL request failed") from None
+    except ValueError:
+        raise ResolveConversationError("merge-loop GraphQL returned a non-JSON response") from None
+    errors = body.get("errors")
+    if errors:
+        raise ResolveConversationError(f"merge-loop GraphQL returned {len(errors)} error(s)")
+    return body.get("data") or {}
+
+
+def make_merge_read_gql(token: str, *, client_factory: Any = _default_client_factory) -> GqlFn:
+    """Read client bound to *token*; refuses queries outside the merge-loop set."""
+
+    def _gql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
+        if query not in _ALLOWED_MERGE_READ_QUERIES:
+            raise ResolveConversationError(
+                "merge-loop read client refusing an unknown GraphQL operation"
+            )
+        return _post_gql(token, query, variables, client_factory)
+
+    return _gql
+
+
+def _unresolved_thread_count(gql: GqlFn, repo: str, number: int) -> int | None:
+    """Paginated unresolved-thread count; None on any read fault (fail closed)."""
+    owner, name = repo.split("/", 1)
+    unresolved = 0
+    after: str | None = None
+    seen_cursors: set[str] = set()
+    while True:
+        try:
+            data = gql(
+                _PR_THREADS_QUERY,
+                {"owner": owner, "name": name, "number": number, "after": after},
+            )
+        except ResolveConversationError:
+            return None
+        pull = ((data or {}).get("repository") or {}).get("pullRequest")
+        if pull is None:
+            return None
+        threads = pull.get("reviewThreads") or {}
+        for node in threads.get("nodes") or []:
+            if node.get("isResolved") is not True:
+                unresolved += 1
+        page = threads.get("pageInfo") or {}
+        if not page.get("hasNextPage"):
+            return unresolved
+        after = page.get("endCursor")
+        if not after or after in seen_cursors:
+            return unresolved
+        seen_cursors.add(after)
+
+
+def _readiness_from_comments(node: dict[str, Any]) -> tuple[int | None, str | None]:
+    """Latest clearance-authored readiness (stage, head); (None, None) if absent."""
+    stage: int | None = None
+    head: str | None = None
+    for c in ((node.get("comments") or {}).get("nodes")) or []:
+        author = ((c.get("author") or {}).get("login")) or ""
+        if author not in CLEARANCE_BOT_LOGINS:
+            continue
+        parsed = parse_readiness(c.get("body") or "")
+        if parsed is not None:
+            stage, head = parsed  # last matching comment wins
+    return stage, head
+
+
+def snapshots_for_repo(gql: GqlFn, repo: str) -> list[PrSnapshot]:
+    """Every open PR's merge-relevant state; thread counts fetched lazily."""
+    owner, name = repo.split("/", 1)
+    snapshots: list[PrSnapshot] = []
+    after: str | None = None
+    seen_cursors: set[str] = set()
+    seen_numbers: set[int] = set()
+    while True:
+        data = gql(_AGENT_PR_PAGE_QUERY, {"owner": owner, "name": name, "after": after})
+        repository = (data or {}).get("repository")
+        if repository is None:
+            raise ResolveConversationError(f"repository not found in {repo!r}")
+        conn = repository.get("pullRequests") or {}
+        for node in conn.get("nodes") or []:
+            number = node.get("number")
+            if not isinstance(number, int) or number in seen_numbers:
+                continue
+            seen_numbers.add(number)
+            author = ((node.get("author") or {}).get("login")) or ""
+            is_draft = bool(node.get("isDraft"))
+            head_oid = str(node.get("headRefOid") or "")
+            rollup_nodes = ((node.get("commits") or {}).get("nodes")) or [{}]
+            rollup = ((rollup_nodes[0].get("commit") or {}).get("statusCheckRollup")) or {}
+            checks_state = rollup.get("state")
+            cheap_green = author in AGENT_PR_AUTHORS and not is_draft and checks_state == "SUCCESS"
+            threads = _unresolved_thread_count(gql, repo, number) if cheap_green else None
+            stage, r_head = _readiness_from_comments(node)
+            snapshots.append(
+                PrSnapshot(
+                    pr_id=str(node.get("id") or ""),
+                    number=number,
+                    author=author,
+                    is_draft=is_draft,
+                    head_oid=head_oid,
+                    checks_state=checks_state,
+                    unresolved_threads=threads,
+                    readiness_stage=stage,
+                    readiness_head=r_head,
+                )
+            )
+        page = conn.get("pageInfo") or {}
+        if not page.get("hasNextPage"):
+            break
+        after = page.get("endCursor")
+        if not after or after in seen_cursors:
+            break
+        seen_cursors.add(after)
+    return snapshots
