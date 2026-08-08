@@ -8,6 +8,8 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-08-08
+
 ### Added — Merge-loop operator-configurable author allowlist
 
 - Added `VOYAGER_MERGE_EXTRA_AUTHORS`, an operator-local extension of the
@@ -16,6 +18,14 @@ release note for the explicit migration path.
   `dependabot`), fail-closed parsing, lowercase-normalized matching, resolved
   once per run. With the variable unset, behavior is identical to v0.9.0
   ([#301](https://github.com/iterwheel/voyager/pull/301)).
+
+### Operator notes
+
+- To auto-merge dependabot dependency bumps on an allowlisted repo, set
+  `VOYAGER_MERGE_EXTRA_AUTHORS=dependabot` in `~/.voyager/merge-loop.env`
+  (GraphQL login form — not `app/dependabot` or `dependabot[bot]`; malformed
+  entries fail closed). No other config, dependency, or migration changes;
+  leaving the variable unset keeps v0.9.0 behavior exactly.
 
 ## [0.9.0] — 2026-08-08
 
@@ -970,7 +980,8 @@ auth, FastAPI webhook bridge, DeepSeek LLM adapter, rocket-factory
 pipeline state machine, SWM-1101 per-thread verdict pipeline. See
 `b2e4ca1` and prior history.
 
-[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/iterwheel/voyager/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/iterwheel/voyager/compare/v0.8.2...v0.9.0
 [0.8.2]: https://github.com/iterwheel/voyager/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/iterwheel/voyager/compare/v0.8.0...v0.8.1
