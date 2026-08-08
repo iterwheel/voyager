@@ -559,6 +559,33 @@ class TestRunMergeLoop:
         assert summary.merged == 0
         assert len(summary.decisions) == 1
 
+    def test_all_repos_fail_enumeration_is_systemic_failure(self, monkeypatch):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+
+        def failing_gql(query, variables):
+            raise ResolveConversationError("boom")
+
+        summary = run_merge_loop(
+            ["frankyxhl/fx_bin"],
+            read_gql=failing_gql,
+            merge_gql=lambda query, variables: {},
+            audit_path=None,
+        )
+        assert summary.systemic_failure is True
+        assert summary.to_public_dict()["systemic_failure"] is True
+
+    def test_successful_scan_is_not_systemic_failure(self, monkeypatch):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        summary, _ = self._run([_green_pr(1)], thread_pages={1: []})
+        assert summary.systemic_failure is False
+        assert summary.to_public_dict()["systemic_failure"] is False
+
+    def test_all_repos_ceiling_skipped_is_not_systemic_failure(self, monkeypatch):
+        monkeypatch.delenv("VOYAGER_MERGE_EXTRA_REPOS", raising=False)
+        summary, _ = self._run([_green_pr(1)], thread_pages={1: []})
+        assert summary.repos_scanned == ()
+        assert summary.systemic_failure is False
+
 
 class TestCli:
     def test_merge_loop_command_registered(self):

@@ -94,6 +94,7 @@ class MergeLoopSummary:
     capped: bool
     dry_run: bool
     errors: tuple[tuple[str, str], ...] = ()  # (public target, message)
+    repos_enumerated: int = 0
 
     @property
     def merged(self) -> int:
@@ -102,6 +103,14 @@ class MergeLoopSummary:
     @property
     def would_merge(self) -> int:
         return sum(1 for d in self.decisions if d.action == "would_merge")
+
+    @property
+    def systemic_failure(self) -> bool:
+        """The whole scan failed at some scope (likely a global auth/config fault),
+        so the caller should fail rather than report a clean zero-candidate run."""
+        if not self.repos_scanned:
+            return False
+        return self.repos_enumerated == 0
 
     def to_public_dict(self) -> dict[str, Any]:
         return {
@@ -113,6 +122,7 @@ class MergeLoopSummary:
             "decision_count": len(self.decisions),
             "capped": self.capped,
             "dry_run": self.dry_run,
+            "systemic_failure": self.systemic_failure,
             "errors": [{"target": t, "message": m} for t, m in self.errors],
             "decisions": [d.public() for d in self.decisions],
         }
@@ -421,6 +431,7 @@ def run_merge_loop(
     decisions: list[MergeDecision] = []
     errors: list[tuple[str, str]] = []
     prs_scanned = 0
+    repos_enumerated = 0
     approved = 0
     capped = False
 
@@ -446,6 +457,7 @@ def run_merge_loop(
         except ResolveConversationError as exc:
             errors.append((repo, str(exc)))
             continue
+        repos_enumerated += 1
         prs_scanned += len(snapshots)
         for s in snapshots:
             if s.author not in AGENT_PR_AUTHORS:
@@ -473,4 +485,5 @@ def run_merge_loop(
         capped=capped,
         dry_run=dry_run,
         errors=tuple(errors),
+        repos_enumerated=repos_enumerated,
     )
