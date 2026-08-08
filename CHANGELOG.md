@@ -8,19 +8,40 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-08-08
+
 ### Added — Countdown merge loop
 
 - Added `vyg countdown merge-loop`, an autonomous rebase-merge loop for
   agent-authored PRs. A PR is merged only when every deterministic condition
-  holds on the current head: author is the fixed agent identity, CI is fully
-  green, zero unresolved review threads, and the clearance readiness marker
-  reports Stage 3 for that exact head SHA. Any miss fails closed to a skip
-  with an audit reason; there is no human per-PR gate and no LLM gate. Reuses
-  the resolve-loop's allowlist ceiling, single-instance lock, per-run merge
-  cap, and redacted write-ahead audit trail. Includes default-off launchd
-  deployment templates (env/repos files, adaptive wrapper, plist) and the
-  VOY-1840 deployment SOP (VOY-1839)
+  holds on the current head: author is the fixed agent identity, the base
+  branch is in the allowed set (`main`), the base has not advanced past the
+  head's checks, CI is fully green, zero unresolved review threads, and the
+  clearance readiness marker (verified Bot-actor authorship) reports Stage 3
+  for that exact head SHA. Any miss fails closed to a skip with an audit
+  reason; there is no human per-PR gate and no LLM gate. The live path
+  re-verifies base branch, base freshness, and audit writability immediately
+  before the single `mergePullRequest` (REBASE + `expectedHeadOid`) mutation,
+  merges at most one PR per repo per cycle, and hard-gates on the machine
+  account identity. Reuses the resolve-loop's allowlist ceiling,
+  single-instance lock, per-run attempt cap, and redacted write-ahead audit
+  trail. Includes default-off launchd deployment templates (env/repos files,
+  adaptive wrapper, plist) and the VOY-1840 deployment SOP (VOY-1839)
   ([#298](https://github.com/iterwheel/voyager/pull/298)).
+
+### Operator notes
+
+- The merge loop ships default-off (`MERGE_LOOP_ENABLED=false`); installing
+  the LaunchAgent performs no live merges. New env surface:
+  `MERGE_LOOP_ENABLED`, `MERGE_MAX_MERGES`, `MERGE_FAST_INTERVAL`,
+  `MERGE_SLOW_INTERVAL`, `MERGE_FAST_STREAK_MAX`, `VOYAGER_MERGE_EXTRA_REPOS`.
+- Going live on a target repo REQUIRES the VOY-1840 Rollout Gate, including
+  the ruleset changes with `strict_required_status_checks_policy: true`
+  ("require branches up to date") — the loop's apply-time base re-reads
+  narrow but cannot eliminate the base-advance race (`mergePullRequest` has
+  no `expectedBaseOid`); the server-side strict check is the mandatory
+  backstop.
+- No model, dependency, or migration changes. The resolve loop is untouched.
 
 ## [0.8.2] — 2026-08-02
 
@@ -940,7 +961,8 @@ auth, FastAPI webhook bridge, DeepSeek LLM adapter, rocket-factory
 pipeline state machine, SWM-1101 per-thread verdict pipeline. See
 `b2e4ca1` and prior history.
 
-[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.8.2...HEAD
+[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/iterwheel/voyager/compare/v0.8.2...v0.9.0
 [0.8.2]: https://github.com/iterwheel/voyager/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/iterwheel/voyager/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/iterwheel/voyager/compare/v0.7.3...v0.8.0
