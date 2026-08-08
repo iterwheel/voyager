@@ -41,6 +41,7 @@
 ```python
 # tests/unit/test_merge_loop.py
 """Unit tests for voyager.core.merge_loop."""
+
 from __future__ import annotations
 
 import pytest
@@ -127,6 +128,7 @@ Spec: rules/VOY-1839-PRP-Countdown-Merge-Loop-Autonomous-Agent-PR-Merge.md.
 Mirrors the resolve-loop skeleton (countdown_loop.py); single mutation type:
 mergePullRequest (REBASE, expectedHeadOid-guarded). Fail-closed throughout.
 """
+
 from __future__ import annotations
 
 import fcntl
@@ -298,9 +300,7 @@ class TestParseReadiness:
         assert parse_readiness(body) is None
 
     def test_short_sha_returns_none(self):
-        body = READINESS_BODY.replace(
-            "a96782f4e41207e63d63bd552f9b4fa5399c7eb8", "a96782f"
-        )
+        body = READINESS_BODY.replace("a96782f4e41207e63d63bd552f9b4fa5399c7eb8", "a96782f")
         assert parse_readiness(body) is None
 ```
 
@@ -485,8 +485,9 @@ from voyager.core.merge_loop import (
 )
 
 
-def _pr_node(number=1, author="ryosaeba1985", draft=False, checks="SUCCESS",
-             head=HEAD, comments=()):
+def _pr_node(
+    number=1, author="ryosaeba1985", draft=False, checks="SUCCESS", head=HEAD, comments=()
+):
     return {
         "id": f"PR_{number}",
         "number": number,
@@ -504,16 +505,26 @@ def _fake_gql(pr_nodes, thread_pages=None):
 
     def gql(query, variables):
         if query is _AGENT_PR_PAGE_QUERY:
-            return {"repository": {"pullRequests": {
-                "pageInfo": {"hasNextPage": False, "endCursor": None},
-                "nodes": pr_nodes,
-            }}}
+            return {
+                "repository": {
+                    "pullRequests": {
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        "nodes": pr_nodes,
+                    }
+                }
+            }
         if query is _PR_THREADS_QUERY:
             nodes = thread_pages.get(variables["number"], [])
-            return {"repository": {"pullRequest": {"reviewThreads": {
-                "pageInfo": {"hasNextPage": False, "endCursor": None},
-                "nodes": nodes,
-            }}}}
+            return {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": nodes,
+                        }
+                    }
+                }
+            }
         raise AssertionError(f"unexpected query: {query[:40]}")
 
     return gql
@@ -523,9 +534,7 @@ class TestSnapshotsForRepo:
     def test_green_agent_pr_snapshot(self):
         readiness = {
             "author": {"login": "iterwheel-clearance"},
-            "body": READINESS_BODY.replace(
-                "a96782f4e41207e63d63bd552f9b4fa5399c7eb8", HEAD
-            ),
+            "body": READINESS_BODY.replace("a96782f4e41207e63d63bd552f9b4fa5399c7eb8", HEAD),
         }
         gql = _fake_gql(
             [_pr_node(comments=[readiness])],
@@ -654,18 +663,14 @@ def _post_gql(
     except httpx.HTTPError:
         raise ResolveConversationError("merge-loop GraphQL request failed") from None
     except ValueError:
-        raise ResolveConversationError(
-            "merge-loop GraphQL returned a non-JSON response"
-        ) from None
+        raise ResolveConversationError("merge-loop GraphQL returned a non-JSON response") from None
     errors = body.get("errors")
     if errors:
         raise ResolveConversationError(f"merge-loop GraphQL returned {len(errors)} error(s)")
     return body.get("data") or {}
 
 
-def make_merge_read_gql(
-    token: str, *, client_factory: Any = _default_client_factory
-) -> GqlFn:
+def make_merge_read_gql(token: str, *, client_factory: Any = _default_client_factory) -> GqlFn:
     """Read client bound to *token*; refuses queries outside the merge-loop set."""
 
     def _gql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
@@ -746,12 +751,8 @@ def snapshots_for_repo(gql: GqlFn, repo: str) -> list[PrSnapshot]:
             rollup_nodes = ((node.get("commits") or {}).get("nodes")) or [{}]
             rollup = ((rollup_nodes[0].get("commit") or {}).get("statusCheckRollup")) or {}
             checks_state = rollup.get("state")
-            cheap_green = (
-                author in AGENT_PR_AUTHORS and not is_draft and checks_state == "SUCCESS"
-            )
-            threads = (
-                _unresolved_thread_count(gql, repo, number) if cheap_green else None
-            )
+            cheap_green = author in AGENT_PR_AUTHORS and not is_draft and checks_state == "SUCCESS"
+            threads = _unresolved_thread_count(gql, repo, number) if cheap_green else None
             stage, r_head = _readiness_from_comments(node)
             snapshots.append(
                 PrSnapshot(
@@ -837,7 +838,10 @@ class TestMergePr:
     def test_mutation_client_refuses_unknown_operation(self):
         gql = make_merge_gql("tok")
         with pytest.raises(ResolveConversationError):
-            gql("mutation { closePullRequest(input: {pullRequestId: \"x\"}) { clientMutationId } }", {})
+            gql(
+                'mutation { closePullRequest(input: {pullRequestId: "x"}) { clientMutationId } }',
+                {},
+            )
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -882,9 +886,7 @@ def merge_pr(merge_gql: GqlFn, pr_id: str, expected_head: str) -> tuple[str, str
         data = merge_gql(_MERGE_MUTATION, {"prId": pr_id, "expectedHeadOid": expected_head})
     except ResolveConversationError as exc:
         return "merge_failed", str(exc)
-    merged = (
-        ((data.get("mergePullRequest") or {}).get("pullRequest") or {}).get("merged")
-    )
+    merged = ((data.get("mergePullRequest") or {}).get("pullRequest") or {}).get("merged")
     if merged is True:
         return "merged", ""
     return "merge_failed", "mutation returned without merged=true"
@@ -926,9 +928,7 @@ from voyager.core.merge_loop import run_merge_loop
 def _green_pr(number):
     readiness = {
         "author": {"login": "iterwheel-clearance"},
-        "body": READINESS_BODY.replace(
-            "a96782f4e41207e63d63bd552f9b4fa5399c7eb8", HEAD
-        ),
+        "body": READINESS_BODY.replace("a96782f4e41207e63d63bd552f9b4fa5399c7eb8", HEAD),
     }
     return _pr_node(number=number, comments=[readiness])
 
@@ -1000,9 +1000,7 @@ class TestRunMergeLoop:
         def merge_gql(query, variables):
             return {"mergePullRequest": {"pullRequest": {"merged": True}}}
 
-        run_merge_loop(
-            ["frankyxhl/fx_bin"], read_gql=read, merge_gql=merge_gql, audit_path=audit
-        )
+        run_merge_loop(["frankyxhl/fx_bin"], read_gql=read, merge_gql=merge_gql, audit_path=audit)
         (line,) = audit.read_text().strip().splitlines()
         record = _json.loads(line)
         assert record["action"] == "merged"
