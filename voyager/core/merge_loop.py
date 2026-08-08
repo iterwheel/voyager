@@ -411,9 +411,10 @@ def run_merge_loop(
     """Scan allowlisted repos and rebase-merge fully-green agent PRs.
 
     Non-agent PRs are invisible to this loop (no decision, no audit).
-    Agent PRs get exactly one decision each. Cap counts merged (live) or
-    would_merge (dry-run). One repo's scan failure is recorded and the
-    remaining repos still run.
+    Agent PRs get exactly one decision each. Cap bounds approved merge
+    ATTEMPTS (would_merge in dry-run), not successes: a live run where
+    merge_pr keeps returning merge_failed must still hit the cap. One
+    repo's scan failure is recorded and the remaining repos still run.
     """
     timestamp = (now or _utc_now)()
     allowed, skipped = gate_repos(requested_repos, ceiling=merge_allowed_repos())

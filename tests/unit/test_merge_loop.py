@@ -435,13 +435,15 @@ def _green_pr(number):
 
 
 class TestRunMergeLoop:
-    def _run(self, pr_nodes, thread_pages=None, **kwargs):
+    def _run(self, pr_nodes, thread_pages=None, merge_gql=None, **kwargs):
         read = _fake_gql(pr_nodes, thread_pages=thread_pages or {})
         merges: list[str] = []
 
-        def merge_gql(query, variables):
-            merges.append(variables["prId"])
-            return {"mergePullRequest": {"pullRequest": {"merged": True}}}
+        if merge_gql is None:
+
+            def merge_gql(query, variables):
+                merges.append(variables["prId"])
+                return {"mergePullRequest": {"pullRequest": {"merged": True}}}
 
         summary = run_merge_loop(
             ["frankyxhl/fx_bin"],
@@ -505,5 +507,49 @@ class TestRunMergeLoop:
         (line,) = audit.read_text().strip().splitlines()
         record = _json.loads(line)
         assert record["action"] == "merged"
+        assert record["pr"] == 1
+        assert record["repo"] == "frankyxhl/fx_bin"
+
+    def test_merge_failed_path_consumes_cap(self, monkeypatch):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        # First PR: merge attempt fails (mutation returns merged=False)
+        # Second PR: should be capped because first attempt consumed the cap
+        calls: list[str] = []
+
+        def merge_gql_fails(query, variables):
+            calls.append(variables["prId"])
+            return {"mergePullRequest": {"pullRequest": {"merged": False}}}
+
+        summary, _ = self._run(
+            [_green_pr(1), _green_pr(2)],
+            thread_pages={1: [], 2: []},
+            merge_gql=merge_gql_fails,
+            max_merges=1,
+        )
+        # First PR: merge attempt was made, returned merge_failed
+        # Second PR: capped (attempt cap already consumed by first)
+        assert len(calls) == 1  # only one merge attempt (for first PR)
+        assert summary.capped is True
+        # Verify the decision structure
+        assert len(summary.decisions) == 2
+        pr1_decision = next(d for d in summary.decisions if d.pr == 1)
+        pr2_decision = next(d for d in summary.decisions if d.pr == 2)
+        assert pr1_decision.action == "merge_failed"
+        assert pr2_decision.action == "skipped"
+        assert pr2_decision.reason == "capped"
+        assert summary.merged == 0
+
+    def test_merge_failed_recorded_in_audit(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        audit = tmp_path / "audit.jsonl"
+        read = _fake_gql([_green_pr(1)], thread_pages={1: []})
+
+        def merge_gql(query, variables):
+            return {"mergePullRequest": {"pullRequest": {"merged": False}}}
+
+        run_merge_loop(["frankyxhl/fx_bin"], read_gql=read, merge_gql=merge_gql, audit_path=audit)
+        (line,) = audit.read_text().strip().splitlines()
+        record = _json.loads(line)
+        assert record["action"] == "merge_failed"
         assert record["pr"] == 1
         assert record["repo"] == "frankyxhl/fx_bin"
