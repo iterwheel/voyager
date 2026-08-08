@@ -1047,7 +1047,11 @@ class TestCli:
     def test_merge_loop_command_registered(self):
         from voyager.cli import app
 
-        result = CliRunner().invoke(app, ["countdown", "merge-loop", "--help"])
+        # Force a wide, colorless terminal so Typer/Rich does not wrap flag
+        # names across lines (CI defaults to ~80 cols, splitting e.g.
+        # `--dry-run` into `--dry\n-run`); see tests/unit/test_cli.py.
+        runner = CliRunner(env={"COLUMNS": "200", "NO_COLOR": "1", "TERM": "dumb"})
+        result = runner.invoke(app, ["countdown", "merge-loop", "--help"])
         assert result.exit_code == 0
         assert "--dry-run" in result.output
         assert "--max-merges" in result.output
