@@ -25,6 +25,7 @@ from voyager.core.merge_loop import (
     _readiness_for_pr,
     _unresolved_thread_count,
     make_merge_read_gql,
+    merge_allowed_authors,
     merge_allowed_repos,
     parse_readiness,
     run_merge_loop,
@@ -51,6 +52,30 @@ class TestMergeAllowedRepos:
         monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "not-a-repo-path")
         with pytest.raises(ResolveConversationError):
             merge_allowed_repos()
+
+
+class TestMergeAllowedAuthors:
+    def test_builtin_only_by_default(self, monkeypatch):
+        monkeypatch.delenv("VOYAGER_MERGE_EXTRA_AUTHORS", raising=False)
+        assert merge_allowed_authors() == frozenset({"ryosaeba1985"})
+
+    def test_env_extras_extend_allowlist(self, monkeypatch):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_AUTHORS", "dependabot")
+        assert "dependabot" in merge_allowed_authors()
+        assert "ryosaeba1985" in merge_allowed_authors()
+
+    def test_extras_normalize_case(self, monkeypatch):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_AUTHORS", "DependaBot")
+        assert "dependabot" in merge_allowed_authors()
+
+    def test_malformed_extra_fails_closed(self, monkeypatch):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_AUTHORS", "app/dependabot")
+        with pytest.raises(ResolveConversationError):
+            merge_allowed_authors()
+
+    def test_empty_env_is_builtin_only(self, monkeypatch):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_AUTHORS", "")
+        assert merge_allowed_authors() == frozenset({"ryosaeba1985"})
 
 
 class TestDecisionRedaction:
@@ -185,6 +210,18 @@ class TestShouldMerge:
 
     def test_allowed_base_refs_is_main_only(self):
         assert frozenset({"main"}) == ALLOWED_BASE_REFS
+
+    def test_dependabot_rejected_by_default(self, monkeypatch):
+        monkeypatch.delenv("VOYAGER_MERGE_EXTRA_AUTHORS", raising=False)
+        assert should_merge(snap(author="dependabot")) == "not_agent_author"
+
+    def test_dependabot_accepted_when_passed_allowed_authors(self):
+        allowed = frozenset({"ryosaeba1985", "dependabot"})
+        assert should_merge(snap(author="dependabot"), allowed_authors=allowed) == "ok"
+
+    def test_allowed_authors_match_is_case_insensitive(self):
+        allowed = frozenset({"dependabot"})
+        assert should_merge(snap(author="Dependabot"), allowed_authors=allowed) == "ok"
 
 
 def _pr_node(
@@ -332,6 +369,42 @@ class TestSnapshotsForRepo:
         (s,) = snapshots_for_repo(spy, "frankyxhl/fx_bin")
         assert s.unresolved_threads is None
         assert s.readiness_stage is None
+        assert s.base_behind is None
+        assert _PR_THREADS_QUERY not in calls
+        assert _PR_COMMENTS_QUERY not in calls
+        assert _BASE_FRESHNESS_QUERY not in calls
+
+    def test_dependabot_gets_cheap_green_when_passed_allowed_authors(self, monkeypatch):
+        monkeypatch.delenv("VOYAGER_MERGE_EXTRA_AUTHORS", raising=False)
+        calls = []
+        inner = _fake_gql(
+            [_pr_node(author="dependabot")],
+            thread_pages={1: []},
+            comment_pages={1: [[]]},
+        )
+
+        def spy(query, variables):
+            calls.append(query)
+            return inner(query, variables)
+
+        (s,) = snapshots_for_repo(
+            spy, "frankyxhl/fx_bin", allowed_authors=frozenset({"dependabot"})
+        )
+        assert s.base_behind == 0
+        assert _PR_THREADS_QUERY in calls
+        assert _PR_COMMENTS_QUERY in calls
+        assert _BASE_FRESHNESS_QUERY in calls
+
+    def test_dependabot_skips_cheap_green_without_allowed_authors(self, monkeypatch):
+        monkeypatch.delenv("VOYAGER_MERGE_EXTRA_AUTHORS", raising=False)
+        calls = []
+        inner = _fake_gql([_pr_node(author="dependabot")])
+
+        def spy(query, variables):
+            calls.append(query)
+            return inner(query, variables)
+
+        (s,) = snapshots_for_repo(spy, "frankyxhl/fx_bin")
         assert s.base_behind is None
         assert _PR_THREADS_QUERY not in calls
         assert _PR_COMMENTS_QUERY not in calls
@@ -1106,6 +1179,28 @@ class TestRunMergeLoop:
         )
         assert merges == ["PR_1"]
         assert summary.merged == 1
+
+    def test_extra_author_env_merges_dependabot_pr(self, monkeypatch):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_AUTHORS", "dependabot")
+        summary, merges = self._run(
+            [_pr_node(number=1, author="dependabot")],
+            thread_pages={1: []},
+            comment_pages=_readiness_pages(1),
+        )
+        assert merges == ["PR_1"]
+        assert summary.merged == 1
+
+    def test_without_extra_author_env_dependabot_pr_produces_no_decision(self, monkeypatch):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        monkeypatch.delenv("VOYAGER_MERGE_EXTRA_AUTHORS", raising=False)
+        summary, merges = self._run(
+            [_pr_node(number=1, author="dependabot")],
+            thread_pages={1: []},
+            comment_pages=_readiness_pages(1),
+        )
+        assert merges == []
+        assert summary.decisions == ()
 
     def test_dry_run_issues_no_mutation(self, monkeypatch):
         monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")

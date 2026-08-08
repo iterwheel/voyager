@@ -35,7 +35,8 @@ while true; do
   # restart.
   unset MERGE_LOOP_ENABLED MERGE_MAX_MERGES \
         MERGE_FAST_INTERVAL MERGE_SLOW_INTERVAL \
-        MERGE_FAST_STREAK_MAX VOYAGER_MERGE_EXTRA_REPOS
+        MERGE_FAST_STREAK_MAX VOYAGER_MERGE_EXTRA_REPOS \
+        VOYAGER_MERGE_EXTRA_AUTHORS
   set -a
   if ! source "$ENV_FILE" 2>/dev/null; then
     set +a
