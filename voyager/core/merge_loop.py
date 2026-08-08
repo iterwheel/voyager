@@ -334,3 +334,42 @@ def snapshots_for_repo(gql: GqlFn, repo: str) -> list[PrSnapshot]:
             break
         seen_cursors.add(after)
     return snapshots
+
+
+_MERGE_MUTATION = """
+mutation MergeAgentPr($prId: ID!, $expectedHeadOid: GitObjectID!) {
+  mergePullRequest(
+    input: {pullRequestId: $prId, mergeMethod: REBASE, expectedHeadOid: $expectedHeadOid}
+  ) {
+    pullRequest { merged }
+  }
+}
+"""
+
+
+def make_merge_gql(token: str, *, client_factory: Any = _default_client_factory) -> GqlFn:
+    """Mutation client; the ONLY operation it will run is the rebase merge."""
+
+    def _gql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
+        if query is not _MERGE_MUTATION:
+            raise ResolveConversationError(
+                "merge-loop mutation client refusing an unknown GraphQL operation"
+            )
+        return _post_gql(token, query, variables, client_factory)
+
+    return _gql
+
+
+def merge_pr(merge_gql: GqlFn, pr_id: str, expected_head: str) -> tuple[str, str]:
+    """Attempt one rebase merge. expectedHeadOid makes a moved head a benign
+    failure (GitHub rejects), so scan→apply races cannot merge stale state.
+    Never raises: one PR's failure must not abort the multi-repo run.
+    """
+    try:
+        data = merge_gql(_MERGE_MUTATION, {"prId": pr_id, "expectedHeadOid": expected_head})
+    except ResolveConversationError as exc:
+        return "merge_failed", str(exc)
+    merged = ((data.get("mergePullRequest") or {}).get("pullRequest") or {}).get("merged")
+    if merged is True:
+        return "merged", ""
+    return "merge_failed", "mutation returned without merged=true"

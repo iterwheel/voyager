@@ -381,3 +381,43 @@ class TestMergeReadGqlWhitelist:
         gql = make_merge_read_gql("tok")
         with pytest.raises(ResolveConversationError):
             gql("query { viewer { login } }", {})
+
+
+class TestMergePr:
+    def test_success(self):
+        from voyager.core.merge_loop import _MERGE_MUTATION, merge_pr
+
+        def gql(query, variables):
+            assert query is _MERGE_MUTATION
+            assert variables == {"prId": "PR_1", "expectedHeadOid": HEAD}
+            return {"mergePullRequest": {"pullRequest": {"merged": True}}}
+
+        assert merge_pr(gql, "PR_1", HEAD) == ("merged", "")
+
+    def test_api_error_is_merge_failed_not_raise(self):
+        from voyager.core.merge_loop import merge_pr
+
+        def gql(query, variables):
+            raise ResolveConversationError("merge-loop GraphQL returned 1 error(s)")
+
+        action, msg = merge_pr(gql, "PR_1", HEAD)
+        assert action == "merge_failed"
+        assert "error" in msg
+
+    def test_unmerged_response_is_merge_failed(self):
+        from voyager.core.merge_loop import merge_pr
+
+        def gql(query, variables):
+            return {"mergePullRequest": {"pullRequest": {"merged": False}}}
+
+        assert merge_pr(gql, "PR_1", HEAD)[0] == "merge_failed"
+
+    def test_mutation_client_refuses_unknown_operation(self):
+        from voyager.core.merge_loop import make_merge_gql
+
+        gql = make_merge_gql("tok")
+        with pytest.raises(ResolveConversationError):
+            gql(
+                'mutation { closePullRequest(input: {pullRequestId: "x"}) { clientMutationId } }',
+                {},
+            )
