@@ -8,6 +8,20 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+### Added — Countdown merge loop
+
+- Added `vyg countdown merge-loop`, an autonomous rebase-merge loop for
+  agent-authored PRs. A PR is merged only when every deterministic condition
+  holds on the current head: author is the fixed agent identity, CI is fully
+  green, zero unresolved review threads, and the clearance readiness marker
+  reports Stage 3 for that exact head SHA. Any miss fails closed to a skip
+  with an audit reason; there is no human per-PR gate and no LLM gate. Reuses
+  the resolve-loop's allowlist ceiling, single-instance lock, per-run merge
+  cap, and redacted write-ahead audit trail. Includes default-off launchd
+  deployment templates (env/repos files, adaptive wrapper, plist) and the
+  VOY-1840 deployment SOP (VOY-1839)
+  ([#298](https://github.com/iterwheel/voyager/pull/298)).
+
 ## [0.8.2] — 2026-08-02
 
 ### Fixed
