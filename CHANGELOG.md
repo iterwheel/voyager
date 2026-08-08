@@ -8,6 +8,15 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+### Added — Merge-loop operator-configurable author allowlist
+
+- Added `VOYAGER_MERGE_EXTRA_AUTHORS`, an operator-local extension of the
+  merge-loop's author gate mirroring `VOYAGER_MERGE_EXTRA_REPOS`: built-in
+  agent author plus env-listed GitHub logins (GraphQL login form, e.g.
+  `dependabot`), fail-closed parsing, lowercase-normalized matching, resolved
+  once per run. With the variable unset, behavior is identical to v0.9.0
+  ([#301](https://github.com/iterwheel/voyager/pull/301)).
+
 ## [0.9.0] — 2026-08-08
 
 ### Added — Countdown merge loop
