@@ -961,7 +961,8 @@ auth, FastAPI webhook bridge, DeepSeek LLM adapter, rocket-factory
 pipeline state machine, SWM-1101 per-thread verdict pipeline. See
 `b2e4ca1` and prior history.
 
-[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.8.2...HEAD
+[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/iterwheel/voyager/compare/v0.8.2...v0.9.0
 [0.8.2]: https://github.com/iterwheel/voyager/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/iterwheel/voyager/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/iterwheel/voyager/compare/v0.7.3...v0.8.0
