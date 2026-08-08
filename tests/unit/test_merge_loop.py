@@ -563,9 +563,13 @@ class TestSnapshotsForRepo:
         assert (s.readiness_stage, s.readiness_head) == (None, None)
         assert should_merge(s) == "readiness_missing"
 
-    def test_truncated_comments_pagination_yields_readiness_missing_skip(self):
-        """Finding 2: hasNextPage=true with a null endCursor mid-scan must fail
-        closed to (None, None) — not return the partial page's readiness match."""
+    def test_truncated_comments_pagination_after_match_still_uses_match(self):
+        """Finding 1 (round 7): under first-match semantics (mirroring
+        GitHubApp.upsert_issue_comment()'s first-match PATCH target), a
+        readiness match found on the page already read is conclusively the
+        first match — truncated pagination (hasNextPage=true, null
+        endCursor) *after* that match does not discard it. This replaces the
+        old "last matching comment wins" expectation of (None, None)."""
 
         def gql(query, variables):
             if query is _BASE_FRESHNESS_QUERY:
@@ -604,8 +608,8 @@ class TestSnapshotsForRepo:
             raise AssertionError(f"unexpected query: {query[:40]}")
 
         (s,) = snapshots_for_repo(gql, "frankyxhl/fx_bin")
-        assert (s.readiness_stage, s.readiness_head) == (None, None)
-        assert should_merge(s) == "readiness_missing"
+        assert (s.readiness_stage, s.readiness_head) == (3, HEAD)
+        assert should_merge(s) == "ok"
 
 
 class TestThreadCountForPr:
@@ -693,9 +697,53 @@ class TestReadinessForPr:
 
         assert _readiness_for_pr(gql, "frankyxhl/fx_bin", 1) == (None, None)
 
-    def test_null_end_cursor_with_more_pages_returns_none_none(self):
-        """Finding 2: truncated pagination must fail closed, even if the page
-        already read carried a fresh, matching readiness comment."""
+    def test_null_end_cursor_with_no_match_yet_fails_closed(self):
+        """Finding 1 (round 7): under first-match semantics, a null endCursor
+        with hasNextPage still true only needs to fail closed when NO marker
+        comment has been found on the readable page(s) — an unreached later
+        page might have held one. (Superseded scenario: a match found on the
+        readable page before truncation is now trusted — see
+        test_match_found_before_truncation_is_trusted_not_discarded — because
+        it is, by pagination order, definitively the first match.)"""
+
+        def gql(query, variables):
+            return {
+                "repository": {
+                    "pullRequest": {
+                        "comments": {
+                            "pageInfo": {"hasNextPage": True, "endCursor": None},
+                            "nodes": [{"author": {"login": "someone"}, "body": "unrelated"}],
+                        }
+                    }
+                }
+            }
+
+        assert _readiness_for_pr(gql, "frankyxhl/fx_bin", 1) == (None, None)
+
+    def test_repeated_end_cursor_with_no_match_yet_fails_closed(self):
+        def gql(query, variables):
+            return {
+                "repository": {
+                    "pullRequest": {
+                        "comments": {
+                            "pageInfo": {"hasNextPage": True, "endCursor": "stuck"},
+                            "nodes": [{"author": {"login": "someone"}, "body": "unrelated"}],
+                        }
+                    }
+                }
+            }
+
+        assert _readiness_for_pr(gql, "frankyxhl/fx_bin", 1) == (None, None)
+
+    def test_match_found_before_truncation_is_trusted_not_discarded(self):
+        """Finding 1 (round 7): mirrors GitHubApp.upsert_issue_comment()
+        (voyager/core/github_app.py ~L816-846), which stops at the FIRST
+        marker match. A match found on an early page is conclusively the
+        first match regardless of what happens on later pages, so truncated
+        pagination *after* the match is irrelevant and must not discard it.
+        This replaces the old "last matching comment wins" test, which
+        expected (None, None) here because a later page could have held a
+        more-recent match that superseded this one."""
 
         def gql(query, variables):
             return {
@@ -709,16 +757,49 @@ class TestReadinessForPr:
                 }
             }
 
-        assert _readiness_for_pr(gql, "frankyxhl/fx_bin", 1) == (None, None)
+        assert _readiness_for_pr(gql, "frankyxhl/fx_bin", 1) == (3, HEAD)
 
-    def test_repeated_end_cursor_returns_none_none(self):
+    def test_duplicate_markers_first_fresh_wins_over_later_stale(self):
+        """GitHubApp.upsert_issue_comment() (voyager/core/github_app.py ~L816-846)
+        scans comments oldest-first and PATCHes the FIRST comment matching
+        (marker in body AND author == bot) — a later duplicate marker comment
+        (plausible leftover from older non-paginated upsert behavior) is never
+        touched again by the writer. The reader must trust that same first
+        comment, not whichever one happens to parse last."""
+        first_fresh = _readiness_comment(head="b" * 40)
+        later_stale_duplicate = _readiness_comment(head="c" * 40)
+
         def gql(query, variables):
             return {
                 "repository": {
                     "pullRequest": {
                         "comments": {
-                            "pageInfo": {"hasNextPage": True, "endCursor": "stuck"},
-                            "nodes": [_readiness_comment()],
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": [first_fresh, later_stale_duplicate],
+                        }
+                    }
+                }
+            }
+
+        assert _readiness_for_pr(gql, "frankyxhl/fx_bin", 1) == (3, "b" * 40)
+
+    def test_first_marker_unparseable_fails_closed_ignoring_later_parseable_duplicate(self):
+        """The first clearance-authored marker comment is the one upsert
+        updates; if it fails to parse (stage/head missing), fail closed
+        instead of falling through to a later, well-formed duplicate."""
+        first_unparseable = {
+            "author": {"login": "iterwheel-clearance"},
+            "body": "<!-- iterwheel:clearance-readiness -->\nmalformed, no stage or head",
+        }
+        later_parseable = _readiness_comment()
+
+        def gql(query, variables):
+            return {
+                "repository": {
+                    "pullRequest": {
+                        "comments": {
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": [first_unparseable, later_parseable],
                         }
                     }
                 }

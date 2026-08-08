@@ -377,13 +377,22 @@ def _base_behind_by(gql: GqlFn, repo: str, base_ref: str, number: int) -> int | 
 
 
 def _readiness_for_pr(gql: GqlFn, repo: str, number: int) -> tuple[int | None, str | None]:
-    """Paginated latest clearance-authored readiness; (None, None) on any read fault
-    (fail closed) — mirrors _unresolved_thread_count's cursor-repeat guard so a
-    stuck/repeating cursor cannot spin forever.
+    """Paginated FIRST clearance-authored readiness comment; (None, None) on any
+    read fault (fail closed) — mirrors _unresolved_thread_count's cursor-repeat
+    guard so a stuck/repeating cursor cannot spin forever.
+
+    Reads the FIRST matching comment, not the last, to mirror
+    GitHubApp.upsert_issue_comment() (voyager/core/github_app.py ~L816-846):
+    it scans issue_comments() oldest-first and PATCHes the first comment
+    where the marker is in the body AND the author is the bot — that
+    specific comment is the only one it ever updates again. With duplicate
+    markers (plausible from older non-paginated upsert behavior that could
+    create a second comment instead of finding the existing one), a stale
+    later duplicate must not outvote the comment the writer actually keeps
+    current. If the first marker comment fails to parse (stage/head
+    missing), fail closed rather than falling through to a later duplicate.
     """
     owner, name = repo.split("/", 1)
-    stage: int | None = None
-    head: str | None = None
     after: str | None = None
     seen_cursors: set[str] = set()
     while True:
@@ -402,12 +411,19 @@ def _readiness_for_pr(gql: GqlFn, repo: str, number: int) -> tuple[int | None, s
             author = ((c.get("author") or {}).get("login")) or ""
             if author not in CLEARANCE_BOT_LOGINS:
                 continue
-            parsed = parse_readiness(c.get("body") or "")
-            if parsed is not None:
-                stage, head = parsed  # last matching comment wins
+            body = c.get("body") or ""
+            if CLEARANCE_COMMENT_MARKER not in body:
+                continue
+            # First clearance-authored marker comment — the one upsert
+            # keeps current. Parse it or fail closed; never consider a
+            # later duplicate.
+            parsed = parse_readiness(body)
+            if parsed is None:
+                return None, None
+            return parsed
         page = comments.get("pageInfo") or {}
         if not page.get("hasNextPage"):
-            return stage, head
+            return None, None
         after = page.get("endCursor")
         if not after or after in seen_cursors:
             # Truncated: more pages exist but there's no cursor to reach them.
