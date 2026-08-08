@@ -11,6 +11,7 @@ from voyager.core.merge_loop import (
     _AGENT_PR_PAGE_QUERY,
     _PR_COMMENTS_QUERY,
     _PR_THREADS_QUERY,
+    ALLOWED_BASE_REFS,
     MERGE_ALLOWED_REPOS,
     MergeDecision,
     MergeLoopSummary,
@@ -139,6 +140,7 @@ def snap(**overrides) -> PrSnapshot:
         "unresolved_threads": 0,
         "readiness_stage": 3,
         "readiness_head": HEAD,
+        "base_ref": "main",
     }
     base.update(overrides)
     return PrSnapshot(**base)
@@ -162,6 +164,8 @@ class TestShouldMerge:
             ({"readiness_stage": None, "readiness_head": None}, "readiness_missing"),
             ({"readiness_stage": 2}, "readiness_not_ready"),
             ({"readiness_head": "b" * 40}, "readiness_stale_head"),
+            ({"base_ref": "release/1.x"}, "base_not_allowed"),
+            ({"base_ref": ""}, "base_not_allowed"),
         ],
     )
     def test_each_condition_fails_closed(self, overrides, reason):
@@ -170,13 +174,19 @@ class TestShouldMerge:
     def test_stage_4_ready_for_merge_also_ok(self):
         assert should_merge(snap(readiness_stage=4)) == "ok"
 
+    def test_allowed_base_refs_is_main_only(self):
+        assert frozenset({"main"}) == ALLOWED_BASE_REFS
 
-def _pr_node(number=1, author="ryosaeba1985", draft=False, checks="SUCCESS", head=HEAD):
+
+def _pr_node(
+    number=1, author="ryosaeba1985", draft=False, checks="SUCCESS", head=HEAD, base_ref="main"
+):
     return {
         "id": f"PR_{number}",
         "number": number,
         "isDraft": draft,
         "headRefOid": head,
+        "baseRefName": base_ref,
         "author": {"login": author},
         "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": checks}}}]},
     }
@@ -261,6 +271,14 @@ class TestSnapshotsForRepo:
         assert s.unresolved_threads == 0
         assert s.readiness_stage == 3
         assert s.readiness_head == HEAD
+        assert s.base_ref == "main"
+
+    def test_missing_base_ref_name_is_empty_string(self):
+        node = _pr_node()
+        del node["baseRefName"]
+        gql = _fake_gql([node], thread_pages={1: []}, comment_pages={1: [[]]})
+        (s,) = snapshots_for_repo(gql, "frankyxhl/fx_bin")
+        assert s.base_ref == ""
 
     def test_readiness_from_wrong_author_ignored(self):
         impostor = {"author": {"login": "someone"}, "body": READINESS_BODY}

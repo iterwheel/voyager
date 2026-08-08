@@ -32,6 +32,7 @@ REQUIRED_READINESS_STAGE = 3
 
 MERGE_ALLOWED_REPOS = frozenset({"iterwheel/voyager-sandbox"})
 _RAW_IDENTIFIER_REPOS = frozenset({"iterwheel/voyager-sandbox"})
+ALLOWED_BASE_REFS = frozenset({"main"})
 _EXTRA_REPOS_ENV = "VOYAGER_MERGE_EXTRA_REPOS"
 _REPO_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9._-]+$")
 
@@ -69,6 +70,7 @@ class PrSnapshot:
     unresolved_threads: int | None  # None = thread read failed (fail closed)
     readiness_stage: int | None  # parsed clearance readiness stage
     readiness_head: str | None  # head SHA the readiness comment was computed for
+    base_ref: str  # baseRefName; "" if missing (fail closed against ALLOWED_BASE_REFS)
 
 
 @dataclass(frozen=True)
@@ -159,6 +161,8 @@ def should_merge(s: PrSnapshot) -> str:
     """
     if s.author not in AGENT_PR_AUTHORS:
         return "not_agent_author"
+    if s.base_ref not in ALLOWED_BASE_REFS:
+        return "base_not_allowed"
     if s.is_draft:
         return "draft"
     if s.checks_state != "SUCCESS":
@@ -188,6 +192,7 @@ query AgentOpenPrs($owner: String!, $name: String!, $after: String) {
         number
         isDraft
         headRefOid
+        baseRefName
         author { login }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
       }
@@ -373,6 +378,7 @@ def snapshots_for_repo(gql: GqlFn, repo: str) -> list[PrSnapshot]:
             author = ((node.get("author") or {}).get("login")) or ""
             is_draft = bool(node.get("isDraft"))
             head_oid = str(node.get("headRefOid") or "")
+            base_ref = str(node.get("baseRefName") or "")
             rollup_nodes = ((node.get("commits") or {}).get("nodes")) or [{}]
             rollup = ((rollup_nodes[0].get("commit") or {}).get("statusCheckRollup")) or {}
             checks_state = rollup.get("state")
@@ -390,6 +396,7 @@ def snapshots_for_repo(gql: GqlFn, repo: str) -> list[PrSnapshot]:
                     unresolved_threads=threads,
                     readiness_stage=stage,
                     readiness_head=r_head,
+                    base_ref=base_ref,
                 )
             )
         page = conn.get("pageInfo") or {}
