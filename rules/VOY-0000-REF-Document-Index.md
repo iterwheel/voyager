@@ -51,6 +51,7 @@
 | 1837 | CHG | Clearance Webhook Fan out Dedupe | In Progress |
 | 1838 | CHG | Suppress Stale Clearance Verdict Writeback | In Progress |
 | 1839 | PRP | Countdown Merge Loop Autonomous Agent PR Merge | Draft |
+| 1840 | SOP | Countdown Merge Loop Launchd Deployment | Active |
 
 ---
 
