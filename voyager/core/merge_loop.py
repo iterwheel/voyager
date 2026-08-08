@@ -166,6 +166,12 @@ def should_merge(s: PrSnapshot) -> str:
     against a rebase merge landing on a base (main) that advanced past the
     commit the head's checks_state was computed against — expectedHeadOid
     only pins the PR head, not the base.
+
+    "base_moved_by_merge" is NOT a return value of this function — it is an
+    orchestration-level skip applied by run_merge_loop after this predicate
+    already said "ok", for a second PR in the same repo after an earlier
+    merge in the same run advanced main out from under this PR's cached
+    base_behind read.
     """
     if s.author not in AGENT_PR_AUTHORS:
         return "not_agent_author"
@@ -542,6 +548,17 @@ def run_merge_loop(
     merge_pr keeps returning merge_failed must still hit the cap. One
     repo's scan failure is recorded and the remaining repos still run.
 
+    Every snapshot's base_behind in a repo is read before this loop makes
+    any mutation, so once a merge succeeds in a repo, main has moved out
+    from under every other cached snapshot in that repo. At most one PR is
+    merged per repo per run: every remaining agent PR in that repo that
+    would otherwise reach the mutation is instead recorded as
+    ("skipped", "base_moved_by_merge") — an orchestration-level reason,
+    not one should_merge returns — and left for the next cycle's rescan.
+    Suppressed PRs never consume a cap slot. dry-run is unaffected (no
+    mutation ever moves the base); a merge_failed outcome does not move
+    the base either and must not suppress later candidates.
+
     *identity_gql* asserts the fixed machine identity (mirrors
     run_resolve_loop) BEFORE any repo is scanned — including in dry-run,
     since a wrong credential must abort there too, not only on live merges.
@@ -571,6 +588,12 @@ def run_merge_loop(
             continue
         repos_enumerated += 1
         prs_scanned += len(snapshots)
+        # base_behind on every snapshot in this repo was read BEFORE this
+        # loop's mutations. A successful merge moves main out from under
+        # every other cached snapshot in the same repo, so once one lands,
+        # the rest are stale reads and must wait for the next cycle's rescan
+        # rather than rebase-merge onto an untested base.
+        merged_in_repo = False
         for s in snapshots:
             if s.author not in AGENT_PR_AUTHORS:
                 continue  # never touched, never listed
@@ -581,6 +604,9 @@ def run_merge_loop(
             if approved >= max_merges:
                 capped = True
                 _record(MergeDecision(repo, s.number, "skipped", "capped"))
+                continue
+            if merged_in_repo:
+                _record(MergeDecision(repo, s.number, "skipped", "base_moved_by_merge"))
                 continue
             approved += 1
             if dry_run:
@@ -601,6 +627,8 @@ def run_merge_loop(
                     continue
             action, message = merge_pr(merge_gql, s.pr_id, s.head_oid)
             _record(MergeDecision(repo, s.number, action, message))
+            if action == "merged":
+                merged_in_repo = True
 
     return MergeLoopSummary(
         repos_scanned=tuple(allowed),

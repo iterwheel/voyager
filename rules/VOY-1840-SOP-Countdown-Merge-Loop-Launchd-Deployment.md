@@ -424,6 +424,11 @@ Before declaring the scheduled deployment complete, record:
   still consumes a cap slot (attempt-counting), so a canary run at
   `MERGE_MAX_MERGES=1` can be consumed entirely by a race; re-run or wait for
   the next cycle rather than assuming the cap means nothing merged.
+- At most one PR merges per repo per cycle: once a merge succeeds, every
+  other green PR in that repo is deferred to the next cycle as
+  `base_moved_by_merge` (its cached `base_behind` was read before main
+  moved). Batch landings across several agent PRs in one repo take one
+  cycle per PR by design — this is not a bug or a stuck loop.
 - The loop skips green PRs whose base advanced after their checks ran
   (`base_stale`) until the PR is rebased/re-checked — `expectedHeadOid` only
   guards the PR head, not the base. Enabling GitHub's "require branches up to
@@ -440,3 +445,4 @@ Before declaring the scheduled deployment complete, record:
 | 2026-08-08 | Add pitfalls: readiness-comment window (last 50), apply-time race consumes cap slot | Claude Code |
 | 2026-08-08 | Step 5 dry-run now sources `merge-loop.env` before invoking `vyg` directly, so operator-set `VOYAGER_MERGE_EXTRA_REPOS` reaches the process instead of ceiling-skipping `fx_bin`; corrected the readiness pitfall to describe paged-to-exhaustion comment reads (not a last-50 window), matching 14d2e9e | Claude Code |
 | 2026-08-08 | Add pitfall: `base_stale` skip when main advances after checks ran; recommend GitHub's "require branches up to date" required check as server-side defense in depth (Codex round-4 review) | Claude Code |
+| 2026-08-08 | Add pitfall: at most one PR merges per repo per cycle, rest deferred as `base_moved_by_merge` (Codex round-5 review) | Claude Code |

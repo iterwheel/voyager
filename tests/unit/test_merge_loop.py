@@ -901,6 +901,58 @@ class TestRunMergeLoop:
         assert len(merges) == 1
         assert summary.capped is True
 
+    def test_second_pr_suppressed_after_first_merge_succeeds(self, monkeypatch):
+        """Finding P2 round 5: a snapshot's base_behind is read before any
+        mutation. Once one merge lands in a repo, main has moved and every
+        other cached snapshot in that repo is stale — it must not be
+        rebase-merged onto an untested base this cycle."""
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        summary, merges = self._run(
+            [_green_pr(1), _green_pr(2)],
+            thread_pages={1: [], 2: []},
+            comment_pages=_readiness_pages(1, 2),
+            max_merges=3,
+        )
+        assert merges == ["PR_1"]
+        assert [(d.action, d.reason) for d in summary.decisions] == [
+            ("merged", ""),
+            ("skipped", "base_moved_by_merge"),
+        ]
+
+    def test_merge_failed_does_not_suppress_next_pr(self, monkeypatch):
+        """merge_failed does not move the base (the mutation never applied),
+        so it must not suppress the next candidate in the same repo."""
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        calls: list[str] = []
+
+        def merge_gql_fails(query, variables):
+            calls.append(variables["prId"])
+            return {"mergePullRequest": {"pullRequest": {"merged": False}}}
+
+        summary, _ = self._run(
+            [_green_pr(1), _green_pr(2)],
+            thread_pages={1: [], 2: []},
+            comment_pages=_readiness_pages(1, 2),
+            merge_gql=merge_gql_fails,
+            max_merges=2,
+        )
+        assert calls == ["PR_1", "PR_2"]
+        assert [d.action for d in summary.decisions] == ["merge_failed", "merge_failed"]
+
+    def test_dry_run_does_not_suppress(self, monkeypatch):
+        """would_merge never mutates GitHub, so the base never moves and
+        dry-run must list every green PR, not just the first."""
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        summary, merges = self._run(
+            [_green_pr(1), _green_pr(2)],
+            thread_pages={1: [], 2: []},
+            comment_pages=_readiness_pages(1, 2),
+            dry_run=True,
+            max_merges=3,
+        )
+        assert merges == []
+        assert [d.action for d in summary.decisions] == ["would_merge", "would_merge"]
+
     def test_audit_lines_written(self, monkeypatch, tmp_path):
         monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
         audit = tmp_path / "audit.jsonl"
