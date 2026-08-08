@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 from voyager.core.merge_loop import (
     _AGENT_PR_PAGE_QUERY,
     _BASE_FRESHNESS_QUERY,
+    _PR_BASE_QUERY,
     _PR_COMMENTS_QUERY,
     _PR_THREADS_QUERY,
     ALLOWED_BASE_REFS,
@@ -19,6 +20,7 @@ from voyager.core.merge_loop import (
     MergeLoopSummary,
     PrSnapshot,
     _base_behind_by,
+    _current_base_ref,
     _is_clearance_bot,
     _readiness_for_pr,
     _unresolved_thread_count,
@@ -215,14 +217,22 @@ def _identity_gql_ok(query, variables):
     return {"viewer": {"login": MACHINE_ACCOUNT}}
 
 
-def _fake_gql(pr_nodes, thread_pages=None, comment_pages=None, behind_by=0):
-    """Return a gql callable serving PR pages, thread pages, comment pages, and
-    base-freshness compares (default behindBy 0 — base is up to date).
+def _fake_gql(
+    pr_nodes, thread_pages=None, comment_pages=None, behind_by=0, current_base_ref="main"
+):
+    """Return a gql callable serving PR pages, thread pages, comment pages,
+    base-freshness compares (default behindBy 0 — base is up to date), and
+    the apply-time current-baseRefName read (default "main" — unchanged from
+    the snapshot, so happy-path tests are unaffected).
 
     behind_by may be a fixed int (every compare returns the same value) or a
     list consumed left-to-right across successive compares — e.g. [0, 2] for
     a snapshot-time read of 0 followed by an apply-time re-read of 2. The
-    last element repeats once the list is exhausted."""
+    last element repeats once the list is exhausted.
+
+    current_base_ref=None simulates an apply-time baseRefName read fault
+    (null pullRequest) — mirrors the null-ref/compare fault shape used for
+    behind_by faults."""
     thread_pages = thread_pages or {}
     comment_pages = comment_pages or {}
     behind_sequence = list(behind_by) if isinstance(behind_by, list) else None
@@ -234,6 +244,10 @@ def _fake_gql(pr_nodes, thread_pages=None, comment_pages=None, behind_by=0):
             else:
                 value = behind_by
             return {"repository": {"ref": {"compare": {"behindBy": value}}}}
+        if query is _PR_BASE_QUERY:
+            if current_base_ref is None:
+                return {"repository": {"pullRequest": None}}
+            return {"repository": {"pullRequest": {"baseRefName": current_base_ref}}}
         if query is _AGENT_PR_PAGE_QUERY:
             return {
                 "repository": {
@@ -959,6 +973,40 @@ class TestBaseBehindBy:
         assert _base_behind_by(gql, "frankyxhl/fx_bin", "main", 1) is None
 
 
+class TestCurrentBaseRef:
+    """_current_base_ref fails closed to None on any read fault, a missing
+    pullRequest, or a non-str baseRefName — a retargeted PR must never read
+    as unchanged (P2 round 14: expectedHeadOid pins only the head, so a base
+    retarget between the freshness read and mergePullRequest could land a
+    PR outside ALLOWED_BASE_REFS)."""
+
+    def test_returns_base_ref(self):
+        def gql(query, variables):
+            assert query is _PR_BASE_QUERY
+            assert variables == {"owner": "frankyxhl", "name": "fx_bin", "number": 1}
+            return {"repository": {"pullRequest": {"baseRefName": "main"}}}
+
+        assert _current_base_ref(gql, "frankyxhl/fx_bin", 1) == "main"
+
+    def test_read_failure_returns_none(self):
+        def gql(query, variables):
+            raise ResolveConversationError("boom")
+
+        assert _current_base_ref(gql, "frankyxhl/fx_bin", 1) is None
+
+    def test_null_pull_request_returns_none(self):
+        def gql(query, variables):
+            return {"repository": {"pullRequest": None}}
+
+        assert _current_base_ref(gql, "frankyxhl/fx_bin", 1) is None
+
+    def test_non_str_base_ref_returns_none(self):
+        def gql(query, variables):
+            return {"repository": {"pullRequest": {"baseRefName": None}}}
+
+        assert _current_base_ref(gql, "frankyxhl/fx_bin", 1) is None
+
+
 class TestMergeReadGqlWhitelist:
     def test_refuses_unknown_query(self):
         gql = make_merge_read_gql("tok")
@@ -1406,6 +1454,116 @@ class TestApplyTimeBaseFreshness:
             dry_run=True,
         )
         assert len(calls) == 1
+        assert summary.would_merge == 1
+
+
+class TestApplyTimeBaseRetarget:
+    """P2 round 14: a PR can be retargeted (base branch changed) after the
+    snapshot/apply-time freshness reads but before mergePullRequest.
+    expectedHeadOid pins only the head, and the freshness compare in
+    should_merge / the apply-time re-read both ran against the snapshot's
+    base_ref, so a retargeted release/maintenance PR could otherwise merge
+    outside ALLOWED_BASE_REFS. The live path re-reads baseRefName FIRST,
+    before the base_behind re-read."""
+
+    def test_retarget_at_apply_skips_with_no_mutation(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        audit = tmp_path / "audit.jsonl"
+        read = _fake_gql(
+            [_green_pr(1)],
+            thread_pages={1: []},
+            comment_pages=_readiness_pages(1),
+            current_base_ref="release/1.x",
+        )
+        calls: list[str] = []
+
+        def merge_gql(query, variables):
+            calls.append(variables["prId"])
+            return {"mergePullRequest": {"pullRequest": {"merged": True}}}
+
+        summary = run_merge_loop(
+            ["frankyxhl/fx_bin"],
+            read_gql=read,
+            merge_gql=merge_gql,
+            identity_gql=_identity_gql_ok,
+            audit_path=audit,
+        )
+        assert calls == []  # merge_pr never called — no mutation issued
+        (d,) = summary.decisions
+        assert (d.action, d.reason) == ("skipped", "base_retargeted_at_apply")
+        lines = [_json.loads(line) for line in audit.read_text().strip().splitlines()]
+        assert all(line["action"] != "merge_intent" for line in lines)
+
+    def test_apply_time_base_read_fault_skips_unreadable(self, monkeypatch):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        read = _fake_gql(
+            [_green_pr(1)],
+            thread_pages={1: []},
+            comment_pages=_readiness_pages(1),
+            current_base_ref=None,
+        )
+        calls: list[str] = []
+
+        def merge_gql(query, variables):
+            calls.append(variables["prId"])
+            return {"mergePullRequest": {"pullRequest": {"merged": True}}}
+
+        summary = run_merge_loop(
+            ["frankyxhl/fx_bin"],
+            read_gql=read,
+            merge_gql=merge_gql,
+            identity_gql=_identity_gql_ok,
+            audit_path=None,
+        )
+        assert calls == []
+        (d,) = summary.decisions
+        assert (d.action, d.reason) == ("skipped", "base_freshness_unreadable")
+
+    def test_unchanged_base_merge_proceeds(self, monkeypatch):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        read = _fake_gql(
+            [_green_pr(1)],
+            thread_pages={1: []},
+            comment_pages=_readiness_pages(1),
+            current_base_ref="main",
+        )
+        calls: list[str] = []
+
+        def merge_gql(query, variables):
+            calls.append(variables["prId"])
+            return {"mergePullRequest": {"pullRequest": {"merged": True}}}
+
+        summary = run_merge_loop(
+            ["frankyxhl/fx_bin"],
+            read_gql=read,
+            merge_gql=merge_gql,
+            identity_gql=_identity_gql_ok,
+            audit_path=None,
+        )
+        assert calls == ["PR_1"]
+        assert summary.merged == 1
+
+    def test_dry_run_never_calls_pr_base_query(self, monkeypatch):
+        """dry-run issues no mutation, so no apply-time re-read at all: the
+        current-base-ref query must never be called."""
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        inner = _fake_gql([_green_pr(1)], thread_pages={1: []}, comment_pages=_readiness_pages(1))
+        calls: list[str] = []
+
+        def spy(query, variables):
+            if query is _PR_BASE_QUERY:
+                calls.append(query)
+            return inner(query, variables)
+
+        summary = run_merge_loop(
+            ["frankyxhl/fx_bin"],
+            read_gql=spy,
+            merge_gql=lambda q, v: {"mergePullRequest": {"pullRequest": {"merged": True}}},
+            identity_gql=_identity_gql_ok,
+            audit_path=None,
+            dry_run=True,
+        )
+        assert calls == []
         assert summary.would_merge == 1
 
 

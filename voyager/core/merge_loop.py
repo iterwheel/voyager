@@ -167,15 +167,19 @@ def should_merge(s: PrSnapshot) -> str:
     commit the head's checks_state was computed against — expectedHeadOid
     only pins the PR head, not the base.
 
-    "base_moved_by_merge" and "base_stale_at_apply" are NOT return values of
-    this function — both are orchestration-level skips applied by
-    run_merge_loop after this predicate already said "ok".
+    "base_moved_by_merge", "base_stale_at_apply", and "base_retargeted_at_apply"
+    are NOT return values of this function — all three are orchestration-level
+    skips applied by run_merge_loop after this predicate already said "ok".
     "base_moved_by_merge" fires for a second PR in the same repo after an
     earlier merge in the same run advanced main out from under this PR's
     cached base_behind read. "base_stale_at_apply" fires when run_merge_loop
     re-reads base_behind immediately before merging (closing the
     snapshot->mutation race window) and finds main has advanced since the
-    snapshot in this function's base_stale check above.
+    snapshot in this function's base_stale check above. "base_retargeted_at_apply"
+    (P2 round 14) fires when that same apply-time re-read finds the PR's
+    baseRefName no longer matches the snapshot's base_ref (or is no longer
+    in ALLOWED_BASE_REFS) — a retarget after the snapshot, which
+    expectedHeadOid alone cannot guard against.
     """
     if s.author not in AGENT_PR_AUTHORS:
         return "not_agent_author"
@@ -269,8 +273,28 @@ query($owner: String!, $name: String!, $baseRef: String!, $prHeadRef: String!) {
 }
 """
 
+# Apply-time retarget guard (P2 round 14): a PR's base branch can be changed
+# after the snapshot/apply-time freshness reads but before mergePullRequest.
+# expectedHeadOid pins only the head, so this is the only read that catches
+# a retarget onto a base outside ALLOWED_BASE_REFS.
+_PR_BASE_QUERY = """
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      baseRefName
+    }
+  }
+}
+"""
+
 _ALLOWED_MERGE_READ_QUERIES = frozenset(
-    {_AGENT_PR_PAGE_QUERY, _PR_THREADS_QUERY, _PR_COMMENTS_QUERY, _BASE_FRESHNESS_QUERY}
+    {
+        _AGENT_PR_PAGE_QUERY,
+        _PR_THREADS_QUERY,
+        _PR_COMMENTS_QUERY,
+        _BASE_FRESHNESS_QUERY,
+        _PR_BASE_QUERY,
+    }
 )
 
 
@@ -378,6 +402,22 @@ def _base_behind_by(gql: GqlFn, repo: str, base_ref: str, number: int) -> int | 
         return None
     behind_by = compare.get("behindBy")
     return behind_by if isinstance(behind_by, int) else None
+
+
+def _current_base_ref(gql: GqlFn, repo: str, number: int) -> str | None:
+    """This PR's current baseRefName; None on any read fault, a missing
+    pullRequest, or a non-str baseRefName (fail closed) — a PR retargeted
+    since the snapshot must never read as unchanged."""
+    owner, name = repo.split("/", 1)
+    try:
+        data = gql(_PR_BASE_QUERY, {"owner": owner, "name": name, "number": number})
+    except ResolveConversationError:
+        return None
+    pull = ((data or {}).get("repository") or {}).get("pullRequest")
+    if pull is None:
+        return None
+    base_ref = pull.get("baseRefName")
+    return base_ref if isinstance(base_ref, str) else None
 
 
 def _is_clearance_bot(author: dict[str, Any] | None) -> bool:
@@ -615,20 +655,29 @@ def run_merge_loop(
     the base either and must not suppress later candidates.
 
     LIVE path only: immediately before the write-ahead intent + merge_pr
-    call, base_behind is re-read (_base_behind_by) rather than trusting the
-    snapshot taken earlier in this same repo's scan. This narrows the
-    snapshot->mutation window (during which main could advance from a human
-    push, a release bot, or another loop instance) from the length of a
-    full repo scan down to seconds. The residual race is accepted: the
-    mergePullRequest mutation has no expectedBaseOid, only expectedHeadOid,
-    so no read-then-mutate window can be closed to zero from this side
-    alone; GitHub's "require branches up to date" branch protection
-    (VOY-1840), when enabled, is the server-side backstop. A None re-read
-    records ("skipped", "base_freshness_unreadable"); a positive re-read
-    records ("skipped", "base_stale_at_apply") — distinct from should_merge's
-    snapshot-time "base_stale" — and neither writes an intent audit line nor
-    consumes a cap slot. dry-run never mutates, so it skips this re-read
-    entirely and reports the snapshot value as-is.
+    call, baseRefName is re-read first (_current_base_ref), then base_behind
+    is re-read (_base_behind_by) — rather than trusting the snapshot taken
+    earlier in this same repo's scan. This narrows the snapshot->mutation
+    window (during which main could advance from a human push, a release
+    bot, or another loop instance — or the PR itself could be retargeted to
+    a different base) from the length of a full repo scan down to seconds.
+    The residual race is accepted: the mergePullRequest mutation has no
+    expectedBaseOid and no base-ref guard at all, only expectedHeadOid, so
+    no read-then-mutate window can be closed to zero from this side alone;
+    GitHub's "require branches up to date" branch protection (VOY-1840),
+    when enabled, is the server-side backstop. A None baseRefName re-read
+    records ("skipped", "base_freshness_unreadable") (reused — it is a
+    base-state read fault like the base_behind one); a re-read that no
+    longer matches the snapshot's base_ref, or that isn't in
+    ALLOWED_BASE_REFS, records ("skipped", "base_retargeted_at_apply")
+    (P2 round 14) — checked BEFORE the base_behind re-read, which then runs
+    against the freshly-verified current base. A None base_behind re-read
+    also records ("skipped", "base_freshness_unreadable"); a positive
+    re-read records ("skipped", "base_stale_at_apply") — distinct from
+    should_merge's snapshot-time "base_stale". None of these apply-time
+    skips write an intent audit line or consume a cap slot. dry-run never
+    mutates, so it skips both re-reads entirely and reports the snapshot
+    value as-is.
 
     *identity_gql* asserts the fixed machine identity (mirrors
     run_resolve_loop) BEFORE any repo is scanned — including in dry-run,
@@ -680,17 +729,30 @@ def run_merge_loop(
                 _record(MergeDecision(repo, s.number, "skipped", "base_moved_by_merge"))
                 continue
             if not dry_run:
-                # Apply-time re-read (P2 round 9): base_behind on this
-                # snapshot was read during snapshots_for_repo, but main can
-                # advance between that read and the mutation below (a human
-                # push, a release bot, another loop instance).
+                # Apply-time re-read (P2 round 9, extended round 14):
+                # base_behind AND baseRefName on this snapshot were both read
+                # during snapshots_for_repo, but either can change between
+                # that read and the mutation below (a human push, a release
+                # bot, another loop instance, or a PR retarget).
                 # expectedHeadOid only pins the PR head; the merge mutation
-                # has no expectedBaseOid. Re-read immediately before the
-                # write-ahead intent + merge_pr call to narrow the window to
-                # seconds. Placed before approved += 1 so a skip here does
-                # not consume a cap slot. dry-run never mutates, so it skips
-                # this re-read entirely and reports the snapshot value.
-                fresh = _base_behind_by(read_gql, repo, s.base_ref, s.number)
+                # has no expectedBaseOid and no base-ref guard at all, so a
+                # PR retargeted onto a base outside ALLOWED_BASE_REFS after
+                # the snapshot would otherwise merge there undetected.
+                # Re-read baseRefName FIRST — before trusting a base_behind
+                # compare against a base that may no longer be the one
+                # should_merge validated. Both re-reads sit immediately
+                # before the write-ahead intent + merge_pr call, before
+                # approved += 1, so a skip here consumes no cap slot.
+                # dry-run never mutates, so it skips both re-reads entirely
+                # and reports the snapshot value.
+                current_base = _current_base_ref(read_gql, repo, s.number)
+                if current_base is None:
+                    _record(MergeDecision(repo, s.number, "skipped", "base_freshness_unreadable"))
+                    continue
+                if current_base != s.base_ref or current_base not in ALLOWED_BASE_REFS:
+                    _record(MergeDecision(repo, s.number, "skipped", "base_retargeted_at_apply"))
+                    continue
+                fresh = _base_behind_by(read_gql, repo, current_base, s.number)
                 if fresh is None:
                     _record(MergeDecision(repo, s.number, "skipped", "base_freshness_unreadable"))
                     continue

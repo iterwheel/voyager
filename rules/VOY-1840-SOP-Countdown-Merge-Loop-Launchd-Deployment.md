@@ -454,6 +454,11 @@ Before declaring the scheduled deployment complete, record:
   the strict up-to-date requirement above is a mandatory pre-live gate: with
   it enabled, GitHub itself refuses a merge whose head was not checked
   against the current base.
+- The live path also re-reads the PR's current `baseRefName` immediately
+  before merging, BEFORE the base-freshness re-read above
+  (`base_retargeted_at_apply`): `expectedHeadOid` pins only the PR head, so
+  a PR retargeted onto a release/maintenance branch after the snapshot
+  could otherwise rebase-merge outside `ALLOWED_BASE_REFS` undetected.
 
 ---
 
@@ -470,3 +475,4 @@ Before declaring the scheduled deployment complete, record:
 | 2026-08-08 | Step 5 dry-run snippets' else branch now ends in `false` (both multi-line and one-line forms) so a sourcing failure exits nonzero instead of 0, matching the fail-closed intent for preflight/`set -e` callers (Codex round-7 review) | Claude Code |
 | 2026-08-08 | Add pitfall: live path re-reads base freshness immediately before merging (`base_stale_at_apply`), narrowing but not eliminating the base-advance race since the merge mutation has no `expectedBaseOid` (Codex round-9 review) | Claude Code |
 | 2026-08-08 | Promote "Require branches to be up to date before merging" (`strict_required_status_checks_policy: true`) from optional pitfall recommendation to REQUIRED entry in the Target-repo GitHub Configuration table (Codex round-10 review) | Claude Code |
+| 2026-08-08 | Add pitfall: live path re-reads current `baseRefName` immediately before merging, before the base-freshness re-read (`base_retargeted_at_apply`) — a PR retargeted after the snapshot could otherwise merge outside `ALLOWED_BASE_REFS` since `expectedHeadOid` pins only the head (Codex round-14 review) | Claude Code |
