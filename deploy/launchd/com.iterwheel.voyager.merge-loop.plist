@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.iterwheel.voyager.merge-loop</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>exec /Users/frank/.voyager/bin/merge-loop-adaptive.sh</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- The adaptive wrapper is a self-scheduling daemon (VOY-1839): it never
+       exits, choosing its own sleep between runs (fast when the last run saw
+       candidate threads, slow when idle). KeepAlive restarts it after a crash;
+       there is no StartInterval because the wrapper owns the cadence. -->
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/frank/Library/Logs/voyager/merge-loop.out.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/frank/Library/Logs/voyager/merge-loop.err.log</string>
+
+  <key>Umask</key>
+  <integer>63</integer>
+</dict>
+</plist>
