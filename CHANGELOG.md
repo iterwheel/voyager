@@ -6,6 +6,8 @@ versions follow [SemVer](https://semver.org/spec/v2.0.0.html). Pre-1.0,
 minor bumps may still include surface-level breaking changes — see each
 release note for the explicit migration path.
 
+## [Unreleased]
+
 ## [0.9.0] — 2026-08-08
 
 ### Added — Countdown merge loop
