@@ -249,6 +249,7 @@ def merge_loop(
     )
     from voyager.core.resolve_conversation import (
         ResolveConversationError,
+        make_github_gql,
         read_machine_token,
     )
 
@@ -257,11 +258,17 @@ def merge_loop(
         token = read_machine_token()
         read_gql = make_merge_read_gql(token)
         merge_gql = make_merge_gql(token)
+        # The merge-loop's own clients are operation-whitelisted and refuse the
+        # viewer query, so identity is asserted through the same broader,
+        # allowlisted client run_resolve_loop already uses for this (mirrors
+        # prior art exactly rather than widening the merge clients' whitelist).
+        identity_gql = make_github_gql(token)
         with single_instance_lock(DEFAULT_MERGE_LOCK_PATH):
             summary = run_merge_loop(
                 requested,
                 read_gql=read_gql,
                 merge_gql=merge_gql,
+                identity_gql=identity_gql,
                 max_merges=max_merges,
                 dry_run=dry_run,
             )

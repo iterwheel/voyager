@@ -21,7 +21,10 @@ import httpx
 
 from voyager.bots.clearance.constants import CLEARANCE_COMMENT_MARKER
 from voyager.core.countdown_loop import gate_repos
-from voyager.core.resolve_conversation import ResolveConversationError
+from voyager.core.resolve_conversation import (
+    ResolveConversationError,
+    _assert_machine_identity,
+)
 
 AGENT_PR_AUTHORS = frozenset({"ryosaeba1985"})
 CLEARANCE_BOT_LOGINS = frozenset({"iterwheel-clearance", "iterwheel-clearance[bot]"})
@@ -187,7 +190,6 @@ query AgentOpenPrs($owner: String!, $name: String!, $after: String) {
         headRefOid
         author { login }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
-        comments(last: 50) { nodes { author { login } body } }
       }
     }
   }
@@ -207,7 +209,27 @@ query PrThreadStates($owner: String!, $name: String!, $number: Int!, $after: Str
 }
 """
 
-_ALLOWED_MERGE_READ_QUERIES = frozenset({_AGENT_PR_PAGE_QUERY, _PR_THREADS_QUERY})
+# Issue comments, paginated. The clearance bot UPSERTS its readiness comment in
+# place, so on a busy PR that comment can sit on an early page while dozens of
+# later comments arrive after it — a fixed-size window (e.g. `comments(last:
+# 50)` on the PR node) would eventually push it out and permanently skip a
+# green PR. This query is read to exhaustion instead.
+_PR_COMMENTS_QUERY = """
+query PrComments($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      comments(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes { author { login } body }
+      }
+    }
+  }
+}
+"""
+
+_ALLOWED_MERGE_READ_QUERIES = frozenset(
+    {_AGENT_PR_PAGE_QUERY, _PR_THREADS_QUERY, _PR_COMMENTS_QUERY}
+)
 
 
 def _default_client_factory() -> httpx.Client:
@@ -286,18 +308,42 @@ def _unresolved_thread_count(gql: GqlFn, repo: str, number: int) -> int | None:
         seen_cursors.add(after)
 
 
-def _readiness_from_comments(node: dict[str, Any]) -> tuple[int | None, str | None]:
-    """Latest clearance-authored readiness (stage, head); (None, None) if absent."""
+def _readiness_for_pr(gql: GqlFn, repo: str, number: int) -> tuple[int | None, str | None]:
+    """Paginated latest clearance-authored readiness; (None, None) on any read fault
+    (fail closed) — mirrors _unresolved_thread_count's cursor-repeat guard so a
+    stuck/repeating cursor cannot spin forever.
+    """
+    owner, name = repo.split("/", 1)
     stage: int | None = None
     head: str | None = None
-    for c in ((node.get("comments") or {}).get("nodes")) or []:
-        author = ((c.get("author") or {}).get("login")) or ""
-        if author not in CLEARANCE_BOT_LOGINS:
-            continue
-        parsed = parse_readiness(c.get("body") or "")
-        if parsed is not None:
-            stage, head = parsed  # last matching comment wins
-    return stage, head
+    after: str | None = None
+    seen_cursors: set[str] = set()
+    while True:
+        try:
+            data = gql(
+                _PR_COMMENTS_QUERY,
+                {"owner": owner, "name": name, "number": number, "after": after},
+            )
+        except ResolveConversationError:
+            return None, None
+        pull = ((data or {}).get("repository") or {}).get("pullRequest")
+        if pull is None:
+            return None, None
+        comments = pull.get("comments") or {}
+        for c in comments.get("nodes") or []:
+            author = ((c.get("author") or {}).get("login")) or ""
+            if author not in CLEARANCE_BOT_LOGINS:
+                continue
+            parsed = parse_readiness(c.get("body") or "")
+            if parsed is not None:
+                stage, head = parsed  # last matching comment wins
+        page = comments.get("pageInfo") or {}
+        if not page.get("hasNextPage"):
+            return stage, head
+        after = page.get("endCursor")
+        if not after or after in seen_cursors:
+            return stage, head
+        seen_cursors.add(after)
 
 
 def snapshots_for_repo(gql: GqlFn, repo: str) -> list[PrSnapshot]:
@@ -326,7 +372,7 @@ def snapshots_for_repo(gql: GqlFn, repo: str) -> list[PrSnapshot]:
             checks_state = rollup.get("state")
             cheap_green = author in AGENT_PR_AUTHORS and not is_draft and checks_state == "SUCCESS"
             threads = _unresolved_thread_count(gql, repo, number) if cheap_green else None
-            stage, r_head = _readiness_from_comments(node)
+            stage, r_head = _readiness_for_pr(gql, repo, number) if cheap_green else (None, None)
             snapshots.append(
                 PrSnapshot(
                     pr_id=str(node.get("id") or ""),
@@ -413,6 +459,7 @@ def run_merge_loop(
     *,
     read_gql: GqlFn,
     merge_gql: GqlFn,
+    identity_gql: GqlFn,
     max_merges: int = 3,
     dry_run: bool = False,
     audit_path: Path | None = DEFAULT_MERGE_AUDIT_PATH,
@@ -425,9 +472,14 @@ def run_merge_loop(
     ATTEMPTS (would_merge in dry-run), not successes: a live run where
     merge_pr keeps returning merge_failed must still hit the cap. One
     repo's scan failure is recorded and the remaining repos still run.
+
+    *identity_gql* asserts the fixed machine identity (mirrors
+    run_resolve_loop) BEFORE any repo is scanned — including in dry-run,
+    since a wrong credential must abort there too, not only on live merges.
     """
     timestamp = (now or _utc_now)()
     allowed, skipped = gate_repos(requested_repos, ceiling=merge_allowed_repos())
+    _assert_machine_identity(identity_gql)
     decisions: list[MergeDecision] = []
     errors: list[tuple[str, str]] = []
     prs_scanned = 0
@@ -474,6 +526,27 @@ def run_merge_loop(
             if dry_run:
                 _record(MergeDecision(repo, s.number, "would_merge"), s.head_oid)
                 continue
+            if audit_path is not None:
+                # Write-ahead intent: if the audit sink can't be written, abort
+                # BEFORE mutating GitHub — no unattended merge without a trail.
+                try:
+                    _append_merge_audit(
+                        audit_path,
+                        {
+                            "ts": timestamp,
+                            "repo": repo,
+                            "pr": s.number,
+                            "action": "merge_intent",
+                            "reason": "",
+                            "head": s.head_oid,
+                            "dry_run": dry_run,
+                        },
+                    )
+                except OSError:
+                    # In-memory only: _record would retry the same broken sink
+                    # and raise again. Fail closed without merging.
+                    decisions.append(MergeDecision(repo, s.number, "skipped", "audit_unwritable"))
+                    continue
             action, message = merge_pr(merge_gql, s.pr_id, s.head_oid)
             _record(MergeDecision(repo, s.number, action, message), s.head_oid)
 

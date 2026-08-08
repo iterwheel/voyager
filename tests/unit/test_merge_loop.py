@@ -9,11 +9,13 @@ from typer.testing import CliRunner
 
 from voyager.core.merge_loop import (
     _AGENT_PR_PAGE_QUERY,
+    _PR_COMMENTS_QUERY,
     _PR_THREADS_QUERY,
     MERGE_ALLOWED_REPOS,
     MergeDecision,
     MergeLoopSummary,
     PrSnapshot,
+    _readiness_for_pr,
     make_merge_read_gql,
     merge_allowed_repos,
     parse_readiness,
@@ -21,7 +23,7 @@ from voyager.core.merge_loop import (
     should_merge,
     snapshots_for_repo,
 )
-from voyager.core.resolve_conversation import ResolveConversationError
+from voyager.core.resolve_conversation import MACHINE_ACCOUNT, ResolveConversationError
 
 
 class TestMergeAllowedRepos:
@@ -168,9 +170,7 @@ class TestShouldMerge:
         assert should_merge(snap(readiness_stage=4)) == "ok"
 
 
-def _pr_node(
-    number=1, author="ryosaeba1985", draft=False, checks="SUCCESS", head=HEAD, comments=()
-):
+def _pr_node(number=1, author="ryosaeba1985", draft=False, checks="SUCCESS", head=HEAD):
     return {
         "id": f"PR_{number}",
         "number": number,
@@ -178,13 +178,29 @@ def _pr_node(
         "headRefOid": head,
         "author": {"login": author},
         "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": checks}}}]},
-        "comments": {"nodes": list(comments)},
     }
 
 
-def _fake_gql(pr_nodes, thread_pages=None):
-    """Return a gql callable serving one PR page and optional thread pages."""
+def _readiness_comment(head=HEAD):
+    return {
+        "author": {"login": "iterwheel-clearance"},
+        "body": READINESS_BODY.replace("a96782f4e41207e63d63bd552f9b4fa5399c7eb8", head),
+    }
+
+
+def _readiness_pages(*numbers):
+    """comment_pages entry for each *numbers*: one page holding a fresh readiness comment."""
+    return {n: [[_readiness_comment()]] for n in numbers}
+
+
+def _identity_gql_ok(query, variables):
+    return {"viewer": {"login": MACHINE_ACCOUNT}}
+
+
+def _fake_gql(pr_nodes, thread_pages=None, comment_pages=None):
+    """Return a gql callable serving PR pages, thread pages, and comment pages."""
     thread_pages = thread_pages or {}
+    comment_pages = comment_pages or {}
 
     def gql(query, variables):
         if query is _AGENT_PR_PAGE_QUERY:
@@ -208,6 +224,25 @@ def _fake_gql(pr_nodes, thread_pages=None):
                     }
                 }
             }
+        if query is _PR_COMMENTS_QUERY:
+            pages = comment_pages.get(variables["number"], [[]])
+            after = variables.get("after")
+            idx = 0 if after is None else int(after)
+            nodes = pages[idx] if idx < len(pages) else []
+            has_next = idx + 1 < len(pages)
+            return {
+                "repository": {
+                    "pullRequest": {
+                        "comments": {
+                            "pageInfo": {
+                                "hasNextPage": has_next,
+                                "endCursor": str(idx + 1) if has_next else None,
+                            },
+                            "nodes": nodes,
+                        }
+                    }
+                }
+            }
         raise AssertionError(f"unexpected query: {query[:40]}")
 
     return gql
@@ -215,13 +250,10 @@ def _fake_gql(pr_nodes, thread_pages=None):
 
 class TestSnapshotsForRepo:
     def test_green_agent_pr_snapshot(self):
-        readiness = {
-            "author": {"login": "iterwheel-clearance"},
-            "body": READINESS_BODY.replace("a96782f4e41207e63d63bd552f9b4fa5399c7eb8", HEAD),
-        }
         gql = _fake_gql(
-            [_pr_node(comments=[readiness])],
+            [_pr_node()],
             thread_pages={1: [{"isResolved": True}]},
+            comment_pages={1: [[_readiness_comment()]]},
         )
         (s,) = snapshots_for_repo(gql, "frankyxhl/fx_bin")
         assert s.author == "ryosaeba1985"
@@ -231,11 +263,11 @@ class TestSnapshotsForRepo:
 
     def test_readiness_from_wrong_author_ignored(self):
         impostor = {"author": {"login": "someone"}, "body": READINESS_BODY}
-        gql = _fake_gql([_pr_node(comments=[impostor])], thread_pages={1: []})
+        gql = _fake_gql([_pr_node()], thread_pages={1: []}, comment_pages={1: [[impostor]]})
         (s,) = snapshots_for_repo(gql, "frankyxhl/fx_bin")
         assert s.readiness_stage is None
 
-    def test_non_agent_pr_skips_thread_fetch(self):
+    def test_non_agent_pr_skips_thread_and_comments_fetch(self):
         calls = []
         inner = _fake_gql([_pr_node(author="frankyxhl")])
 
@@ -245,7 +277,9 @@ class TestSnapshotsForRepo:
 
         (s,) = snapshots_for_repo(spy, "frankyxhl/fx_bin")
         assert s.unresolved_threads is None
+        assert s.readiness_stage is None
         assert _PR_THREADS_QUERY not in calls
+        assert _PR_COMMENTS_QUERY not in calls
 
     def test_unresolved_threads_counted(self):
         gql = _fake_gql(
@@ -301,6 +335,17 @@ class TestSnapshotsForRepo:
                         }
                     }
                 }
+            if query is _PR_COMMENTS_QUERY:
+                return {
+                    "repository": {
+                        "pullRequest": {
+                            "comments": {
+                                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                "nodes": [],
+                            }
+                        }
+                    }
+                }
             raise AssertionError(f"unexpected query: {query[:40]}")
 
         snapshots = snapshots_for_repo(gql, "frankyxhl/fx_bin")
@@ -351,6 +396,17 @@ class TestSnapshotsForRepo:
                             }
                         }
                     }
+            if query is _PR_COMMENTS_QUERY:
+                return {
+                    "repository": {
+                        "pullRequest": {
+                            "comments": {
+                                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                "nodes": [],
+                            }
+                        }
+                    }
+                }
             raise AssertionError(f"unexpected query: {query[:40]}")
 
         (snapshot,) = snapshots_for_repo(gql, "frankyxhl/fx_bin")
@@ -373,11 +429,107 @@ class TestSnapshotsForRepo:
             if query is _PR_THREADS_QUERY:
                 call_count[0] += 1
                 raise ResolveConversationError("simulated thread read failure")
+            if query is _PR_COMMENTS_QUERY:
+                return {
+                    "repository": {
+                        "pullRequest": {
+                            "comments": {
+                                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                "nodes": [],
+                            }
+                        }
+                    }
+                }
             raise AssertionError(f"unexpected query: {query[:40]}")
 
         (snapshot,) = snapshots_for_repo(gql, "frankyxhl/fx_bin")
         assert snapshot.unresolved_threads is None
         assert call_count[0] == 1  # thread query was attempted
+
+    def test_comments_read_failure_yields_readiness_missing_skip(self):
+        """A busy PR whose readiness comments page fails to read must fail closed to
+        (None, None), which should_merge then reports as readiness_missing — never a
+        silent 'ok'."""
+
+        def gql(query, variables):
+            if query is _AGENT_PR_PAGE_QUERY:
+                return {
+                    "repository": {
+                        "pullRequests": {
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": [_pr_node()],
+                        }
+                    }
+                }
+            if query is _PR_THREADS_QUERY:
+                return {
+                    "repository": {
+                        "pullRequest": {
+                            "reviewThreads": {
+                                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                "nodes": [{"isResolved": True}],
+                            }
+                        }
+                    }
+                }
+            if query is _PR_COMMENTS_QUERY:
+                raise ResolveConversationError("simulated comments read failure")
+            raise AssertionError(f"unexpected query: {query[:40]}")
+
+        (s,) = snapshots_for_repo(gql, "frankyxhl/fx_bin")
+        assert (s.readiness_stage, s.readiness_head) == (None, None)
+        assert should_merge(s) == "readiness_missing"
+
+
+class TestReadinessForPr:
+    """_readiness_for_pr pages ALL issue comments; the clearance bot upserts its
+    readiness comment in place, so on a busy PR it can sit on an early page while
+    dozens of later comments arrive after it."""
+
+    def test_marker_on_first_of_two_pages_is_still_found(self):
+        page1 = [_readiness_comment()]
+        # Many later, unrelated comments pushed the marker off a fixed-size window
+        # in the old (comments last: 50) implementation — pagination must not.
+        page2 = [{"author": {"login": "someone"}, "body": f"comment {i}"} for i in range(60)]
+
+        def gql(query, variables):
+            assert query is _PR_COMMENTS_QUERY
+            after = variables.get("after")
+            if after is None:
+                return {
+                    "repository": {
+                        "pullRequest": {
+                            "comments": {
+                                "pageInfo": {"hasNextPage": True, "endCursor": "c2"},
+                                "nodes": page1,
+                            }
+                        }
+                    }
+                }
+            return {
+                "repository": {
+                    "pullRequest": {
+                        "comments": {
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": page2,
+                        }
+                    }
+                }
+            }
+
+        assert _readiness_for_pr(gql, "frankyxhl/fx_bin", 1) == (3, HEAD)
+
+    def test_read_failure_returns_none_none(self):
+        def gql(query, variables):
+            raise ResolveConversationError("boom")
+
+        assert _readiness_for_pr(gql, "frankyxhl/fx_bin", 1) == (None, None)
+
+    def test_null_pull_request_returns_none_none(self):
+        def gql(query, variables):
+            return {"repository": {"pullRequest": None}}
+
+        assert _readiness_for_pr(gql, "frankyxhl/fx_bin", 1) == (None, None)
 
 
 class TestMergeReadGqlWhitelist:
@@ -428,16 +580,22 @@ class TestMergePr:
 
 
 def _green_pr(number):
-    readiness = {
-        "author": {"login": "iterwheel-clearance"},
-        "body": READINESS_BODY.replace("a96782f4e41207e63d63bd552f9b4fa5399c7eb8", HEAD),
-    }
-    return _pr_node(number=number, comments=[readiness])
+    return _pr_node(number=number)
 
 
 class TestRunMergeLoop:
-    def _run(self, pr_nodes, thread_pages=None, merge_gql=None, **kwargs):
-        read = _fake_gql(pr_nodes, thread_pages=thread_pages or {})
+    def _run(
+        self,
+        pr_nodes,
+        thread_pages=None,
+        comment_pages=None,
+        merge_gql=None,
+        identity_gql=None,
+        **kwargs,
+    ):
+        read = _fake_gql(
+            pr_nodes, thread_pages=thread_pages or {}, comment_pages=comment_pages or {}
+        )
         merges: list[str] = []
 
         if merge_gql is None:
@@ -450,6 +608,7 @@ class TestRunMergeLoop:
             ["frankyxhl/fx_bin"],
             read_gql=read,
             merge_gql=merge_gql,
+            identity_gql=identity_gql or _identity_gql_ok,
             audit_path=None,
             **kwargs,
         )
@@ -463,13 +622,20 @@ class TestRunMergeLoop:
 
     def test_green_agent_pr_merges(self, monkeypatch):
         monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
-        summary, merges = self._run([_green_pr(1)], thread_pages={1: []})
+        summary, merges = self._run(
+            [_green_pr(1)], thread_pages={1: []}, comment_pages=_readiness_pages(1)
+        )
         assert merges == ["PR_1"]
         assert summary.merged == 1
 
     def test_dry_run_issues_no_mutation(self, monkeypatch):
         monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
-        summary, merges = self._run([_green_pr(1)], thread_pages={1: []}, dry_run=True)
+        summary, merges = self._run(
+            [_green_pr(1)],
+            thread_pages={1: []},
+            comment_pages=_readiness_pages(1),
+            dry_run=True,
+        )
         assert merges == []
         assert summary.would_merge == 1
 
@@ -491,6 +657,7 @@ class TestRunMergeLoop:
         summary, merges = self._run(
             [_green_pr(1), _green_pr(2)],
             thread_pages={1: [], 2: []},
+            comment_pages=_readiness_pages(1, 2),
             max_merges=1,
         )
         assert len(merges) == 1
@@ -499,17 +666,27 @@ class TestRunMergeLoop:
     def test_audit_lines_written(self, monkeypatch, tmp_path):
         monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
         audit = tmp_path / "audit.jsonl"
-        read = _fake_gql([_green_pr(1)], thread_pages={1: []})
+        read = _fake_gql([_green_pr(1)], thread_pages={1: []}, comment_pages=_readiness_pages(1))
 
         def merge_gql(query, variables):
             return {"mergePullRequest": {"pullRequest": {"merged": True}}}
 
-        run_merge_loop(["frankyxhl/fx_bin"], read_gql=read, merge_gql=merge_gql, audit_path=audit)
-        (line,) = audit.read_text().strip().splitlines()
-        record = _json.loads(line)
-        assert record["action"] == "merged"
-        assert record["pr"] == 1
-        assert record["repo"] == "frankyxhl/fx_bin"
+        run_merge_loop(
+            ["frankyxhl/fx_bin"],
+            read_gql=read,
+            merge_gql=merge_gql,
+            identity_gql=_identity_gql_ok,
+            audit_path=audit,
+        )
+        intent_line, outcome_line = audit.read_text().strip().splitlines()
+        intent = _json.loads(intent_line)
+        outcome = _json.loads(outcome_line)
+        assert intent["action"] == "merge_intent"
+        assert intent["pr"] == 1
+        assert intent["repo"] == "frankyxhl/fx_bin"
+        assert outcome["action"] == "merged"
+        assert outcome["pr"] == 1
+        assert outcome["repo"] == "frankyxhl/fx_bin"
 
     def test_merge_failed_path_consumes_cap(self, monkeypatch):
         monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
@@ -524,6 +701,7 @@ class TestRunMergeLoop:
         summary, _ = self._run(
             [_green_pr(1), _green_pr(2)],
             thread_pages={1: [], 2: []},
+            comment_pages=_readiness_pages(1, 2),
             merge_gql=merge_gql_fails,
             max_merges=1,
         )
@@ -543,19 +721,25 @@ class TestRunMergeLoop:
     def test_merge_failed_recorded_in_audit(self, monkeypatch, tmp_path):
         monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
         audit = tmp_path / "audit.jsonl"
-        read = _fake_gql([_green_pr(1)], thread_pages={1: []})
+        read = _fake_gql([_green_pr(1)], thread_pages={1: []}, comment_pages=_readiness_pages(1))
 
         def merge_gql(query, variables):
             return {"mergePullRequest": {"pullRequest": {"merged": False}}}
 
         summary = run_merge_loop(
-            ["frankyxhl/fx_bin"], read_gql=read, merge_gql=merge_gql, audit_path=audit
+            ["frankyxhl/fx_bin"],
+            read_gql=read,
+            merge_gql=merge_gql,
+            identity_gql=_identity_gql_ok,
+            audit_path=audit,
         )
-        (line,) = audit.read_text().strip().splitlines()
-        record = _json.loads(line)
-        assert record["action"] == "merge_failed"
-        assert record["pr"] == 1
-        assert record["repo"] == "frankyxhl/fx_bin"
+        intent_line, outcome_line = audit.read_text().strip().splitlines()
+        intent = _json.loads(intent_line)
+        outcome = _json.loads(outcome_line)
+        assert intent["action"] == "merge_intent"
+        assert outcome["action"] == "merge_failed"
+        assert outcome["pr"] == 1
+        assert outcome["repo"] == "frankyxhl/fx_bin"
         assert summary.merged == 0
         assert len(summary.decisions) == 1
 
@@ -569,6 +753,7 @@ class TestRunMergeLoop:
             ["frankyxhl/fx_bin"],
             read_gql=failing_gql,
             merge_gql=lambda query, variables: {},
+            identity_gql=_identity_gql_ok,
             audit_path=None,
         )
         assert summary.systemic_failure is True
@@ -585,6 +770,103 @@ class TestRunMergeLoop:
         summary, _ = self._run([_green_pr(1)], thread_pages={1: []})
         assert summary.repos_scanned == ()
         assert summary.systemic_failure is False
+
+
+class TestAuditIntent:
+    """Finding B: write an intent audit line before mutating; if it can't be
+    written, fail closed and never merge."""
+
+    def test_unwritable_audit_blocks_merge(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        audit = tmp_path / "audit.jsonl"
+        read = _fake_gql([_green_pr(1)], thread_pages={1: []}, comment_pages=_readiness_pages(1))
+        calls: list[str] = []
+
+        def merge_gql(query, variables):
+            calls.append(variables["prId"])
+            return {"mergePullRequest": {"pullRequest": {"merged": True}}}
+
+        def _boom(*_a, **_k):
+            raise OSError("disk full")
+
+        import voyager.core.merge_loop as ml_mod
+
+        monkeypatch.setattr(ml_mod, "_append_merge_audit", _boom)
+
+        summary = run_merge_loop(
+            ["frankyxhl/fx_bin"],
+            read_gql=read,
+            merge_gql=merge_gql,
+            identity_gql=_identity_gql_ok,
+            audit_path=audit,
+        )
+        assert calls == []  # merge_pr was never called — no mutation issued
+        (d,) = summary.decisions
+        assert (d.action, d.reason) == ("skipped", "audit_unwritable")
+
+    def test_no_audit_path_skips_intent_write_and_still_merges(self, monkeypatch):
+        # audit_path=None (as in most tests here) is the "no audit contract to
+        # honor" case: intent write is skipped and merge proceeds normally.
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        read = _fake_gql([_green_pr(1)], thread_pages={1: []}, comment_pages=_readiness_pages(1))
+        calls: list[str] = []
+
+        def merge_gql(query, variables):
+            calls.append(variables["prId"])
+            return {"mergePullRequest": {"pullRequest": {"merged": True}}}
+
+        summary = run_merge_loop(
+            ["frankyxhl/fx_bin"],
+            read_gql=read,
+            merge_gql=merge_gql,
+            identity_gql=_identity_gql_ok,
+            audit_path=None,
+        )
+        assert calls == ["PR_1"]
+        assert summary.merged == 1
+
+
+class TestIdentityGate:
+    """Finding C: mirror run_resolve_loop's hard machine-identity gate."""
+
+    def test_wrong_identity_aborts_before_any_merge(self, monkeypatch):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        read = _fake_gql([_green_pr(1)], thread_pages={1: []}, comment_pages=_readiness_pages(1))
+        calls: list[str] = []
+
+        def merge_gql(query, variables):
+            calls.append(variables["prId"])
+            return {"mergePullRequest": {"pullRequest": {"merged": True}}}
+
+        def wrong_identity_gql(query, variables):
+            return {"viewer": {"login": "ryosaeba1985"}}  # not the machine account
+
+        with pytest.raises(ResolveConversationError):
+            run_merge_loop(
+                ["frankyxhl/fx_bin"],
+                read_gql=read,
+                merge_gql=merge_gql,
+                identity_gql=wrong_identity_gql,
+                audit_path=None,
+            )
+        assert calls == []  # zero merge mutations issued
+
+    def test_dry_run_still_asserts_identity(self, monkeypatch):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        read = _fake_gql([_green_pr(1)], thread_pages={1: []}, comment_pages=_readiness_pages(1))
+
+        def wrong_identity_gql(query, variables):
+            return {"viewer": {"login": "someone-else"}}
+
+        with pytest.raises(ResolveConversationError):
+            run_merge_loop(
+                ["frankyxhl/fx_bin"],
+                read_gql=read,
+                merge_gql=lambda query, variables: {},
+                identity_gql=wrong_identity_gql,
+                dry_run=True,
+                audit_path=None,
+            )
 
 
 class TestCli:
