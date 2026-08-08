@@ -396,6 +396,13 @@ Before declaring the scheduled deployment complete, record:
   or PR text.
 - Do not bypass `scripts/build_wheel.sh`; direct `uv build` can miss build
   commit metadata.
+- The readiness scan reads only the last 50 PR comments; on a very busy PR
+  the clearance readiness comment can fall outside that window, and the PR
+  is skipped fail-closed as `readiness_missing` until clearance re-posts.
+- An apply-time race (`expectedHeadOid` mismatch) records `merge_failed` and
+  still consumes a cap slot (attempt-counting), so a canary run at
+  `MERGE_MAX_MERGES=1` can be consumed entirely by a race; re-run or wait for
+  the next cycle rather than assuming the cap means nothing merged.
 
 ---
 
@@ -404,3 +411,4 @@ Before declaring the scheduled deployment complete, record:
 | Date | Change | By |
 |------|--------|----|
 | 2026-08-08 | Initial version | Claude Code |
+| 2026-08-08 | Add pitfalls: readiness-comment window (last 50), apply-time race consumes cap slot | Claude Code |
