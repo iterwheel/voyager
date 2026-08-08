@@ -241,19 +241,22 @@ if source /Users/frank/.voyager/merge-loop.env; then
 else
   set +a
   echo "FAIL-CLOSED: cannot source merge-loop.env — fix the env file first" >&2
+  false
 fi
 ```
 
 One-line equivalent:
 
 ```bash
-set -a; if source /Users/frank/.voyager/merge-loop.env; then set +a; /Users/frank/.voyager/.venv/bin/vyg countdown merge-loop --repos /Users/frank/.voyager/merge-loop.repos --dry-run --json; else set +a; echo "FAIL-CLOSED: cannot source merge-loop.env — fix the env file first" >&2; fi
+set -a; if source /Users/frank/.voyager/merge-loop.env; then set +a; /Users/frank/.voyager/.venv/bin/vyg countdown merge-loop --repos /Users/frank/.voyager/merge-loop.repos --dry-run --json; else set +a; echo "FAIL-CLOSED: cannot source merge-loop.env — fix the env file first" >&2; false; fi
 ```
 
 A missing, unreadable, or broken env file must abort the dry-run (mirroring
 the adaptive wrapper's fail-closed source guard) — running `vyg` anyway would
 leave `VOYAGER_MERGE_EXTRA_REPOS` unset and the gate would pass vacuously
-against the sandbox only.
+against the sandbox only. The trailing `false` makes the block's exit status
+nonzero on sourcing failure, so preflight scripts and `set -e` callers must
+treat it as a failed gate rather than a silent no-op.
 
 The dry-run must not write merge mutations. Treat any systemic failure,
 credential error, predicate error, unexpected repository skip, or surprising
@@ -458,3 +461,4 @@ Before declaring the scheduled deployment complete, record:
 | 2026-08-08 | Add pitfall: `base_stale` skip when main advances after checks ran; recommend GitHub's "require branches up to date" required check as server-side defense in depth (Codex round-4 review) | Claude Code |
 | 2026-08-08 | Add pitfall: at most one PR merges per repo per cycle, rest deferred as `base_moved_by_merge` (Codex round-5 review) | Claude Code |
 | 2026-08-08 | Step 5 dry-run snippets fail closed when `merge-loop.env` cannot be sourced — `vyg` no longer runs with an unset ceiling on a broken env file (Codex round-6 review) | Claude Code |
+| 2026-08-08 | Step 5 dry-run snippets' else branch now ends in `false` (both multi-line and one-line forms) so a sourcing failure exits nonzero instead of 0, matching the fail-closed intent for preflight/`set -e` callers (Codex round-7 review) | Claude Code |
