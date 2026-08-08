@@ -216,13 +216,23 @@ def _identity_gql_ok(query, variables):
 
 def _fake_gql(pr_nodes, thread_pages=None, comment_pages=None, behind_by=0):
     """Return a gql callable serving PR pages, thread pages, comment pages, and
-    base-freshness compares (default behindBy 0 — base is up to date)."""
+    base-freshness compares (default behindBy 0 — base is up to date).
+
+    behind_by may be a fixed int (every compare returns the same value) or a
+    list consumed left-to-right across successive compares — e.g. [0, 2] for
+    a snapshot-time read of 0 followed by an apply-time re-read of 2. The
+    last element repeats once the list is exhausted."""
     thread_pages = thread_pages or {}
     comment_pages = comment_pages or {}
+    behind_sequence = list(behind_by) if isinstance(behind_by, list) else None
 
     def gql(query, variables):
         if query is _BASE_FRESHNESS_QUERY:
-            return {"repository": {"ref": {"compare": {"behindBy": behind_by}}}}
+            if behind_sequence is not None:
+                value = behind_sequence.pop(0) if len(behind_sequence) > 1 else behind_sequence[0]
+            else:
+                value = behind_by
+            return {"repository": {"ref": {"compare": {"behindBy": value}}}}
         if query is _AGENT_PR_PAGE_QUERY:
             return {
                 "repository": {
@@ -1007,10 +1017,14 @@ class TestRunMergeLoop:
         comment_pages=None,
         merge_gql=None,
         identity_gql=None,
+        behind_by=0,
         **kwargs,
     ):
         read = _fake_gql(
-            pr_nodes, thread_pages=thread_pages or {}, comment_pages=comment_pages or {}
+            pr_nodes,
+            thread_pages=thread_pages or {},
+            comment_pages=comment_pages or {},
+            behind_by=behind_by,
         )
         merges: list[str] = []
 
@@ -1283,6 +1297,115 @@ class TestRunMergeLoop:
         summary, _ = self._run([_green_pr(1)], thread_pages={1: []})
         assert summary.repos_scanned == ()
         assert summary.systemic_failure is False
+
+
+class TestApplyTimeBaseFreshness:
+    """Finding P2 round 9: _base_behind_by is read once in snapshots_for_repo;
+    main can advance between that read and merge_pr (human push, release
+    bot, another loop instance). expectedHeadOid only pins the PR head, so
+    the live path re-reads base_behind immediately before the write-ahead
+    intent + merge_pr call. dry-run issues no mutation, so it must not
+    re-read — the snapshot value is what's reported."""
+
+    def test_apply_time_base_advance_skips_with_no_mutation(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        audit = tmp_path / "audit.jsonl"
+        read = _fake_gql(
+            [_green_pr(1)],
+            thread_pages={1: []},
+            comment_pages=_readiness_pages(1),
+            behind_by=[0, 2],
+        )
+        calls: list[str] = []
+
+        def merge_gql(query, variables):
+            calls.append(variables["prId"])
+            return {"mergePullRequest": {"pullRequest": {"merged": True}}}
+
+        summary = run_merge_loop(
+            ["frankyxhl/fx_bin"],
+            read_gql=read,
+            merge_gql=merge_gql,
+            identity_gql=_identity_gql_ok,
+            audit_path=audit,
+        )
+        assert calls == []  # merge_pr never called — no mutation issued
+        (d,) = summary.decisions
+        assert (d.action, d.reason) == ("skipped", "base_stale_at_apply")
+        lines = [_json.loads(line) for line in audit.read_text().strip().splitlines()]
+        assert all(line["action"] != "merge_intent" for line in lines)
+
+    def test_apply_time_read_failure_skips_unreadable(self, monkeypatch):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        read = _fake_gql(
+            [_green_pr(1)],
+            thread_pages={1: []},
+            comment_pages=_readiness_pages(1),
+            behind_by=[0, None],
+        )
+        calls: list[str] = []
+
+        def merge_gql(query, variables):
+            calls.append(variables["prId"])
+            return {"mergePullRequest": {"pullRequest": {"merged": True}}}
+
+        summary = run_merge_loop(
+            ["frankyxhl/fx_bin"],
+            read_gql=read,
+            merge_gql=merge_gql,
+            identity_gql=_identity_gql_ok,
+            audit_path=None,
+        )
+        assert calls == []
+        (d,) = summary.decisions
+        assert (d.action, d.reason) == ("skipped", "base_freshness_unreadable")
+
+    def test_apply_time_reread_still_fresh_merge_proceeds(self, monkeypatch):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        read = _fake_gql(
+            [_green_pr(1)],
+            thread_pages={1: []},
+            comment_pages=_readiness_pages(1),
+            behind_by=[0, 0],
+        )
+        calls: list[str] = []
+
+        def merge_gql(query, variables):
+            calls.append(variables["prId"])
+            return {"mergePullRequest": {"pullRequest": {"merged": True}}}
+
+        summary = run_merge_loop(
+            ["frankyxhl/fx_bin"],
+            read_gql=read,
+            merge_gql=merge_gql,
+            identity_gql=_identity_gql_ok,
+            audit_path=None,
+        )
+        assert calls == ["PR_1"]
+        assert summary.merged == 1
+
+    def test_dry_run_freshness_query_called_once_per_pr(self, monkeypatch):
+        """dry-run issues no mutation, so no apply-time re-read: the
+        base-freshness query runs exactly once (snapshot time only)."""
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        inner = _fake_gql([_green_pr(1)], thread_pages={1: []}, comment_pages=_readiness_pages(1))
+        calls: list[str] = []
+
+        def spy(query, variables):
+            if query is _BASE_FRESHNESS_QUERY:
+                calls.append(query)
+            return inner(query, variables)
+
+        summary = run_merge_loop(
+            ["frankyxhl/fx_bin"],
+            read_gql=spy,
+            merge_gql=lambda q, v: {"mergePullRequest": {"pullRequest": {"merged": True}}},
+            identity_gql=_identity_gql_ok,
+            audit_path=None,
+            dry_run=True,
+        )
+        assert len(calls) == 1
+        assert summary.would_merge == 1
 
 
 class TestAuditIntent:

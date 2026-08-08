@@ -448,6 +448,10 @@ Before declaring the scheduled deployment complete, record:
   guards the PR head, not the base. Enabling GitHub's "require branches up to
   date before merging" required-check setting on the target repo gives the
   same guarantee server-side (defense in depth, recommended).
+- The live path re-reads base freshness immediately before merging
+  (`base_stale_at_apply`), narrowing but not eliminating the base-advance
+  race — the merge mutation has no `expectedBaseOid` — so "require branches
+  up to date" remains the necessary server-side backstop.
 
 ---
 
@@ -462,3 +466,4 @@ Before declaring the scheduled deployment complete, record:
 | 2026-08-08 | Add pitfall: at most one PR merges per repo per cycle, rest deferred as `base_moved_by_merge` (Codex round-5 review) | Claude Code |
 | 2026-08-08 | Step 5 dry-run snippets fail closed when `merge-loop.env` cannot be sourced — `vyg` no longer runs with an unset ceiling on a broken env file (Codex round-6 review) | Claude Code |
 | 2026-08-08 | Step 5 dry-run snippets' else branch now ends in `false` (both multi-line and one-line forms) so a sourcing failure exits nonzero instead of 0, matching the fail-closed intent for preflight/`set -e` callers (Codex round-7 review) | Claude Code |
+| 2026-08-08 | Add pitfall: live path re-reads base freshness immediately before merging (`base_stale_at_apply`), narrowing but not eliminating the base-advance race since the merge mutation has no `expectedBaseOid` (Codex round-9 review) | Claude Code |
