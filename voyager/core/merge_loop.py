@@ -67,6 +67,7 @@ class PrSnapshot:
     is_draft: bool
     head_oid: str
     checks_state: str | None  # statusCheckRollup.state; None = missing/unreadable
+    base_behind: int | None  # commits PR head is behind base tip; None = unreadable (fail closed)
     unresolved_threads: int | None  # None = thread read failed (fail closed)
     readiness_stage: int | None  # parsed clearance readiness stage
     readiness_head: str | None  # head SHA the readiness comment was computed for
@@ -153,11 +154,18 @@ def parse_readiness(body: str) -> tuple[int, str] | None:
 
 
 def should_merge(s: PrSnapshot) -> str:
-    """Deterministic merge predicate. Returns "ok" or a stable skip reason.
+    """Deterministic merge predicate. Returns "ok" or a stable skip reason:
+    not_agent_author | base_not_allowed | draft | checks_not_green |
+    base_freshness_unreadable | base_stale | threads_unreadable |
+    threads_unresolved | readiness_missing | readiness_not_ready |
+    readiness_stale_head.
 
     Order matters only for reporting; every condition is independently
     fail-closed. Stage >= REQUIRED_READINESS_STAGE accepts both
-    "3 - Ready for approval" and "4 - Ready for merge".
+    "3 - Ready for approval" and "4 - Ready for merge". base_behind guards
+    against a rebase merge landing on a base (main) that advanced past the
+    commit the head's checks_state was computed against — expectedHeadOid
+    only pins the PR head, not the base.
     """
     if s.author not in AGENT_PR_AUTHORS:
         return "not_agent_author"
@@ -167,6 +175,10 @@ def should_merge(s: PrSnapshot) -> str:
         return "draft"
     if s.checks_state != "SUCCESS":
         return "checks_not_green"
+    if s.base_behind is None:
+        return "base_freshness_unreadable"
+    if s.base_behind > 0:
+        return "base_stale"
     if s.unresolved_threads is None:
         return "threads_unreadable"
     if s.unresolved_threads > 0:
@@ -232,8 +244,23 @@ query PrComments($owner: String!, $name: String!, $number: Int!, $after: String)
 }
 """
 
+# behindBy = commits the PR head is behind the base tip. prHeadRef must be the
+# synthetic refs/pull/<number>/head ref in the BASE repo, not a plain branch
+# name — that also works for fork PRs, whose head branch doesn't exist here.
+_BASE_FRESHNESS_QUERY = """
+query($owner: String!, $name: String!, $baseRef: String!, $prHeadRef: String!) {
+  repository(owner: $owner, name: $name) {
+    ref(qualifiedName: $baseRef) {
+      compare(headRef: $prHeadRef) {
+        behindBy
+      }
+    }
+  }
+}
+"""
+
 _ALLOWED_MERGE_READ_QUERIES = frozenset(
-    {_AGENT_PR_PAGE_QUERY, _PR_THREADS_QUERY, _PR_COMMENTS_QUERY}
+    {_AGENT_PR_PAGE_QUERY, _PR_THREADS_QUERY, _PR_COMMENTS_QUERY, _BASE_FRESHNESS_QUERY}
 )
 
 
@@ -316,6 +343,33 @@ def _unresolved_thread_count(gql: GqlFn, repo: str, number: int) -> int | None:
         seen_cursors.add(after)
 
 
+def _base_behind_by(gql: GqlFn, repo: str, base_ref: str, number: int) -> int | None:
+    """Commits the PR head is behind the base branch tip; None on any read
+    fault, a null ref/compare, or a non-int behindBy (fail closed) — a base
+    that advanced since checks ran must never read as fresh."""
+    owner, name = repo.split("/", 1)
+    try:
+        data = gql(
+            _BASE_FRESHNESS_QUERY,
+            {
+                "owner": owner,
+                "name": name,
+                "baseRef": base_ref,
+                "prHeadRef": f"refs/pull/{number}/head",
+            },
+        )
+    except ResolveConversationError:
+        return None
+    ref = ((data or {}).get("repository") or {}).get("ref")
+    if ref is None:
+        return None
+    compare = ref.get("compare")
+    if compare is None:
+        return None
+    behind_by = compare.get("behindBy")
+    return behind_by if isinstance(behind_by, int) else None
+
+
 def _readiness_for_pr(gql: GqlFn, repo: str, number: int) -> tuple[int | None, str | None]:
     """Paginated latest clearance-authored readiness; (None, None) on any read fault
     (fail closed) — mirrors _unresolved_thread_count's cursor-repeat guard so a
@@ -383,6 +437,7 @@ def snapshots_for_repo(gql: GqlFn, repo: str) -> list[PrSnapshot]:
             rollup = ((rollup_nodes[0].get("commit") or {}).get("statusCheckRollup")) or {}
             checks_state = rollup.get("state")
             cheap_green = author in AGENT_PR_AUTHORS and not is_draft and checks_state == "SUCCESS"
+            base_behind = _base_behind_by(gql, repo, base_ref, number) if cheap_green else None
             threads = _unresolved_thread_count(gql, repo, number) if cheap_green else None
             stage, r_head = _readiness_for_pr(gql, repo, number) if cheap_green else (None, None)
             snapshots.append(
@@ -393,6 +448,7 @@ def snapshots_for_repo(gql: GqlFn, repo: str) -> list[PrSnapshot]:
                     is_draft=is_draft,
                     head_oid=head_oid,
                     checks_state=checks_state,
+                    base_behind=base_behind,
                     unresolved_threads=threads,
                     readiness_stage=stage,
                     readiness_head=r_head,

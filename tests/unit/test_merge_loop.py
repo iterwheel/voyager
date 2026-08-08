@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 
 from voyager.core.merge_loop import (
     _AGENT_PR_PAGE_QUERY,
+    _BASE_FRESHNESS_QUERY,
     _PR_COMMENTS_QUERY,
     _PR_THREADS_QUERY,
     ALLOWED_BASE_REFS,
@@ -16,6 +17,7 @@ from voyager.core.merge_loop import (
     MergeDecision,
     MergeLoopSummary,
     PrSnapshot,
+    _base_behind_by,
     _readiness_for_pr,
     _unresolved_thread_count,
     make_merge_read_gql,
@@ -137,6 +139,7 @@ def snap(**overrides) -> PrSnapshot:
         "is_draft": False,
         "head_oid": HEAD,
         "checks_state": "SUCCESS",
+        "base_behind": 0,
         "unresolved_threads": 0,
         "readiness_stage": 3,
         "readiness_head": HEAD,
@@ -159,6 +162,8 @@ class TestShouldMerge:
             ({"checks_state": "FAILURE"}, "checks_not_green"),
             ({"checks_state": "PENDING"}, "checks_not_green"),
             ({"checks_state": None}, "checks_not_green"),
+            ({"base_behind": None}, "base_freshness_unreadable"),
+            ({"base_behind": 2}, "base_stale"),
             ({"unresolved_threads": None}, "threads_unreadable"),
             ({"unresolved_threads": 2}, "threads_unresolved"),
             ({"readiness_stage": None, "readiness_head": None}, "readiness_missing"),
@@ -208,12 +213,15 @@ def _identity_gql_ok(query, variables):
     return {"viewer": {"login": MACHINE_ACCOUNT}}
 
 
-def _fake_gql(pr_nodes, thread_pages=None, comment_pages=None):
-    """Return a gql callable serving PR pages, thread pages, and comment pages."""
+def _fake_gql(pr_nodes, thread_pages=None, comment_pages=None, behind_by=0):
+    """Return a gql callable serving PR pages, thread pages, comment pages, and
+    base-freshness compares (default behindBy 0 — base is up to date)."""
     thread_pages = thread_pages or {}
     comment_pages = comment_pages or {}
 
     def gql(query, variables):
+        if query is _BASE_FRESHNESS_QUERY:
+            return {"repository": {"ref": {"compare": {"behindBy": behind_by}}}}
         if query is _AGENT_PR_PAGE_QUERY:
             return {
                 "repository": {
@@ -272,6 +280,7 @@ class TestSnapshotsForRepo:
         assert s.readiness_stage == 3
         assert s.readiness_head == HEAD
         assert s.base_ref == "main"
+        assert s.base_behind == 0
 
     def test_missing_base_ref_name_is_empty_string(self):
         node = _pr_node()
@@ -297,8 +306,55 @@ class TestSnapshotsForRepo:
         (s,) = snapshots_for_repo(spy, "frankyxhl/fx_bin")
         assert s.unresolved_threads is None
         assert s.readiness_stage is None
+        assert s.base_behind is None
         assert _PR_THREADS_QUERY not in calls
         assert _PR_COMMENTS_QUERY not in calls
+        assert _BASE_FRESHNESS_QUERY not in calls
+
+    def test_base_compare_read_failure_yields_base_freshness_unreadable_skip(self):
+        """A cheap-green PR whose base-freshness compare fails to read must fail
+        closed to base_behind=None, which should_merge reports as
+        base_freshness_unreadable — never a silent 'ok' on an unverified base."""
+
+        def gql(query, variables):
+            if query is _BASE_FRESHNESS_QUERY:
+                raise ResolveConversationError("simulated compare read failure")
+            if query is _AGENT_PR_PAGE_QUERY:
+                return {
+                    "repository": {
+                        "pullRequests": {
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": [_pr_node()],
+                        }
+                    }
+                }
+            if query is _PR_THREADS_QUERY:
+                return {
+                    "repository": {
+                        "pullRequest": {
+                            "reviewThreads": {
+                                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                "nodes": [],
+                            }
+                        }
+                    }
+                }
+            if query is _PR_COMMENTS_QUERY:
+                return {
+                    "repository": {
+                        "pullRequest": {
+                            "comments": {
+                                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                "nodes": [_readiness_comment()],
+                            }
+                        }
+                    }
+                }
+            raise AssertionError(f"unexpected query: {query[:40]}")
+
+        (s,) = snapshots_for_repo(gql, "frankyxhl/fx_bin")
+        assert s.base_behind is None
+        assert should_merge(s) == "base_freshness_unreadable"
 
     def test_unresolved_threads_counted(self):
         gql = _fake_gql(
@@ -321,6 +377,8 @@ class TestSnapshotsForRepo:
         pr2 = _pr_node(number=2)
 
         def gql(query, variables):
+            if query is _BASE_FRESHNESS_QUERY:
+                return {"repository": {"ref": {"compare": {"behindBy": 0}}}}
             if query is _AGENT_PR_PAGE_QUERY:
                 after = variables.get("after")
                 if after is None:
@@ -376,6 +434,8 @@ class TestSnapshotsForRepo:
         """Thread pagination: two pages with unresolved threads sum correctly."""
 
         def gql(query, variables):
+            if query is _BASE_FRESHNESS_QUERY:
+                return {"repository": {"ref": {"compare": {"behindBy": 0}}}}
             if query is _AGENT_PR_PAGE_QUERY:
                 return {
                     "repository": {
@@ -436,6 +496,8 @@ class TestSnapshotsForRepo:
         call_count = [0]
 
         def gql(query, variables):
+            if query is _BASE_FRESHNESS_QUERY:
+                return {"repository": {"ref": {"compare": {"behindBy": 0}}}}
             if query is _AGENT_PR_PAGE_QUERY:
                 return {
                     "repository": {
@@ -471,6 +533,8 @@ class TestSnapshotsForRepo:
         silent 'ok'."""
 
         def gql(query, variables):
+            if query is _BASE_FRESHNESS_QUERY:
+                return {"repository": {"ref": {"compare": {"behindBy": 0}}}}
             if query is _AGENT_PR_PAGE_QUERY:
                 return {
                     "repository": {
@@ -504,6 +568,8 @@ class TestSnapshotsForRepo:
         closed to (None, None) — not return the partial page's readiness match."""
 
         def gql(query, variables):
+            if query is _BASE_FRESHNESS_QUERY:
+                return {"repository": {"ref": {"compare": {"behindBy": 0}}}}
             if query is _AGENT_PR_PAGE_QUERY:
                 return {
                     "repository": {
@@ -659,6 +725,49 @@ class TestReadinessForPr:
             }
 
         assert _readiness_for_pr(gql, "frankyxhl/fx_bin", 1) == (None, None)
+
+
+class TestBaseBehindBy:
+    """_base_behind_by fails closed to None on any read fault, a null ref/compare,
+    or a non-int behindBy — a stale/wrong value here would let a rebase merge
+    land on an untested base while checks_state still reads SUCCESS."""
+
+    def test_returns_behind_by(self):
+        def gql(query, variables):
+            assert query is _BASE_FRESHNESS_QUERY
+            assert variables == {
+                "owner": "frankyxhl",
+                "name": "fx_bin",
+                "baseRef": "main",
+                "prHeadRef": "refs/pull/1/head",
+            }
+            return {"repository": {"ref": {"compare": {"behindBy": 2}}}}
+
+        assert _base_behind_by(gql, "frankyxhl/fx_bin", "main", 1) == 2
+
+    def test_read_failure_returns_none(self):
+        def gql(query, variables):
+            raise ResolveConversationError("boom")
+
+        assert _base_behind_by(gql, "frankyxhl/fx_bin", "main", 1) is None
+
+    def test_null_ref_returns_none(self):
+        def gql(query, variables):
+            return {"repository": {"ref": None}}
+
+        assert _base_behind_by(gql, "frankyxhl/fx_bin", "main", 1) is None
+
+    def test_null_compare_returns_none(self):
+        def gql(query, variables):
+            return {"repository": {"ref": {"compare": None}}}
+
+        assert _base_behind_by(gql, "frankyxhl/fx_bin", "main", 1) is None
+
+    def test_non_int_behind_by_returns_none(self):
+        def gql(query, variables):
+            return {"repository": {"ref": {"compare": {"behindBy": "not-a-number"}}}}
+
+        assert _base_behind_by(gql, "frankyxhl/fx_bin", "main", 1) is None
 
 
 class TestMergeReadGqlWhitelist:
