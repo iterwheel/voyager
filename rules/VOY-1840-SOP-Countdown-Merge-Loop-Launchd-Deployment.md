@@ -231,18 +231,29 @@ otherwise `VOYAGER_MERGE_EXTRA_REPOS` never reaches the process,
 scans `iterwheel/voyager-sandbox` only, passing vacuously:
 
 ```bash
-set -a; source /Users/frank/.voyager/merge-loop.env; set +a
-/Users/frank/.voyager/.venv/bin/vyg countdown merge-loop \
-  --repos /Users/frank/.voyager/merge-loop.repos \
-  --dry-run \
-  --json
+set -a
+if source /Users/frank/.voyager/merge-loop.env; then
+  set +a
+  /Users/frank/.voyager/.venv/bin/vyg countdown merge-loop \
+    --repos /Users/frank/.voyager/merge-loop.repos \
+    --dry-run \
+    --json
+else
+  set +a
+  echo "FAIL-CLOSED: cannot source merge-loop.env — fix the env file first" >&2
+fi
 ```
 
 One-line equivalent:
 
 ```bash
-set -a; source /Users/frank/.voyager/merge-loop.env; set +a; /Users/frank/.voyager/.venv/bin/vyg countdown merge-loop --repos /Users/frank/.voyager/merge-loop.repos --dry-run --json
+set -a; if source /Users/frank/.voyager/merge-loop.env; then set +a; /Users/frank/.voyager/.venv/bin/vyg countdown merge-loop --repos /Users/frank/.voyager/merge-loop.repos --dry-run --json; else set +a; echo "FAIL-CLOSED: cannot source merge-loop.env — fix the env file first" >&2; fi
 ```
+
+A missing, unreadable, or broken env file must abort the dry-run (mirroring
+the adaptive wrapper's fail-closed source guard) — running `vyg` anyway would
+leave `VOYAGER_MERGE_EXTRA_REPOS` unset and the gate would pass vacuously
+against the sandbox only.
 
 The dry-run must not write merge mutations. Treat any systemic failure,
 credential error, predicate error, unexpected repository skip, or surprising
@@ -446,3 +457,4 @@ Before declaring the scheduled deployment complete, record:
 | 2026-08-08 | Step 5 dry-run now sources `merge-loop.env` before invoking `vyg` directly, so operator-set `VOYAGER_MERGE_EXTRA_REPOS` reaches the process instead of ceiling-skipping `fx_bin`; corrected the readiness pitfall to describe paged-to-exhaustion comment reads (not a last-50 window), matching 14d2e9e | Claude Code |
 | 2026-08-08 | Add pitfall: `base_stale` skip when main advances after checks ran; recommend GitHub's "require branches up to date" required check as server-side defense in depth (Codex round-4 review) | Claude Code |
 | 2026-08-08 | Add pitfall: at most one PR merges per repo per cycle, rest deferred as `base_moved_by_merge` (Codex round-5 review) | Claude Code |
+| 2026-08-08 | Step 5 dry-run snippets fail closed when `merge-loop.env` cannot be sourced — `vyg` no longer runs with an unset ceiling on a broken env file (Codex round-6 review) | Claude Code |
