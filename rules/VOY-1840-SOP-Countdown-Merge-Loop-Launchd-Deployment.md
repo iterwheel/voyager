@@ -424,6 +424,11 @@ Before declaring the scheduled deployment complete, record:
   still consumes a cap slot (attempt-counting), so a canary run at
   `MERGE_MAX_MERGES=1` can be consumed entirely by a race; re-run or wait for
   the next cycle rather than assuming the cap means nothing merged.
+- The loop skips green PRs whose base advanced after their checks ran
+  (`base_stale`) until the PR is rebased/re-checked — `expectedHeadOid` only
+  guards the PR head, not the base. Enabling GitHub's "require branches up to
+  date before merging" required-check setting on the target repo gives the
+  same guarantee server-side (defense in depth, recommended).
 
 ---
 
@@ -434,3 +439,4 @@ Before declaring the scheduled deployment complete, record:
 | 2026-08-08 | Initial version | Claude Code |
 | 2026-08-08 | Add pitfalls: readiness-comment window (last 50), apply-time race consumes cap slot | Claude Code |
 | 2026-08-08 | Step 5 dry-run now sources `merge-loop.env` before invoking `vyg` directly, so operator-set `VOYAGER_MERGE_EXTRA_REPOS` reaches the process instead of ceiling-skipping `fx_bin`; corrected the readiness pitfall to describe paged-to-exhaustion comment reads (not a last-50 window), matching 14d2e9e | Claude Code |
+| 2026-08-08 | Add pitfall: `base_stale` skip when main advances after checks ran; recommend GitHub's "require branches up to date" required check as server-side defense in depth (Codex round-4 review) | Claude Code |
