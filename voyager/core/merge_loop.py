@@ -565,11 +565,18 @@ def _utc_now() -> str:
 def _append_merge_audit(path: Path, record: dict[str, Any]) -> None:
     """Append one JSON line under an exclusive lock (0600, local-only)."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(record, separators=(",", ":")) + "\n"
+    data = (json.dumps(record, separators=(",", ":")) + "\n").encode("utf-8")
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
-        os.write(fd, line.encode("utf-8"))
+        # os.write can return fewer bytes than requested (e.g. ENOSPC mid
+        # write). A short count is not a failure on a blocking fd — os.write
+        # raises OSError when it truly can't write — so loop until every
+        # byte lands; any OSError from a later call propagates as-is to the
+        # caller's write-ahead-audit fail-closed path.
+        written = 0
+        while written < len(data):
+            written += os.write(fd, data[written:])
     finally:
         try:
             fcntl.flock(fd, fcntl.LOCK_UN)

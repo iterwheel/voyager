@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json as _json
+import os
 
 import pytest
 from typer.testing import CliRunner
@@ -1428,6 +1429,69 @@ class TestAuditIntent:
         import voyager.core.merge_loop as ml_mod
 
         monkeypatch.setattr(ml_mod, "_append_merge_audit", _boom)
+
+        summary = run_merge_loop(
+            ["frankyxhl/fx_bin"],
+            read_gql=read,
+            merge_gql=merge_gql,
+            identity_gql=_identity_gql_ok,
+            audit_path=audit,
+        )
+        assert calls == []  # merge_pr was never called — no mutation issued
+        (d,) = summary.decisions
+        assert (d.action, d.reason) == ("skipped", "audit_unwritable")
+
+    def test_short_os_write_still_writes_complete_line(self, monkeypatch, tmp_path):
+        """Round 13: os.write can return fewer bytes than requested (e.g. a
+        near-full filesystem). _append_merge_audit must loop until every byte
+        lands, not treat a short count as a completed write."""
+        import voyager.core.merge_loop as ml_mod
+
+        real_write = os.write
+        write_calls = 0
+
+        def short_write(fd, data):
+            nonlocal write_calls
+            write_calls += 1
+            n = min(len(data), 4)  # never write more than 4 bytes at a time
+            real_write(fd, data[:n])
+            return n
+
+        monkeypatch.setattr(ml_mod.os, "write", short_write)
+
+        path = tmp_path / "audit.jsonl"
+        record = {"ts": "2026-08-08T00:00:00Z", "action": "merge_intent", "repo": "x/y"}
+        ml_mod._append_merge_audit(path, record)
+
+        assert write_calls > 1  # proves the short-write path was exercised
+        line = path.read_text()
+        assert _json.loads(line.strip()) == record
+
+    def test_short_write_then_oserror_blocks_merge(self, monkeypatch, tmp_path):
+        """A short write followed by an OSError (e.g. ENOSPC mid-buffer) must
+        still fail closed: no partial/non-JSON audit line treated as success,
+        and no merge mutation fires."""
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        audit = tmp_path / "audit.jsonl"
+        read = _fake_gql([_green_pr(1)], thread_pages={1: []}, comment_pages=_readiness_pages(1))
+        calls: list[str] = []
+
+        def merge_gql(query, variables):
+            calls.append(variables["prId"])
+            return {"mergePullRequest": {"pullRequest": {"merged": True}}}
+
+        import voyager.core.merge_loop as ml_mod
+
+        write_calls = 0
+
+        def flaky_write(fd, data):
+            nonlocal write_calls
+            write_calls += 1
+            if write_calls == 1:
+                return min(len(data), 3)  # short write, no error yet
+            raise OSError("disk full mid-write")
+
+        monkeypatch.setattr(ml_mod.os, "write", flaky_write)
 
         summary = run_merge_loop(
             ["frankyxhl/fx_bin"],
