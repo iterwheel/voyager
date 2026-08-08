@@ -487,20 +487,11 @@ def run_merge_loop(
     approved = 0
     capped = False
 
-    def _record(decision: MergeDecision, head: str) -> None:
+    def _record(decision: MergeDecision) -> None:
         decisions.append(decision)
         if audit_path is not None:
             _append_merge_audit(
-                audit_path,
-                {
-                    "ts": timestamp,
-                    "repo": decision.repo,
-                    "pr": decision.pr,
-                    "action": decision.action,
-                    "reason": decision.reason,
-                    "head": head,
-                    "dry_run": dry_run,
-                },
+                audit_path, {"ts": timestamp, "dry_run": dry_run, **decision.public()}
             )
 
     for repo in allowed:
@@ -516,31 +507,23 @@ def run_merge_loop(
                 continue  # never touched, never listed
             reason = should_merge(s)
             if reason != "ok":
-                _record(MergeDecision(repo, s.number, "skipped", reason), s.head_oid)
+                _record(MergeDecision(repo, s.number, "skipped", reason))
                 continue
             if approved >= max_merges:
                 capped = True
-                _record(MergeDecision(repo, s.number, "skipped", "capped"), s.head_oid)
+                _record(MergeDecision(repo, s.number, "skipped", "capped"))
                 continue
             approved += 1
             if dry_run:
-                _record(MergeDecision(repo, s.number, "would_merge"), s.head_oid)
+                _record(MergeDecision(repo, s.number, "would_merge"))
                 continue
             if audit_path is not None:
                 # Write-ahead intent: if the audit sink can't be written, abort
                 # BEFORE mutating GitHub — no unattended merge without a trail.
+                intent = MergeDecision(repo, s.number, "merge_intent")
                 try:
                     _append_merge_audit(
-                        audit_path,
-                        {
-                            "ts": timestamp,
-                            "repo": repo,
-                            "pr": s.number,
-                            "action": "merge_intent",
-                            "reason": "",
-                            "head": s.head_oid,
-                            "dry_run": dry_run,
-                        },
+                        audit_path, {"ts": timestamp, "dry_run": dry_run, **intent.public()}
                     )
                 except OSError:
                     # In-memory only: _record would retry the same broken sink
@@ -548,7 +531,7 @@ def run_merge_loop(
                     decisions.append(MergeDecision(repo, s.number, "skipped", "audit_unwritable"))
                     continue
             action, message = merge_pr(merge_gql, s.pr_id, s.head_oid)
-            _record(MergeDecision(repo, s.number, action, message), s.head_oid)
+            _record(MergeDecision(repo, s.number, action, message))
 
     return MergeLoopSummary(
         repos_scanned=tuple(allowed),

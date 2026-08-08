@@ -678,15 +678,25 @@ class TestRunMergeLoop:
             identity_gql=_identity_gql_ok,
             audit_path=audit,
         )
+        # fx_bin is not in _RAW_IDENTIFIER_REPOS: audit records must be
+        # redacted like resolve-loop's (countdown_loop.py) — no pr/reason/head.
         intent_line, outcome_line = audit.read_text().strip().splitlines()
         intent = _json.loads(intent_line)
         outcome = _json.loads(outcome_line)
-        assert intent["action"] == "merge_intent"
-        assert intent["pr"] == 1
-        assert intent["repo"] == "frankyxhl/fx_bin"
-        assert outcome["action"] == "merged"
-        assert outcome["pr"] == 1
-        assert outcome["repo"] == "frankyxhl/fx_bin"
+        assert intent == {
+            "ts": intent["ts"],
+            "dry_run": False,
+            "repo": "frankyxhl/fx_bin",
+            "action": "merge_intent",
+            "redacted": True,
+        }
+        assert outcome == {
+            "ts": outcome["ts"],
+            "dry_run": False,
+            "repo": "frankyxhl/fx_bin",
+            "action": "merged",
+            "redacted": True,
+        }
 
     def test_merge_failed_path_consumes_cap(self, monkeypatch):
         monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
@@ -736,12 +746,47 @@ class TestRunMergeLoop:
         intent_line, outcome_line = audit.read_text().strip().splitlines()
         intent = _json.loads(intent_line)
         outcome = _json.loads(outcome_line)
+        # fx_bin is not in _RAW_IDENTIFIER_REPOS: redacted, no pr/reason/head.
         assert intent["action"] == "merge_intent"
+        assert intent.get("redacted") is True
+        assert "pr" not in intent
         assert outcome["action"] == "merge_failed"
-        assert outcome["pr"] == 1
+        assert outcome.get("redacted") is True
+        assert "pr" not in outcome
         assert outcome["repo"] == "frankyxhl/fx_bin"
         assert summary.merged == 0
         assert len(summary.decisions) == 1
+
+    def test_sandbox_repo_audit_is_raw(self, monkeypatch, tmp_path):
+        """iterwheel/voyager-sandbox IS in _RAW_IDENTIFIER_REPOS: audit records
+        keep raw pr/reason (prior art: countdown_loop.py redaction contract)."""
+        monkeypatch.delenv("VOYAGER_MERGE_EXTRA_REPOS", raising=False)
+        audit = tmp_path / "audit.jsonl"
+        read = _fake_gql([_green_pr(1)], thread_pages={1: []}, comment_pages=_readiness_pages(1))
+
+        def merge_gql(query, variables):
+            return {"mergePullRequest": {"pullRequest": {"merged": True}}}
+
+        run_merge_loop(
+            ["iterwheel/voyager-sandbox"],
+            read_gql=read,
+            merge_gql=merge_gql,
+            identity_gql=_identity_gql_ok,
+            audit_path=audit,
+        )
+        intent_line, outcome_line = audit.read_text().strip().splitlines()
+        intent = _json.loads(intent_line)
+        outcome = _json.loads(outcome_line)
+        assert intent["action"] == "merge_intent"
+        assert intent["pr"] == 1
+        assert intent["reason"] == ""
+        assert intent["repo"] == "iterwheel/voyager-sandbox"
+        assert "redacted" not in intent
+        assert outcome["action"] == "merged"
+        assert outcome["pr"] == 1
+        assert outcome["reason"] == ""
+        assert outcome["repo"] == "iterwheel/voyager-sandbox"
+        assert "redacted" not in outcome
 
     def test_all_repos_fail_enumeration_is_systemic_failure(self, monkeypatch):
         monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
