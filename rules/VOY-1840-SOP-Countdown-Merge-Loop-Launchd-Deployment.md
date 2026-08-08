@@ -224,9 +224,14 @@ Verify the fixed machine account credential path:
 gh auth token --hostname github.com --user iterwheel-countdown-bot >/dev/null
 ```
 
-Run the merge loop in dry-run mode:
+Run the merge loop in dry-run mode. This command invokes `vyg` directly (not
+through the adaptive wrapper), so it must source the env file itself first —
+otherwise `VOYAGER_MERGE_EXTRA_REPOS` never reaches the process,
+`merge_allowed_repos()` ceiling-skips `fx_bin`, and the dry-run silently
+scans `iterwheel/voyager-sandbox` only, passing vacuously:
 
 ```bash
+set -a; source /Users/frank/.voyager/merge-loop.env; set +a
 /Users/frank/.voyager/.venv/bin/vyg countdown merge-loop \
   --repos /Users/frank/.voyager/merge-loop.repos \
   --dry-run \
@@ -236,7 +241,7 @@ Run the merge loop in dry-run mode:
 One-line equivalent:
 
 ```bash
-/Users/frank/.voyager/.venv/bin/vyg countdown merge-loop --repos /Users/frank/.voyager/merge-loop.repos --dry-run --json
+set -a; source /Users/frank/.voyager/merge-loop.env; set +a; /Users/frank/.voyager/.venv/bin/vyg countdown merge-loop --repos /Users/frank/.voyager/merge-loop.repos --dry-run --json
 ```
 
 The dry-run must not write merge mutations. Treat any systemic failure,
@@ -410,9 +415,11 @@ Before declaring the scheduled deployment complete, record:
   or PR text.
 - Do not bypass `scripts/build_wheel.sh`; direct `uv build` can miss build
   commit metadata.
-- The readiness scan reads only the last 50 PR comments; on a very busy PR
-  the clearance readiness comment can fall outside that window, and the PR
-  is skipped fail-closed as `readiness_missing` until clearance re-posts.
+- The readiness scan pages through ALL PR comments (`first:100` per page,
+  paged to exhaustion), not a fixed recent-comments window. If the
+  clearance readiness comment was never posted, or was posted for a stale
+  head SHA, the PR is skipped fail-closed as `readiness_missing` (or
+  `readiness_stale_head`) until clearance re-posts for the current head.
 - An apply-time race (`expectedHeadOid` mismatch) records `merge_failed` and
   still consumes a cap slot (attempt-counting), so a canary run at
   `MERGE_MAX_MERGES=1` can be consumed entirely by a race; re-run or wait for
@@ -426,3 +433,4 @@ Before declaring the scheduled deployment complete, record:
 |------|--------|----|
 | 2026-08-08 | Initial version | Claude Code |
 | 2026-08-08 | Add pitfalls: readiness-comment window (last 50), apply-time race consumes cap slot | Claude Code |
+| 2026-08-08 | Step 5 dry-run now sources `merge-loop.env` before invoking `vyg` directly, so operator-set `VOYAGER_MERGE_EXTRA_REPOS` reaches the process instead of ceiling-skipping `fx_bin`; corrected the readiness pitfall to describe paged-to-exhaustion comment reads (not a last-50 window), matching 14d2e9e | Claude Code |
