@@ -128,3 +128,29 @@ def parse_readiness(body: str) -> tuple[int, str] | None:
     if not stage_m or not head_m:
         return None
     return int(stage_m.group(1)), head_m.group(1)
+
+
+def should_merge(s: PrSnapshot) -> str:
+    """Deterministic merge predicate. Returns "ok" or a stable skip reason.
+
+    Order matters only for reporting; every condition is independently
+    fail-closed. Stage >= REQUIRED_READINESS_STAGE accepts both
+    "3 - Ready for approval" and "4 - Ready for merge".
+    """
+    if s.author not in AGENT_PR_AUTHORS:
+        return "not_agent_author"
+    if s.is_draft:
+        return "draft"
+    if s.checks_state != "SUCCESS":
+        return "checks_not_green"
+    if s.unresolved_threads is None:
+        return "threads_unreadable"
+    if s.unresolved_threads > 0:
+        return "threads_unresolved"
+    if s.readiness_stage is None or s.readiness_head is None:
+        return "readiness_missing"
+    if s.readiness_stage < REQUIRED_READINESS_STAGE:
+        return "readiness_not_ready"
+    if s.readiness_head != s.head_oid:
+        return "readiness_stale_head"
+    return "ok"

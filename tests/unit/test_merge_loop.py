@@ -8,8 +8,10 @@ from voyager.core.merge_loop import (
     MERGE_ALLOWED_REPOS,
     MergeDecision,
     MergeLoopSummary,
+    PrSnapshot,
     merge_allowed_repos,
     parse_readiness,
+    should_merge,
 )
 from voyager.core.resolve_conversation import ResolveConversationError
 
@@ -109,3 +111,50 @@ class TestParseReadiness:
     def test_short_sha_returns_none(self):
         body = READINESS_BODY.replace("a96782f4e41207e63d63bd552f9b4fa5399c7eb8", "a96782f")
         assert parse_readiness(body) is None
+
+
+HEAD = "a" * 40
+
+
+def snap(**overrides) -> PrSnapshot:
+    """A fully-green agent PR snapshot; tests break one field at a time."""
+    base = {
+        "pr_id": "PR_x",
+        "number": 1,
+        "author": "ryosaeba1985",
+        "is_draft": False,
+        "head_oid": HEAD,
+        "checks_state": "SUCCESS",
+        "unresolved_threads": 0,
+        "readiness_stage": 3,
+        "readiness_head": HEAD,
+    }
+    base.update(overrides)
+    return PrSnapshot(**base)
+
+
+class TestShouldMerge:
+    def test_fully_green_is_ok(self):
+        assert should_merge(snap()) == "ok"
+
+    @pytest.mark.parametrize(
+        ("overrides", "reason"),
+        [
+            ({"author": "frankyxhl"}, "not_agent_author"),
+            ({"author": "somebody-else"}, "not_agent_author"),
+            ({"is_draft": True}, "draft"),
+            ({"checks_state": "FAILURE"}, "checks_not_green"),
+            ({"checks_state": "PENDING"}, "checks_not_green"),
+            ({"checks_state": None}, "checks_not_green"),
+            ({"unresolved_threads": None}, "threads_unreadable"),
+            ({"unresolved_threads": 2}, "threads_unresolved"),
+            ({"readiness_stage": None, "readiness_head": None}, "readiness_missing"),
+            ({"readiness_stage": 2}, "readiness_not_ready"),
+            ({"readiness_head": "b" * 40}, "readiness_stale_head"),
+        ],
+    )
+    def test_each_condition_fails_closed(self, overrides, reason):
+        assert should_merge(snap(**overrides)) == reason
+
+    def test_stage_4_ready_for_merge_also_ok(self):
+        assert should_merge(snap(readiness_stage=4)) == "ok"
