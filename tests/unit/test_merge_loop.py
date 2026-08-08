@@ -18,6 +18,7 @@ from voyager.core.merge_loop import (
     MergeLoopSummary,
     PrSnapshot,
     _base_behind_by,
+    _is_clearance_bot,
     _readiness_for_pr,
     _unresolved_thread_count,
     make_merge_read_gql,
@@ -199,7 +200,7 @@ def _pr_node(
 
 def _readiness_comment(head=HEAD):
     return {
-        "author": {"login": "iterwheel-clearance"},
+        "author": {"login": "iterwheel-clearance", "__typename": "Bot"},
         "body": READINESS_BODY.replace("a96782f4e41207e63d63bd552f9b4fa5399c7eb8", head),
     }
 
@@ -788,7 +789,7 @@ class TestReadinessForPr:
         updates; if it fails to parse (stage/head missing), fail closed
         instead of falling through to a later, well-formed duplicate."""
         first_unparseable = {
-            "author": {"login": "iterwheel-clearance"},
+            "author": {"login": "iterwheel-clearance", "__typename": "Bot"},
             "body": "<!-- iterwheel:clearance-readiness -->\nmalformed, no stage or head",
         }
         later_parseable = _readiness_comment()
@@ -806,6 +807,102 @@ class TestReadinessForPr:
             }
 
         assert _readiness_for_pr(gql, "frankyxhl/fx_bin", 1) == (None, None)
+
+    def test_spoofed_user_marker_ignored_bot_marker_wins(self):
+        """Round-8 finding: GraphQL represents a GitHub App bot's login as the
+        PLAIN slug (no "[bot]" suffix -- that suffix is a REST-only rendering),
+        so login-only matching cannot tell the real clearance bot apart from a
+        plain USER account that happens to share its login. upsert_issue_comment()
+        (github_app.py ~L816-846) only ever PATCHes a comment whose REST author
+        is "iterwheel-clearance[bot]" -- a spoofed/duplicate User-typed comment
+        with a valid marker body sitting earlier in comment order is never
+        touched by the writer. Trusting it here would consume first-match and
+        permanently shadow the comment the writer actually keeps current."""
+        spoof = {
+            "author": {"login": "iterwheel-clearance", "__typename": "User"},
+            "body": READINESS_BODY.replace("a96782f4e41207e63d63bd552f9b4fa5399c7eb8", "b" * 40),
+        }
+        real_bot = _readiness_comment(head="c" * 40)
+
+        def gql(query, variables):
+            return {
+                "repository": {
+                    "pullRequest": {
+                        "comments": {
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": [spoof, real_bot],
+                        }
+                    }
+                }
+            }
+
+        assert _readiness_for_pr(gql, "frankyxhl/fx_bin", 1) == (3, "c" * 40)
+
+    def test_bot_typed_other_slug_ignored(self):
+        other_bot = {
+            "author": {"login": "some-other-app", "__typename": "Bot"},
+            "body": READINESS_BODY,
+        }
+
+        def gql(query, variables):
+            return {
+                "repository": {
+                    "pullRequest": {
+                        "comments": {
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": [other_bot],
+                        }
+                    }
+                }
+            }
+
+        assert _readiness_for_pr(gql, "frankyxhl/fx_bin", 1) == (None, None)
+
+    def test_missing_typename_fails_closed(self):
+        no_typename = {
+            "author": {"login": "iterwheel-clearance"},
+            "body": READINESS_BODY,
+        }
+
+        def gql(query, variables):
+            return {
+                "repository": {
+                    "pullRequest": {
+                        "comments": {
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": [no_typename],
+                        }
+                    }
+                }
+            }
+
+        assert _readiness_for_pr(gql, "frankyxhl/fx_bin", 1) == (None, None)
+
+
+class TestIsClearanceBot:
+    """_is_clearance_bot is the actor-type-verified predicate _readiness_for_pr
+    uses in place of a bare login-in-set check (round-8 fix)."""
+
+    def test_bot_plain_slug_is_true(self):
+        assert _is_clearance_bot({"login": "iterwheel-clearance", "__typename": "Bot"})
+
+    def test_bot_bracket_suffixed_login_is_true(self):
+        assert _is_clearance_bot({"login": "iterwheel-clearance[bot]", "__typename": "Bot"})
+
+    def test_user_typed_same_login_is_false(self):
+        assert not _is_clearance_bot({"login": "iterwheel-clearance", "__typename": "User"})
+
+    def test_bot_other_slug_is_false(self):
+        assert not _is_clearance_bot({"login": "some-other-app", "__typename": "Bot"})
+
+    def test_missing_typename_is_false(self):
+        assert not _is_clearance_bot({"login": "iterwheel-clearance"})
+
+    def test_missing_login_is_false(self):
+        assert not _is_clearance_bot({"__typename": "Bot"})
+
+    def test_none_author_is_false(self):
+        assert not _is_clearance_bot(None)
 
 
 class TestBaseBehindBy:

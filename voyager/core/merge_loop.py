@@ -27,7 +27,7 @@ from voyager.core.resolve_conversation import (
 )
 
 AGENT_PR_AUTHORS = frozenset({"ryosaeba1985"})
-CLEARANCE_BOT_LOGINS = frozenset({"iterwheel-clearance", "iterwheel-clearance[bot]"})
+CLEARANCE_APP_SLUG = "iterwheel-clearance"
 REQUIRED_READINESS_STAGE = 3
 
 MERGE_ALLOWED_REPOS = frozenset({"iterwheel/voyager-sandbox"})
@@ -243,7 +243,7 @@ query PrComments($owner: String!, $name: String!, $number: Int!, $after: String)
     pullRequest(number: $number) {
       comments(first: 100, after: $after) {
         pageInfo { hasNextPage endCursor }
-        nodes { author { login } body }
+        nodes { author { login __typename } body }
       }
     }
   }
@@ -376,6 +376,35 @@ def _base_behind_by(gql: GqlFn, repo: str, base_ref: str, number: int) -> int | 
     return behind_by if isinstance(behind_by, int) else None
 
 
+def _is_clearance_bot(author: dict[str, Any] | None) -> bool:
+    """True only for the clearance GitHub App's actual bot actor.
+
+    Spoof scenario (round-8 finding): a plain USER account named
+    "iterwheel-clearance" -- or a duplicate User-authored comment with a
+    valid marker body -- could impersonate the app's login. GitHubApp.
+    upsert_issue_comment() (voyager/core/github_app.py ~L816-846) only ever
+    PATCHes the comment whose REST author.login is "{app_slug}[bot]"; it
+    would never touch such a spoofed comment again. If _readiness_for_pr's
+    first-match scan trusted login alone, a spoof sitting before the real
+    marker would win permanently.
+
+    REST vs GraphQL login representation differs: REST renders a GitHub
+    App's login with a "[bot]" suffix, but GraphQL's `author.login` for the
+    same actor is the PLAIN slug -- the suffix is a REST-only rendering, not
+    part of the actor's identity. So login string matching alone (in either
+    representation) cannot distinguish the bot from a same-named User; the
+    GraphQL `__typename` field (== "Bot") is what actually says "this is an
+    app-owned actor, not a human/User account". Fail closed when either
+    field is missing.
+    """
+    if not isinstance(author, dict):
+        return False
+    if author.get("__typename") != "Bot":
+        return False
+    login = str(author.get("login") or "")
+    return login.removesuffix("[bot]") == CLEARANCE_APP_SLUG
+
+
 def _readiness_for_pr(gql: GqlFn, repo: str, number: int) -> tuple[int | None, str | None]:
     """Paginated FIRST clearance-authored readiness comment; (None, None) on any
     read fault (fail closed) — mirrors _unresolved_thread_count's cursor-repeat
@@ -408,8 +437,7 @@ def _readiness_for_pr(gql: GqlFn, repo: str, number: int) -> tuple[int | None, s
             return None, None
         comments = pull.get("comments") or {}
         for c in comments.get("nodes") or []:
-            author = ((c.get("author") or {}).get("login")) or ""
-            if author not in CLEARANCE_BOT_LOGINS:
+            if not _is_clearance_bot(c.get("author")):
                 continue
             body = c.get("body") or ""
             if CLEARANCE_COMMENT_MARKER not in body:
