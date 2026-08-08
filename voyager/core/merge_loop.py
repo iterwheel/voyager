@@ -304,7 +304,10 @@ def _unresolved_thread_count(gql: GqlFn, repo: str, number: int) -> int | None:
             return unresolved
         after = page.get("endCursor")
         if not after or after in seen_cursors:
-            return unresolved
+            # Truncated: more pages exist but there's no cursor to reach them.
+            # A partial count would fail OPEN (an unread page could hold
+            # unresolved threads) — fail closed instead.
+            return None
         seen_cursors.add(after)
 
 
@@ -342,7 +345,10 @@ def _readiness_for_pr(gql: GqlFn, repo: str, number: int) -> tuple[int | None, s
             return stage, head
         after = page.get("endCursor")
         if not after or after in seen_cursors:
-            return stage, head
+            # Truncated: more pages exist but there's no cursor to reach them.
+            # A best-effort partial scan could miss the clearance bot's latest
+            # upsert (or worse, report a stale stage as fresh) — fail closed.
+            return None, None
         seen_cursors.add(after)
 
 

@@ -16,6 +16,7 @@ from voyager.core.merge_loop import (
     MergeLoopSummary,
     PrSnapshot,
     _readiness_for_pr,
+    _unresolved_thread_count,
     make_merge_read_gql,
     merge_allowed_repos,
     parse_readiness,
@@ -480,6 +481,83 @@ class TestSnapshotsForRepo:
         assert (s.readiness_stage, s.readiness_head) == (None, None)
         assert should_merge(s) == "readiness_missing"
 
+    def test_truncated_comments_pagination_yields_readiness_missing_skip(self):
+        """Finding 2: hasNextPage=true with a null endCursor mid-scan must fail
+        closed to (None, None) — not return the partial page's readiness match."""
+
+        def gql(query, variables):
+            if query is _AGENT_PR_PAGE_QUERY:
+                return {
+                    "repository": {
+                        "pullRequests": {
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": [_pr_node()],
+                        }
+                    }
+                }
+            if query is _PR_THREADS_QUERY:
+                return {
+                    "repository": {
+                        "pullRequest": {
+                            "reviewThreads": {
+                                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                "nodes": [{"isResolved": True}],
+                            }
+                        }
+                    }
+                }
+            if query is _PR_COMMENTS_QUERY:
+                return {
+                    "repository": {
+                        "pullRequest": {
+                            "comments": {
+                                "pageInfo": {"hasNextPage": True, "endCursor": None},
+                                "nodes": [_readiness_comment()],
+                            }
+                        }
+                    }
+                }
+            raise AssertionError(f"unexpected query: {query[:40]}")
+
+        (s,) = snapshots_for_repo(gql, "frankyxhl/fx_bin")
+        assert (s.readiness_stage, s.readiness_head) == (None, None)
+        assert should_merge(s) == "readiness_missing"
+
+
+class TestThreadCountForPr:
+    """Finding 2: truncated pagination (hasNextPage true but no usable cursor to
+    advance) must fail closed to None, never a partial in-range count."""
+
+    def test_null_end_cursor_with_more_pages_returns_none(self):
+        def gql(query, variables):
+            return {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "pageInfo": {"hasNextPage": True, "endCursor": None},
+                            "nodes": [{"isResolved": False}],
+                        }
+                    }
+                }
+            }
+
+        assert _unresolved_thread_count(gql, "frankyxhl/fx_bin", 1) is None
+
+    def test_repeated_end_cursor_returns_none(self):
+        def gql(query, variables):
+            return {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "pageInfo": {"hasNextPage": True, "endCursor": "stuck"},
+                            "nodes": [{"isResolved": False}],
+                        }
+                    }
+                }
+            }
+
+        assert _unresolved_thread_count(gql, "frankyxhl/fx_bin", 1) is None
+
 
 class TestReadinessForPr:
     """_readiness_for_pr pages ALL issue comments; the clearance bot upserts its
@@ -528,6 +606,39 @@ class TestReadinessForPr:
     def test_null_pull_request_returns_none_none(self):
         def gql(query, variables):
             return {"repository": {"pullRequest": None}}
+
+        assert _readiness_for_pr(gql, "frankyxhl/fx_bin", 1) == (None, None)
+
+    def test_null_end_cursor_with_more_pages_returns_none_none(self):
+        """Finding 2: truncated pagination must fail closed, even if the page
+        already read carried a fresh, matching readiness comment."""
+
+        def gql(query, variables):
+            return {
+                "repository": {
+                    "pullRequest": {
+                        "comments": {
+                            "pageInfo": {"hasNextPage": True, "endCursor": None},
+                            "nodes": [_readiness_comment()],
+                        }
+                    }
+                }
+            }
+
+        assert _readiness_for_pr(gql, "frankyxhl/fx_bin", 1) == (None, None)
+
+    def test_repeated_end_cursor_returns_none_none(self):
+        def gql(query, variables):
+            return {
+                "repository": {
+                    "pullRequest": {
+                        "comments": {
+                            "pageInfo": {"hasNextPage": True, "endCursor": "stuck"},
+                            "nodes": [_readiness_comment()],
+                        }
+                    }
+                }
+            }
 
         assert _readiness_for_pr(gql, "frankyxhl/fx_bin", 1) == (None, None)
 
