@@ -258,6 +258,123 @@ class TestSnapshotsForRepo:
         with pytest.raises(ResolveConversationError):
             snapshots_for_repo(gql, "frankyxhl/fx_bin")
 
+    def test_multi_page_pr_enumeration(self):
+        """Pagination: first page hasNextPage=True, second page final."""
+        pr1 = _pr_node(number=1)
+        pr2 = _pr_node(number=2)
+
+        def gql(query, variables):
+            if query is _AGENT_PR_PAGE_QUERY:
+                after = variables.get("after")
+                if after is None:
+                    # First page
+                    return {
+                        "repository": {
+                            "pullRequests": {
+                                "pageInfo": {"hasNextPage": True, "endCursor": "cursor1"},
+                                "nodes": [pr1],
+                            }
+                        }
+                    }
+                else:
+                    # Second page
+                    return {
+                        "repository": {
+                            "pullRequests": {
+                                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                "nodes": [pr2],
+                            }
+                        }
+                    }
+            if query is _PR_THREADS_QUERY:
+                return {
+                    "repository": {
+                        "pullRequest": {
+                            "reviewThreads": {
+                                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                "nodes": [{"isResolved": True}],
+                            }
+                        }
+                    }
+                }
+            raise AssertionError(f"unexpected query: {query[:40]}")
+
+        snapshots = snapshots_for_repo(gql, "frankyxhl/fx_bin")
+        assert len(snapshots) == 2
+        assert snapshots[0].number == 1
+        assert snapshots[1].number == 2
+
+    def test_multi_page_thread_count(self):
+        """Thread pagination: two pages with unresolved threads sum correctly."""
+
+        def gql(query, variables):
+            if query is _AGENT_PR_PAGE_QUERY:
+                return {
+                    "repository": {
+                        "pullRequests": {
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": [_pr_node()],
+                        }
+                    }
+                }
+            if query is _PR_THREADS_QUERY:
+                after = variables.get("after")
+                if after is None:
+                    # First thread page: 2 unresolved, 1 resolved
+                    return {
+                        "repository": {
+                            "pullRequest": {
+                                "reviewThreads": {
+                                    "pageInfo": {"hasNextPage": True, "endCursor": "thread_cursor"},
+                                    "nodes": [
+                                        {"isResolved": False},
+                                        {"isResolved": False},
+                                        {"isResolved": True},
+                                    ],
+                                }
+                            }
+                        }
+                    }
+                else:
+                    # Second thread page: 1 unresolved
+                    return {
+                        "repository": {
+                            "pullRequest": {
+                                "reviewThreads": {
+                                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                    "nodes": [{"isResolved": False}],
+                                }
+                            }
+                        }
+                    }
+            raise AssertionError(f"unexpected query: {query[:40]}")
+
+        (snapshot,) = snapshots_for_repo(gql, "frankyxhl/fx_bin")
+        assert snapshot.unresolved_threads == 3  # 2 from first page + 1 from second
+
+    def test_thread_read_failure_returns_none(self):
+        """Thread read error (ResolveConversationError) returns None for unresolved_threads."""
+        call_count = [0]
+
+        def gql(query, variables):
+            if query is _AGENT_PR_PAGE_QUERY:
+                return {
+                    "repository": {
+                        "pullRequests": {
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": [_pr_node()],
+                        }
+                    }
+                }
+            if query is _PR_THREADS_QUERY:
+                call_count[0] += 1
+                raise ResolveConversationError("simulated thread read failure")
+            raise AssertionError(f"unexpected query: {query[:40]}")
+
+        (snapshot,) = snapshots_for_repo(gql, "frankyxhl/fx_bin")
+        assert snapshot.unresolved_threads is None
+        assert call_count[0] == 1  # thread query was attempted
+
 
 class TestMergeReadGqlWhitelist:
     def test_refuses_unknown_query(self):
