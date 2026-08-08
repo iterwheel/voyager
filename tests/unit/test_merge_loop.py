@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json as _json
+
 import pytest
 
 from voyager.core.merge_loop import (
@@ -14,6 +16,7 @@ from voyager.core.merge_loop import (
     make_merge_read_gql,
     merge_allowed_repos,
     parse_readiness,
+    run_merge_loop,
     should_merge,
     snapshots_for_repo,
 )
@@ -421,3 +424,86 @@ class TestMergePr:
                 'mutation { closePullRequest(input: {pullRequestId: "x"}) { clientMutationId } }',
                 {},
             )
+
+
+def _green_pr(number):
+    readiness = {
+        "author": {"login": "iterwheel-clearance"},
+        "body": READINESS_BODY.replace("a96782f4e41207e63d63bd552f9b4fa5399c7eb8", HEAD),
+    }
+    return _pr_node(number=number, comments=[readiness])
+
+
+class TestRunMergeLoop:
+    def _run(self, pr_nodes, thread_pages=None, **kwargs):
+        read = _fake_gql(pr_nodes, thread_pages=thread_pages or {})
+        merges: list[str] = []
+
+        def merge_gql(query, variables):
+            merges.append(variables["prId"])
+            return {"mergePullRequest": {"pullRequest": {"merged": True}}}
+
+        summary = run_merge_loop(
+            ["frankyxhl/fx_bin"],
+            read_gql=read,
+            merge_gql=merge_gql,
+            audit_path=None,
+            **kwargs,
+        )
+        return summary, merges
+
+    def test_repo_outside_ceiling_is_skipped(self, monkeypatch):
+        monkeypatch.delenv("VOYAGER_MERGE_EXTRA_REPOS", raising=False)
+        summary, merges = self._run([_green_pr(1)], thread_pages={1: []})
+        assert summary.repos_skipped == ("frankyxhl/fx_bin",)
+        assert merges == []
+
+    def test_green_agent_pr_merges(self, monkeypatch):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        summary, merges = self._run([_green_pr(1)], thread_pages={1: []})
+        assert merges == ["PR_1"]
+        assert summary.merged == 1
+
+    def test_dry_run_issues_no_mutation(self, monkeypatch):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        summary, merges = self._run([_green_pr(1)], thread_pages={1: []}, dry_run=True)
+        assert merges == []
+        assert summary.would_merge == 1
+
+    def test_non_agent_pr_produces_no_decision(self, monkeypatch):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        summary, merges = self._run([_pr_node(number=2, author="stranger")])
+        assert merges == []
+        assert summary.decisions == ()
+
+    def test_not_ready_agent_pr_is_skipped_with_reason(self, monkeypatch):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        summary, merges = self._run([_pr_node(number=3)], thread_pages={3: []})
+        assert merges == []
+        (d,) = summary.decisions
+        assert (d.action, d.reason) == ("skipped", "readiness_missing")
+
+    def test_cap_stops_merging(self, monkeypatch):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        summary, merges = self._run(
+            [_green_pr(1), _green_pr(2)],
+            thread_pages={1: [], 2: []},
+            max_merges=1,
+        )
+        assert len(merges) == 1
+        assert summary.capped is True
+
+    def test_audit_lines_written(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        audit = tmp_path / "audit.jsonl"
+        read = _fake_gql([_green_pr(1)], thread_pages={1: []})
+
+        def merge_gql(query, variables):
+            return {"mergePullRequest": {"pullRequest": {"merged": True}}}
+
+        run_merge_loop(["frankyxhl/fx_bin"], read_gql=read, merge_gql=merge_gql, audit_path=audit)
+        (line,) = audit.read_text().strip().splitlines()
+        record = _json.loads(line)
+        assert record["action"] == "merged"
+        assert record["pr"] == 1
+        assert record["repo"] == "frankyxhl/fx_bin"

@@ -7,16 +7,20 @@ mergePullRequest (REBASE, expectedHeadOid-guarded). Fail-closed throughout.
 
 from __future__ import annotations
 
+import fcntl
+import json
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import httpx
 
 from voyager.bots.clearance.constants import CLEARANCE_COMMENT_MARKER
+from voyager.core.countdown_loop import gate_repos
 from voyager.core.resolve_conversation import ResolveConversationError
 
 AGENT_PR_AUTHORS = frozenset({"ryosaeba1985"})
@@ -373,3 +377,99 @@ def merge_pr(merge_gql: GqlFn, pr_id: str, expected_head: str) -> tuple[str, str
     if merged is True:
         return "merged", ""
     return "merge_failed", "mutation returned without merged=true"
+
+
+def _utc_now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _append_merge_audit(path: Path, record: dict[str, Any]) -> None:
+    """Append one JSON line under an exclusive lock (0600, local-only)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(record, separators=(",", ":")) + "\n"
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        os.write(fd, line.encode("utf-8"))
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
+def run_merge_loop(
+    requested_repos: Sequence[str],
+    *,
+    read_gql: GqlFn,
+    merge_gql: GqlFn,
+    max_merges: int = 3,
+    dry_run: bool = False,
+    audit_path: Path | None = DEFAULT_MERGE_AUDIT_PATH,
+    now: Callable[[], str] | None = None,
+) -> MergeLoopSummary:
+    """Scan allowlisted repos and rebase-merge fully-green agent PRs.
+
+    Non-agent PRs are invisible to this loop (no decision, no audit).
+    Agent PRs get exactly one decision each. Cap counts merged (live) or
+    would_merge (dry-run). One repo's scan failure is recorded and the
+    remaining repos still run.
+    """
+    timestamp = (now or _utc_now)()
+    allowed, skipped = gate_repos(requested_repos, ceiling=merge_allowed_repos())
+    decisions: list[MergeDecision] = []
+    errors: list[tuple[str, str]] = []
+    prs_scanned = 0
+    approved = 0
+    capped = False
+
+    def _record(decision: MergeDecision, head: str) -> None:
+        decisions.append(decision)
+        if audit_path is not None:
+            _append_merge_audit(
+                audit_path,
+                {
+                    "ts": timestamp,
+                    "repo": decision.repo,
+                    "pr": decision.pr,
+                    "action": decision.action,
+                    "reason": decision.reason,
+                    "head": head,
+                    "dry_run": dry_run,
+                },
+            )
+
+    for repo in allowed:
+        try:
+            snapshots = snapshots_for_repo(read_gql, repo)
+        except ResolveConversationError as exc:
+            errors.append((repo, str(exc)))
+            continue
+        prs_scanned += len(snapshots)
+        for s in snapshots:
+            if s.author not in AGENT_PR_AUTHORS:
+                continue  # never touched, never listed
+            reason = should_merge(s)
+            if reason != "ok":
+                _record(MergeDecision(repo, s.number, "skipped", reason), s.head_oid)
+                continue
+            if approved >= max_merges:
+                capped = True
+                _record(MergeDecision(repo, s.number, "skipped", "capped"), s.head_oid)
+                continue
+            approved += 1
+            if dry_run:
+                _record(MergeDecision(repo, s.number, "would_merge"), s.head_oid)
+                continue
+            action, message = merge_pr(merge_gql, s.pr_id, s.head_oid)
+            _record(MergeDecision(repo, s.number, action, message), s.head_oid)
+
+    return MergeLoopSummary(
+        repos_scanned=tuple(allowed),
+        repos_skipped=tuple(skipped),
+        prs_scanned=prs_scanned,
+        decisions=tuple(decisions),
+        capped=capped,
+        dry_run=dry_run,
+        errors=tuple(errors),
+    )
