@@ -35,6 +35,8 @@ _RAW_IDENTIFIER_REPOS = frozenset({"iterwheel/voyager-sandbox"})
 ALLOWED_BASE_REFS = frozenset({"main"})
 _EXTRA_REPOS_ENV = "VOYAGER_MERGE_EXTRA_REPOS"
 _REPO_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9._-]+$")
+_EXTRA_AUTHORS_ENV = "VOYAGER_MERGE_EXTRA_AUTHORS"
+_LOGIN_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$")
 
 DEFAULT_MERGE_LOCK_PATH = Path.home() / ".voyager" / "merge-loop.lock"
 DEFAULT_MERGE_AUDIT_PATH = Path.home() / ".voyager" / "merge-loop.audit.jsonl"
@@ -55,6 +57,27 @@ def merge_allowed_repos() -> frozenset[str]:
             )
         extras.add(token.lower())
     return MERGE_ALLOWED_REPOS | frozenset(extras)
+
+
+def merge_allowed_authors() -> frozenset[str]:
+    """Effective author allowlist: the built-in agent account plus
+    operator-local extras (e.g. ``dependabot`` for dependency-bump PRs).
+
+    FAIL-CLOSED parse, same contract as merge_allowed_repos(): a malformed
+    entry raises instead of being skipped. Entries are lowercased so
+    should_merge/snapshots_for_repo can do case-insensitive membership
+    checks (GraphQL `author.login` for dependabot is the plain login
+    `dependabot`, not `app/dependabot` or `dependabot[bot]`).
+    """
+    raw = os.environ.get(_EXTRA_AUTHORS_ENV, "")
+    extras: set[str] = set()
+    for idx, token in enumerate(raw.replace(",", " ").split(), start=1):
+        if not _LOGIN_PATTERN.match(token):
+            raise ResolveConversationError(
+                f"{_EXTRA_AUTHORS_ENV} entry #{idx} is not a valid GitHub login"
+            )
+        extras.add(token.lower())
+    return AGENT_PR_AUTHORS | frozenset(extras)
 
 
 @dataclass(frozen=True)
@@ -153,12 +176,16 @@ def parse_readiness(body: str) -> tuple[int, str] | None:
     return int(stage_m.group(1)), head_m.group(1)
 
 
-def should_merge(s: PrSnapshot) -> str:
+def should_merge(s: PrSnapshot, *, allowed_authors: frozenset[str] | None = None) -> str:
     """Deterministic merge predicate. Returns "ok" or a stable skip reason:
     not_agent_author | base_not_allowed | draft | checks_not_green |
     base_freshness_unreadable | base_stale | threads_unreadable |
     threads_unresolved | readiness_missing | readiness_not_ready |
     readiness_stale_head.
+
+    *allowed_authors* is the built-in agent author plus operator-local
+    extras (VOYAGER_MERGE_EXTRA_AUTHORS); None resolves merge_allowed_authors()
+    at call time. Matching is case-insensitive against s.author.
 
     Order matters only for reporting; every condition is independently
     fail-closed. Stage >= REQUIRED_READINESS_STAGE accepts both
@@ -181,7 +208,8 @@ def should_merge(s: PrSnapshot) -> str:
     in ALLOWED_BASE_REFS) — a retarget after the snapshot, which
     expectedHeadOid alone cannot guard against.
     """
-    if s.author not in AGENT_PR_AUTHORS:
+    allowed = allowed_authors if allowed_authors is not None else merge_allowed_authors()
+    if s.author.lower() not in allowed:
         return "not_agent_author"
     if s.base_ref not in ALLOWED_BASE_REFS:
         return "base_not_allowed"
@@ -505,8 +533,16 @@ def _readiness_for_pr(gql: GqlFn, repo: str, number: int) -> tuple[int | None, s
         seen_cursors.add(after)
 
 
-def snapshots_for_repo(gql: GqlFn, repo: str) -> list[PrSnapshot]:
-    """Every open PR's merge-relevant state; thread counts fetched lazily."""
+def snapshots_for_repo(
+    gql: GqlFn, repo: str, *, allowed_authors: frozenset[str] | None = None
+) -> list[PrSnapshot]:
+    """Every open PR's merge-relevant state; thread counts fetched lazily.
+
+    *allowed_authors* gates the cheap_green check (whether the expensive
+    per-PR reads below run at all); None resolves merge_allowed_authors() at
+    call time. Matching is case-insensitive.
+    """
+    allowed = allowed_authors if allowed_authors is not None else merge_allowed_authors()
     owner, name = repo.split("/", 1)
     snapshots: list[PrSnapshot] = []
     after: str | None = None
@@ -530,7 +566,7 @@ def snapshots_for_repo(gql: GqlFn, repo: str) -> list[PrSnapshot]:
             rollup_nodes = ((node.get("commits") or {}).get("nodes")) or [{}]
             rollup = ((rollup_nodes[0].get("commit") or {}).get("statusCheckRollup")) or {}
             checks_state = rollup.get("state")
-            cheap_green = author in AGENT_PR_AUTHORS and not is_draft and checks_state == "SUCCESS"
+            cheap_green = author.lower() in allowed and not is_draft and checks_state == "SUCCESS"
             base_behind = _base_behind_by(gql, repo, base_ref, number) if cheap_green else None
             threads = _unresolved_thread_count(gql, repo, number) if cheap_green else None
             stage, r_head = _readiness_for_pr(gql, repo, number) if cheap_green else (None, None)
@@ -682,9 +718,15 @@ def run_merge_loop(
     *identity_gql* asserts the fixed machine identity (mirrors
     run_resolve_loop) BEFORE any repo is scanned — including in dry-run,
     since a wrong credential must abort there too, not only on live merges.
+
+    merge_allowed_authors() is resolved ONCE here and threaded through to
+    both snapshots_for_repo and should_merge for every repo in this run —
+    mirroring the repo ceiling: an env change mid-run must not split the
+    run's view of which authors are eligible.
     """
     timestamp = (now or _utc_now)()
     allowed, skipped = gate_repos(requested_repos, ceiling=merge_allowed_repos())
+    allowed_authors = merge_allowed_authors()
     _assert_machine_identity(identity_gql)
     decisions: list[MergeDecision] = []
     errors: list[tuple[str, str]] = []
@@ -702,7 +744,7 @@ def run_merge_loop(
 
     for repo in allowed:
         try:
-            snapshots = snapshots_for_repo(read_gql, repo)
+            snapshots = snapshots_for_repo(read_gql, repo, allowed_authors=allowed_authors)
         except ResolveConversationError as exc:
             errors.append((repo, str(exc)))
             continue
@@ -715,9 +757,9 @@ def run_merge_loop(
         # rather than rebase-merge onto an untested base.
         merged_in_repo = False
         for s in snapshots:
-            if s.author not in AGENT_PR_AUTHORS:
+            if s.author.lower() not in allowed_authors:
                 continue  # never touched, never listed
-            reason = should_merge(s)
+            reason = should_merge(s, allowed_authors=allowed_authors)
             if reason != "ok":
                 _record(MergeDecision(repo, s.number, "skipped", reason))
                 continue

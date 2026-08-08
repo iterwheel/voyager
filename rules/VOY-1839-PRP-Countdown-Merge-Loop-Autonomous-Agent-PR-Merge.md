@@ -44,9 +44,15 @@ approve" still leaves one manual action per PR.
 
 A PR is merged only when ALL of the following hold on the **current head**:
 
-1. **Author allowlist:** PR author is `ryosaeba1985` (the agent account).
-   PRs by any other author — including the repo owner and external
-   contributors — are never touched.
+1. **Author allowlist:** PR author is `ryosaeba1985` (the agent account) or
+   one of the operator-local extras in `VOYAGER_MERGE_EXTRA_AUTHORS`
+   (`merge_allowed_authors()`, mirroring the `VOYAGER_MERGE_EXTRA_REPOS`
+   repo-ceiling extension). Extras are parsed FAIL-CLOSED (a malformed entry
+   raises) and matched case-insensitively, lowercase-normalized. This is the
+   mechanism for authorizing dependabot dependency-bump PRs on fx_bin — use
+   the GraphQL login form `dependabot`, not the REST/UI renderings
+   `app/dependabot` or `dependabot[bot]`. PRs by any other author — including
+   the repo owner and external contributors — are never touched.
 2. PR is open and not a draft.
 3. CI: `statusCheckRollup` for the head commit is entirely `SUCCESS`
    (fail-closed on `null`/pending/missing).
@@ -147,3 +153,4 @@ them. They stay open for manual handling.
 |------|--------|----|
 | 2026-08-08 | Initial draft after operator design session (scope: fx_bin only; zero-touch agent-PR merge; rebase method) | Claude Code |
 | 2026-08-08 | Mirror VOY-1840: `required_status_checks` row now mandates `strict_required_status_checks_policy: true` — the up-to-date gate is required, not optional (Codex round-11 review) | Claude Code |
+| 2026-08-08 | Author allowlist bullet documents the `VOYAGER_MERGE_EXTRA_AUTHORS` operator-local extension (`merge_allowed_authors()`), enabling dependabot dependency-bump PRs on fx_bin | Claude Code |

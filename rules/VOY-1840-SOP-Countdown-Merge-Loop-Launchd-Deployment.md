@@ -119,7 +119,7 @@ These files are machine-local and must not be committed:
 
 | Path | Contents | Required permissions |
 |------|----------|----------------------|
-| `/Users/frank/.voyager/merge-loop.env` | `MERGE_LOOP_ENABLED`, `MERGE_MAX_MERGES`, adaptive-interval knobs (`MERGE_FAST_INTERVAL`, `MERGE_SLOW_INTERVAL`, `MERGE_FAST_STREAK_MAX`), and `VOYAGER_MERGE_EXTRA_REPOS`. | `600` |
+| `/Users/frank/.voyager/merge-loop.env` | `MERGE_LOOP_ENABLED`, `MERGE_MAX_MERGES`, adaptive-interval knobs (`MERGE_FAST_INTERVAL`, `MERGE_SLOW_INTERVAL`, `MERGE_FAST_STREAK_MAX`), `VOYAGER_MERGE_EXTRA_REPOS`, and `VOYAGER_MERGE_EXTRA_AUTHORS`. | `600` |
 | `/Users/frank/.voyager/bin/merge-loop-adaptive.sh` | Installed copy of the adaptive wrapper (from `deploy/wukong/`). | `755` |
 | `/Users/frank/.voyager/merge-loop.repos` | OWNER/REPO allowlist consumed by `vyg countdown merge-loop --repos`. | `600` |
 | `/Users/frank/.voyager/merge-loop.audit.jsonl` | Redacted append-only merge-loop audit trail written by `merge_loop.py`. | file `600`, parent directory `700` preferred |
@@ -207,6 +207,14 @@ never scannable by default. Authorize it now, before Step 5's dry-run, or
 - Add `VOYAGER_MERGE_EXTRA_REPOS=frankyxhl/fx_bin` to
   `/Users/frank/.voyager/merge-loop.env`.
 - Add `frankyxhl/fx_bin` to `/Users/frank/.voyager/merge-loop.repos`.
+
+To authorize dependabot dependency-bump PRs (or any other non-agent-account
+author) to be merged, extend the AUTHOR allowlist the same place you extend
+the repo allowlist: add `VOYAGER_MERGE_EXTRA_AUTHORS=dependabot` to the same
+env file. Use the GraphQL login form (`dependabot`), not `app/dependabot` or
+`dependabot[bot]` — `merge_allowed_authors()` fails closed on a malformed
+entry. This is optional; skip it if fx_bin should merge only `ryosaeba1985`
+PRs.
 
 This only authorizes the repo to be *scanned*; it does not enable live merges.
 Live mutations on `fx_bin` still wait on Steps 5 and 6 passing (Rollout Gate
@@ -469,6 +477,7 @@ Before declaring the scheduled deployment complete, record:
 | 2026-08-08 | Initial version | Claude Code |
 | 2026-08-08 | Add pitfalls: readiness-comment window (last 50), apply-time race consumes cap slot | Claude Code |
 | 2026-08-08 | Step 5 dry-run now sources `merge-loop.env` before invoking `vyg` directly, so operator-set `VOYAGER_MERGE_EXTRA_REPOS` reaches the process instead of ceiling-skipping `fx_bin`; corrected the readiness pitfall to describe paged-to-exhaustion comment reads (not a last-50 window), matching 14d2e9e | Claude Code |
+| 2026-08-08 | §2 env-file table row and §4 note document `VOYAGER_MERGE_EXTRA_AUTHORS` — authorize extra authors (e.g. dependabot) the same place you authorize extra repos | Claude Code |
 | 2026-08-08 | Add pitfall: `base_stale` skip when main advances after checks ran; recommend GitHub's "require branches up to date" required check as server-side defense in depth (Codex round-4 review) | Claude Code |
 | 2026-08-08 | Add pitfall: at most one PR merges per repo per cycle, rest deferred as `base_moved_by_merge` (Codex round-5 review) | Claude Code |
 | 2026-08-08 | Step 5 dry-run snippets fail closed when `merge-loop.env` cannot be sourced — `vyg` no longer runs with an unset ceiling on a broken env file (Codex round-6 review) | Claude Code |
