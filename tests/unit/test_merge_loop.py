@@ -5,6 +5,7 @@ from __future__ import annotations
 import json as _json
 
 import pytest
+from typer.testing import CliRunner
 
 from voyager.core.merge_loop import (
     _AGENT_PR_PAGE_QUERY,
@@ -557,3 +558,13 @@ class TestRunMergeLoop:
         assert record["repo"] == "frankyxhl/fx_bin"
         assert summary.merged == 0
         assert len(summary.decisions) == 1
+
+
+class TestCli:
+    def test_merge_loop_command_registered(self):
+        from voyager.cli import app
+
+        result = CliRunner().invoke(app, ["countdown", "merge-loop", "--help"])
+        assert result.exit_code == 0
+        assert "--dry-run" in result.output
+        assert "--max-merges" in result.output
