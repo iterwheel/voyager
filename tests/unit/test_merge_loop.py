@@ -547,9 +547,13 @@ class TestRunMergeLoop:
         def merge_gql(query, variables):
             return {"mergePullRequest": {"pullRequest": {"merged": False}}}
 
-        run_merge_loop(["frankyxhl/fx_bin"], read_gql=read, merge_gql=merge_gql, audit_path=audit)
+        summary = run_merge_loop(
+            ["frankyxhl/fx_bin"], read_gql=read, merge_gql=merge_gql, audit_path=audit
+        )
         (line,) = audit.read_text().strip().splitlines()
         record = _json.loads(line)
         assert record["action"] == "merge_failed"
         assert record["pr"] == 1
         assert record["repo"] == "frankyxhl/fx_bin"
+        assert summary.merged == 0
+        assert len(summary.decisions) == 1
