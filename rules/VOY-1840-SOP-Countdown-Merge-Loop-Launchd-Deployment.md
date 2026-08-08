@@ -80,7 +80,7 @@ as `frankyxhl`; copied verbatim from VOY-1839 §Target-repo GitHub configuration
 |---------|--------|-----|
 | `main-pr-gates` | `required_approving_review_count` 1 → 0 | Removes the human-approve gate |
 | `protect main` | `require_code_owner_review` true → false | Same — bot cannot satisfy code-owner review |
-| `main-pr-gates` | **Add** `required_status_checks` for the CI workflows | Merge-time CI enforcement must live in GitHub, not only in the loop's predicate |
+| `main-pr-gates` | **Add** `required_status_checks` for the CI workflows, **with** `strict_required_status_checks_policy: true` ("Require branches to be up to date before merging") | Merge-time CI enforcement must live in GitHub, not only in the loop's predicate; the strict/up-to-date flag is REQUIRED, not optional — the loop's apply-time base re-read cannot eliminate the base-advance race (`mergePullRequest` has no `expectedBaseOid`), so this server-side gate is the only complete guarantee that merged commits were checked against the current base |
 | `main-owner-merge-only` | Add `iterwheel-countdown-bot` to `bypass_actors` | The `update` rule otherwise blocks bot-initiated merges (canary-verify first; skip if the merge succeeds without it) |
 | (keep) | `required_review_thread_resolution: true`, CodeQL gate | The remaining machine gates in zero-touch mode |
 
@@ -445,13 +445,15 @@ Before declaring the scheduled deployment complete, record:
   cycle per PR by design — this is not a bug or a stuck loop.
 - The loop skips green PRs whose base advanced after their checks ran
   (`base_stale`) until the PR is rebased/re-checked — `expectedHeadOid` only
-  guards the PR head, not the base. Enabling GitHub's "require branches up to
-  date before merging" required-check setting on the target repo gives the
-  same guarantee server-side (defense in depth, recommended).
+  guards the PR head, not the base. GitHub's "require branches up to date
+  before merging" (strict required checks) is a REQUIRED entry in the
+  Target-repo GitHub Configuration table above, not an optional extra.
 - The live path re-reads base freshness immediately before merging
   (`base_stale_at_apply`), narrowing but not eliminating the base-advance
-  race — the merge mutation has no `expectedBaseOid` — so "require branches
-  up to date" remains the necessary server-side backstop.
+  race — the merge mutation has no `expectedBaseOid` — which is exactly why
+  the strict up-to-date requirement above is a mandatory pre-live gate: with
+  it enabled, GitHub itself refuses a merge whose head was not checked
+  against the current base.
 
 ---
 
@@ -467,3 +469,4 @@ Before declaring the scheduled deployment complete, record:
 | 2026-08-08 | Step 5 dry-run snippets fail closed when `merge-loop.env` cannot be sourced — `vyg` no longer runs with an unset ceiling on a broken env file (Codex round-6 review) | Claude Code |
 | 2026-08-08 | Step 5 dry-run snippets' else branch now ends in `false` (both multi-line and one-line forms) so a sourcing failure exits nonzero instead of 0, matching the fail-closed intent for preflight/`set -e` callers (Codex round-7 review) | Claude Code |
 | 2026-08-08 | Add pitfall: live path re-reads base freshness immediately before merging (`base_stale_at_apply`), narrowing but not eliminating the base-advance race since the merge mutation has no `expectedBaseOid` (Codex round-9 review) | Claude Code |
+| 2026-08-08 | Promote "Require branches to be up to date before merging" (`strict_required_status_checks_policy: true`) from optional pitfall recommendation to REQUIRED entry in the Target-repo GitHub Configuration table (Codex round-10 review) | Claude Code |
