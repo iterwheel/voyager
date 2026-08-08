@@ -97,7 +97,7 @@ Required on `frankyxhl/fx_bin` before enabling live mode:
 |---------|--------|-----|
 | `main-pr-gates` | `required_approving_review_count` 1 → 0 | Removes the human-approve gate |
 | `protect main` | `require_code_owner_review` true → false | Same — bot cannot satisfy code-owner review |
-| `main-pr-gates` | **Add** `required_status_checks` for the CI workflows | Merge-time CI enforcement must live in GitHub, not only in the loop's predicate |
+| `main-pr-gates` | **Add** `required_status_checks` for the CI workflows, **with** `strict_required_status_checks_policy: true` ("Require branches to be up to date before merging") | Merge-time CI enforcement must live in GitHub, not only in the loop's predicate; the strict/up-to-date flag is REQUIRED — `mergePullRequest` has no `expectedBaseOid`, so the loop's apply-time base re-read cannot fully close the base-advance race and this server-side gate is the only complete guarantee |
 | `main-owner-merge-only` | Add `iterwheel-countdown-bot` to `bypass_actors` | The `update` rule otherwise blocks bot-initiated merges (canary-verify first; skip if the merge succeeds without it) |
 | (keep) | `required_review_thread_resolution: true`, CodeQL gate | The remaining machine gates in zero-touch mode |
 
@@ -146,3 +146,4 @@ them. They stay open for manual handling.
 | Date | Change | By |
 |------|--------|----|
 | 2026-08-08 | Initial draft after operator design session (scope: fx_bin only; zero-touch agent-PR merge; rebase method) | Claude Code |
+| 2026-08-08 | Mirror VOY-1840: `required_status_checks` row now mandates `strict_required_status_checks_policy: true` — the up-to-date gate is required, not optional (Codex round-11 review) | Claude Code |
