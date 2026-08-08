@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from voyager.bots.clearance.constants import CLEARANCE_COMMENT_MARKER
 from voyager.core.resolve_conversation import ResolveConversationError
 
 AGENT_PR_AUTHORS = frozenset({"ryosaeba1985"})
@@ -108,3 +109,22 @@ class MergeLoopSummary:
             "errors": [{"target": t, "message": m} for t, m in self.errors],
             "decisions": [d.public() for d in self.decisions],
         }
+
+
+_STAGE_RE = re.compile(r"Stage:\s*(\d+)")
+_HEAD_RE = re.compile(r"Head SHA:\s*`([0-9a-f]{40})`")
+
+
+def parse_readiness(body: str) -> tuple[int, str] | None:
+    """Parse a clearance readiness comment into (stage, head_sha).
+
+    Fail-closed: anything not carrying the marker, a stage, AND a full
+    40-hex head SHA returns None.
+    """
+    if CLEARANCE_COMMENT_MARKER not in body:
+        return None
+    stage_m = _STAGE_RE.search(body)
+    head_m = _HEAD_RE.search(body)
+    if not stage_m or not head_m:
+        return None
+    return int(stage_m.group(1)), head_m.group(1)

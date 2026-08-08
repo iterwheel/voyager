@@ -9,6 +9,7 @@ from voyager.core.merge_loop import (
     MergeDecision,
     MergeLoopSummary,
     merge_allowed_repos,
+    parse_readiness,
 )
 from voyager.core.resolve_conversation import ResolveConversationError
 
@@ -69,3 +70,42 @@ class TestSummary:
         assert pub["merged"] == 1
         assert pub["decision_count"] == 3
         assert pub["errors"] == []
+
+
+READINESS_BODY = """<!-- iterwheel:clearance-readiness -->
+## Clearance
+
+🚦 Stage: 3 - Ready for approval (`clearance-3-ready-for-approval`)
+✅ Threads: 0 blocking
+
+<details>
+<summary>Details</summary>
+
+- Head SHA: `a96782f4e41207e63d63bd552f9b4fa5399c7eb8`
+</details>
+"""
+
+
+class TestParseReadiness:
+    def test_parses_stage_and_head(self):
+        assert parse_readiness(READINESS_BODY) == (
+            3,
+            "a96782f4e41207e63d63bd552f9b4fa5399c7eb8",
+        )
+
+    def test_stage_2_parses_as_2(self):
+        body = READINESS_BODY.replace("Stage: 3", "Stage: 2")
+        parsed = parse_readiness(body)
+        assert parsed is not None
+        assert parsed[0] == 2
+
+    def test_missing_marker_returns_none(self):
+        assert parse_readiness(READINESS_BODY.split("\n", 1)[1]) is None
+
+    def test_missing_head_sha_returns_none(self):
+        body = READINESS_BODY.replace("Head SHA", "Head Something")
+        assert parse_readiness(body) is None
+
+    def test_short_sha_returns_none(self):
+        body = READINESS_BODY.replace("a96782f4e41207e63d63bd552f9b4fa5399c7eb8", "a96782f")
+        assert parse_readiness(body) is None
