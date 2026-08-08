@@ -199,10 +199,24 @@ install -m 755 deploy/wukong/merge-loop-adaptive.sh \
 ```
 
 Edit the private env file locally. Keep `MERGE_LOOP_ENABLED=false` until Step 7.
-The example repo allowlist ships with `iterwheel/voyager-sandbox` only; add
-`frankyxhl/fx_bin` only after Steps 5 and 6 pass.
+The example repo allowlist ships with `iterwheel/voyager-sandbox` only, and the
+built-in merge ceiling (`MERGE_ALLOWED_REPOS`) is sandbox-only — `fx_bin` is
+never scannable by default. Authorize it now, before Step 5's dry-run, or
+`gate_repos` ceiling-skips it and the dry-run silently proves nothing:
+
+- Add `VOYAGER_MERGE_EXTRA_REPOS=frankyxhl/fx_bin` to
+  `/Users/frank/.voyager/merge-loop.env`.
+- Add `frankyxhl/fx_bin` to `/Users/frank/.voyager/merge-loop.repos`.
+
+This only authorizes the repo to be *scanned*; it does not enable live merges.
+Live mutations on `fx_bin` still wait on Steps 5 and 6 passing (Rollout Gate
+steps 1–2) before Step 7 flips `MERGE_LOOP_ENABLED=true`.
 
 ### 5. Run the Dry-Run Gate
+
+Confirm Step 4's `fx_bin` authorization landed (`VOYAGER_MERGE_EXTRA_REPOS` in
+`merge-loop.env` and the `merge-loop.repos` line) — without it this dry-run
+scans `iterwheel/voyager-sandbox` only and never touches `fx_bin`.
 
 Verify the fixed machine account credential path:
 
