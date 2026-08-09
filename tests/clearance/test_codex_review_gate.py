@@ -9,10 +9,19 @@ Decided rule: Stage 3 (and the review request it triggers) additionally
 requires codex-reviewed-current-head evidence — at least one of:
   (a) a Codex REVIEW submission whose commit_id == head_sha;
   (b) a Codex clean-verdict PR comment whose "Reviewed commit:" value
-      prefix-matches the current head;
-  (c) >=1 Codex inline review thread exists on the PR.
-Absent all three, status stays clearance_pending with a reason, and no
-review request is made.
+      prefix-matches the current head.
+Absent both, status stays clearance_pending with a reason, and no review
+request is made.
+
+Round-2 review finding: a third evidence type — "a Codex inline review
+thread exists on the PR" — was removed. Thread state cannot be reliably
+head-anchored: a thread resolved on an old head still reads as "resolved"
+after a push with no new Codex activity, and GitHub can re-anchor an old,
+untouched review comment to carry the *new* commit id (VOY-1832 / TRN-1209:
+`created_at`, not `commit_id`, is the only reliable comment-freshness key).
+Whenever Codex reviews and leaves inline findings it necessarily also
+submits a PR review — so (a) already covers that case without trusting
+thread state.
 """
 
 from __future__ import annotations
@@ -223,10 +232,26 @@ def test_clean_verdict_comment_from_non_codex_login_does_not_count() -> None:
     assert codex_reviewed_current_head(snapshot) is False
 
 
-def test_codex_thread_existing_is_reviewed() -> None:
+def test_resolved_codex_thread_alone_is_not_reviewed() -> None:
+    """Round-2 fix: thread evidence was removed entirely. A resolved Codex
+    thread with no head-anchored Codex review/comment must NOT count — thread
+    resolution proves the finding was addressed as of *some* head, not
+    necessarily the current one (see module docstring)."""
     snapshot = {
         "pull_request": _open_pr(),
         "reviews": [_approval()],
+        "review_threads": [_codex_thread(resolved=True)],
+        "issue_comments": [],
+    }
+    assert codex_reviewed_current_head(snapshot) is False
+
+
+def test_head_anchored_review_plus_resolved_thread_is_reviewed() -> None:
+    """Positive case: a head-anchored Codex review submission is sufficient
+    evidence on its own, regardless of thread state alongside it."""
+    snapshot = {
+        "pull_request": _open_pr(),
+        "reviews": [_approval(), _codex_review()],
         "review_threads": [_codex_thread(resolved=True)],
         "issue_comments": [],
     }
@@ -234,16 +259,26 @@ def test_codex_thread_existing_is_reviewed() -> None:
 
 
 def test_outdated_unresolved_codex_thread_is_not_reviewed() -> None:
-    """Critical fix: outdated+unresolved is exempt from BLOCKED (its anchor code
-    changed) but must NOT count as current-head Codex review evidence — the
-    finding was never confirmed addressed, and the thread anchors to a
-    superseded head. Without this exclusion, pushing a commit that merely
-    invalidates an old Codex thread's diff anchor (no new Codex activity at
-    all) would satisfy the gate for the new head."""
+    """Thread evidence never counts (round-2), so this old Critical-fix repro
+    still holds trivially: outdated+unresolved is exempt from BLOCKED (its
+    anchor code changed) but is not current-head Codex review evidence."""
     snapshot = {
         "pull_request": _open_pr(),
         "reviews": [],
         "review_threads": [_codex_thread(resolved=False, outdated=True)],
+        "issue_comments": [],
+    }
+    assert codex_reviewed_current_head(snapshot) is False
+
+
+def test_thread_resolved_on_old_head_then_pushed_is_not_reviewed() -> None:
+    """Round-2 reproduction: Codex thread resolved while head was commit A;
+    author pushes commit B with no new Codex activity at all. Thread state
+    alone must not satisfy the gate for the new head B."""
+    snapshot = {
+        "pull_request": _open_pr(head=HEAD_SHA),  # current head is B (HEAD_SHA)
+        "reviews": [],
+        "review_threads": [_codex_thread(resolved=True)],  # resolved back on old head A
         "issue_comments": [],
     }
     assert codex_reviewed_current_head(snapshot) is False
@@ -332,11 +367,25 @@ def test_old_head_clean_verdict_stays_pending() -> None:
     assert ev["status"] == "clearance_pending"
 
 
-def test_resolved_codex_thread_reaches_stage_3() -> None:
+def test_resolved_codex_thread_alone_stays_pending() -> None:
+    """Round-2: a resolved Codex thread with no head-anchored review/comment
+    is not evidence — must NOT reach Stage 3."""
     ev = evaluate_clearance_snapshot(
         {
             "pull_request": _open_pr(),
             "reviews": [_approval()],
+            "review_threads": [_codex_thread(resolved=True)],
+            "issue_comments": [],
+        }
+    )
+    assert ev["status"] == "clearance_pending"
+
+
+def test_head_anchored_review_with_resolved_thread_reaches_stage_3() -> None:
+    ev = evaluate_clearance_snapshot(
+        {
+            "pull_request": _open_pr(),
+            "reviews": [_approval(), _codex_review()],
             "review_threads": [_codex_thread(resolved=True)],
             "issue_comments": [],
         }
@@ -368,6 +417,22 @@ def test_outdated_unresolved_codex_thread_on_new_head_stays_pending() -> None:
             "pull_request": _open_pr(),
             "reviews": [],
             "review_threads": [_codex_thread(resolved=False, outdated=True)],
+            "issue_comments": [],
+        }
+    )
+    assert ev["status"] == "clearance_pending"
+    assert ev["labels"]["add"] == ["clearance-1-pending"]
+
+
+def test_thread_resolved_on_old_head_then_pushed_stays_pending() -> None:
+    """Round-2 reproduction: Codex thread resolved on commit A; author pushes
+    commit B with zero new Codex activity. Must stay clearance_pending, not
+    jump to Stage 3 on stale thread state."""
+    ev = evaluate_clearance_snapshot(
+        {
+            "pull_request": _open_pr(head=HEAD_SHA),  # now on commit B
+            "reviews": [],
+            "review_threads": [_codex_thread(resolved=True)],  # resolved back on commit A
             "issue_comments": [],
         }
     )
@@ -555,6 +620,18 @@ async def test_outdated_unresolved_codex_thread_dispatches_no_review_request() -
     from voyager.bots.clearance.enrichment import enrich_clearance_route
 
     client = _StubClient(reviews=[], review_threads=[_codex_thread(resolved=False, outdated=True)])
+    result = await enrich_clearance_route(client, _base_route(), repository="iterwheel/voyager")
+    assert result["validation"]["status"] == "clearance_pending"
+    assert client.request_reviewers_calls == []
+
+
+async def test_thread_resolved_on_old_head_then_pushed_dispatches_no_review_request() -> None:
+    """Round-2 reproduction, end-to-end: thread resolved on commit A, PR now
+    on commit B (HEAD_SHA), zero new Codex activity. Must stay
+    clearance_pending with no review request dispatched."""
+    from voyager.bots.clearance.enrichment import enrich_clearance_route
+
+    client = _StubClient(reviews=[], review_threads=[_codex_thread(resolved=True)])
     result = await enrich_clearance_route(client, _base_route(), repository="iterwheel/voyager")
     assert result["validation"]["status"] == "clearance_pending"
     assert client.request_reviewers_calls == []

@@ -7,7 +7,6 @@ from typing import Any, TypedDict, cast
 
 from voyager.core.codex_review_watch import _is_clean_summary
 
-from .classify import is_codex_thread
 from .constants import (
     ALL_CLEARANCE_LABELS,
     CLEARANCE_BLOCKED_LABEL,
@@ -116,29 +115,31 @@ def codex_reviewed_current_head(snapshot: dict[str, Any]) -> bool:
     yet. This predicate is head-anchored evidence that Codex actually has —
     a review or comment for a since-superseded head does not count.
 
-    Any ONE of the following is sufficient:
+    Any ONE of the following is sufficient — both are head-anchored via the
+    review/comment's own ``commit_id`` / ``Reviewed commit:`` value, not via
+    review-thread state:
       (a) a non-dismissed Codex PR review (``reviews``) submitted against the
           current head commit;
       (b) a Codex clean-verdict PR comment (``issue_comments``) starting with
           the same ``Codex Review:`` prefix as ``CODEX_REVIEW_RESULT_PREFIX``
           (constants.py) whose parsed ``Reviewed commit:`` value
           prefix-matches the current head — reuses the exact parsing
-          precedent in ``voyager.core.codex_review_watch._is_clean_summary``;
-      (c) a Codex inline review thread (``review_threads``) exists on the PR
-          AND is not in the "outdated-and-unresolved" state. Two disjoint
-          buckets survive to this check unblocked (a *fresh* unresolved
-          thread already routes to ``clearance_blocked`` before this
-          predicate ever runs, per ``evaluate_clearance_snapshot``'s own
-          unresolved-thread check):
-            - resolved (isResolved=True, any isOutdated) — Codex reviewed
-              and the finding was addressed: counts.
-            - outdated-and-unresolved (isResolved=False, isOutdated=True) —
-              exempted from BLOCKED because the anchor code changed, but
-              Codex's finding was never confirmed addressed *and* the
-              thread anchors to a superseded head: does NOT count. Without
-              this exclusion, pushing a new commit that merely invalidates
-              an old Codex thread's diff anchor — without any new Codex
-              activity — would satisfy this predicate for the new head.
+          precedent in ``voyager.core.codex_review_watch._is_clean_summary``.
+
+    Deliberately NOT evidence: review-thread existence/resolution
+    (``review_threads``). Round-2 review finding: thread state cannot be
+    reliably head-anchored. A thread resolved on an old head, followed by a
+    push with no new Codex activity, satisfies "resolved" for the *new* head
+    with zero Codex review of it — resolution proves the finding was
+    addressed as of *some* head, not the current one. Worse, GitHub can
+    re-anchor an old, untouched review comment to carry the *new* commit id
+    (a known trap — see VOY-1832 / TRN-1209: ``created_at``, not
+    ``commit_id``, is the only reliable comment-freshness key), so even a
+    commit-id check on threads is not trustworthy. Whenever Codex reviews and
+    leaves inline findings it necessarily also submits a PR review (author
+    ``chatgpt-codex-connector``, state ``COMMENTED``, with its own
+    ``commit_id``) — so predicate (a) already covers "Codex reviewed this
+    head and left findings" without trusting thread state at all.
     """
     pull_request = snapshot["pull_request"]
     head_sha = ((pull_request.get("head") or {}).get("sha")) or ""
@@ -164,10 +165,7 @@ def codex_reviewed_current_head(snapshot: dict[str, Any]) -> bool:
         ):
             return True
 
-    return any(
-        is_codex_thread(thread) and (thread.get("isResolved") or not thread.get("isOutdated"))
-        for thread in (snapshot.get("review_threads") or [])
-    )
+    return False
 
 
 def enforce_codex_review_gate(
