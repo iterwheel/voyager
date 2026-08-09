@@ -162,8 +162,9 @@ async def test_no_dispatch_when_status_is_clearance_ready(monkeypatch) -> None:
     monkeypatch.setenv("VOYAGER_CLEARANCE_REVIEW_REQUEST_USERS", "required-approver")
     reset_review_request_users_cache()
 
-    # Configured approver has already approved → clearance_ready, no dispatch needed
-    client = _StubClient(reviews=[_approval(login="required-approver")])
+    # Configured approver has already approved + codex reviewed the head →
+    # clearance_ready, no dispatch needed
+    client = _StubClient(reviews=[_approval(login="required-approver"), _codex_review()])
     result = await _run_enrich(client, _base_route())
     # API should NOT have been called
     assert client._request_reviewers_calls == []

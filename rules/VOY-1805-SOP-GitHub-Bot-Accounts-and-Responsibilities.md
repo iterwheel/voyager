@@ -166,7 +166,7 @@ and VOY-1804.
    | `clearance-1-pending` | `#FBCA04` (yellow) | Waiting for data, checks, webhook results, or bot review signal. |
    | `clearance-2-blocked` | `#D93F0B` (red) | Explicit blocker: unresolved review threads, changes requested, or failing required checks. |
    | `clearance-3-ready-for-approval` | `#5319E7` (purple) | Automated conditions satisfied, Codex has reviewed the current head (a head-anchored Codex PR review or clean-verdict comment — see `codex_reviewed_current_head`; review-thread state is not evidence, it cannot be reliably head-anchored), and configured human approval is still missing. |
-   | `clearance-4-ready-for-merge` | `#0E8A16` (green) | Configured human / current-head approval present and automated conditions satisfied. |
+   | `clearance-4-ready-for-merge` | `#0E8A16` (green) | Configured human / current-head approval present, automated conditions satisfied, AND Codex has reviewed the current head (same evidence as Stage 3 — see `codex_reviewed_current_head`). An approval that lands before Codex reviews the head does not advance this label by itself. |
 
    ### Legacy labels (migration)
 
@@ -328,3 +328,4 @@ review/gate stages for the Assembly-authored PR.
 | 2026-06-28 | Renamed the fixed Countdown machine-user resolver identity to `iterwheel-countdown-bot` for issue #226 | Codex |
 | 2026-08-09 | Clarified `clearance-3-ready-for-approval` requires Codex-reviewed-current-head evidence, not just automated conditions + missing approval (order_system_django #71 fix, PR #308) | Claude Code |
 | 2026-08-09 | Removed review-thread state as Codex-reviewed-current-head evidence — not reliably head-anchored; only a head-anchored Codex review or clean-verdict comment counts (PR #308 round-2 review fix) | Claude Code |
+| 2026-08-09 | Extended the Codex-reviewed-current-head requirement to `clearance-4-ready-for-merge` (Stage 4), not just Stage 3 — an early operator approval no longer bypasses the Codex-review gate on its own (PR #308 round-3 review fix) | Claude Code |

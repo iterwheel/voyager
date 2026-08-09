@@ -168,21 +168,35 @@ def codex_reviewed_current_head(snapshot: dict[str, Any]) -> bool:
     return False
 
 
+_CODEX_GATED_STATUSES = frozenset({"clearance_ready_for_approval", "clearance_ready"})
+
+
 def enforce_codex_review_gate(
     evaluation: ClearanceEvaluation, snapshot: dict[str, Any]
 ) -> ClearanceEvaluation:
-    """Demote ``clearance_ready_for_approval`` back to ``clearance_pending``
-    when Codex has not reviewed the PR's current head (see
-    ``codex_reviewed_current_head``).
+    """Demote ``clearance_ready_for_approval`` (Stage 3) or ``clearance_ready``
+    (Stage 4) back to ``clearance_pending`` when Codex has not reviewed the
+    PR's current head (see ``codex_reviewed_current_head``).
+
+    Stage 4 needs the same gate as Stage 3: an operator approving before
+    Codex has reviewed the current head must not let the PR reach
+    ``clearance_ready`` either — a merge loop gating on stage>=3 would
+    otherwise auto-merge a head Codex never saw. This is a plain widening of
+    the same check, not a new one: both stages mean "the codex-review
+    precondition plus something else (a pending human approval, or an
+    already-present one) is satisfied," so both need the precondition to
+    actually hold.
 
     Applied as the last step of both ``evaluate_clearance_snapshot`` (so the
-    plain GitHub-review-state path is gated) and ``enrich_clearance_route``
-    (so the SWM overlay's own, separate Stage 3 promotion — which fires from
-    ``automation["status"] == "ready"`` and can reach Stage 3 without going
-    back through ``evaluate_clearance_snapshot``'s branch chain — is gated
-    too). No-op for every other status.
+    plain GitHub-review-state path is gated for both stages) and
+    ``enrich_clearance_route`` (so the SWM overlay's own, separate Stage 3
+    *and* Stage 4 promotions — which fire from ``automation["status"] in
+    {"ready", "ready_with_low_priority"}`` and can reach either stage without
+    going back through ``evaluate_clearance_snapshot``'s branch chain — are
+    gated too). No-op for every other status (``clearance_pending``,
+    ``clearance_blocked``).
     """
-    if evaluation["status"] != "clearance_ready_for_approval":
+    if evaluation["status"] not in _CODEX_GATED_STATUSES:
         return evaluation
     if codex_reviewed_current_head(snapshot):
         return evaluation

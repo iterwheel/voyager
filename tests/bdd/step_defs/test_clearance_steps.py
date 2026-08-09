@@ -252,7 +252,7 @@ def snapshot_unresolved_thread() -> dict:
 def snapshot_only_outdated_unresolved_thread() -> dict:
     return {
         "pull_request": _open_pr(),
-        "reviews": [_approval()],
+        "reviews": [_approval(), _codex_review()],
         "review_threads": [_outdated_unresolved_thread()],
     }
 
@@ -272,6 +272,7 @@ def snapshot_reapproved_after_changes_requested() -> dict:
                 "submitted_at": "2026-05-10T11:00:00Z",
                 "user": {"login": "reviewer"},
             },
+            _codex_review(),
         ],
         "review_threads": [],
     }
@@ -779,7 +780,7 @@ def snapshot_configured_approver_approved(monkeypatch) -> dict:
     reset_review_request_users_cache()
     return {
         "pull_request": _open_pr(),
-        "reviews": [_approval(login="configured-approver")],
+        "reviews": [_approval(login="configured-approver"), _codex_review()],
         "review_threads": [],
     }
 

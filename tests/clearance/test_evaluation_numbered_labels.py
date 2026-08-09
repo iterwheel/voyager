@@ -109,7 +109,7 @@ def test_ready_no_env_uses_numbered_label() -> None:
     ev = _evaluate(
         {
             "pull_request": _open_pr(),
-            "reviews": [_approval()],
+            "reviews": [_approval(), _codex_review()],
             "review_threads": [],
         }
     )
@@ -174,7 +174,7 @@ def test_legacy_path_any_approval_gives_clearance_ready() -> None:
     ev = _evaluate(
         {
             "pull_request": _open_pr(),
-            "reviews": [_approval(login="random-approver")],
+            "reviews": [_approval(login="random-approver"), _codex_review()],
             "review_threads": [],
         }
     )
@@ -186,7 +186,7 @@ def test_legacy_path_ready_reaction_is_plus_one() -> None:
     ev = _evaluate(
         {
             "pull_request": _open_pr(),
-            "reviews": [_approval()],
+            "reviews": [_approval(), _codex_review()],
             "review_threads": [],
         }
     )
@@ -198,7 +198,7 @@ def test_legacy_path_ready_summary() -> None:
     ev = _evaluate(
         {
             "pull_request": _open_pr(),
-            "reviews": [_approval()],
+            "reviews": [_approval(), _codex_review()],
             "review_threads": [],
         }
     )
@@ -349,7 +349,7 @@ def test_configured_approver_approved_gives_clearance_ready(monkeypatch) -> None
     ev = _evaluate(
         {
             "pull_request": _open_pr(),
-            "reviews": [_approval(login="required-approver")],
+            "reviews": [_approval(login="required-approver"), _codex_review()],
             "review_threads": [],
         }
     )
@@ -366,7 +366,7 @@ def test_configured_approver_approved_summary(monkeypatch) -> None:
     ev = _evaluate(
         {
             "pull_request": _open_pr(),
-            "reviews": [_approval(login="required-approver")],
+            "reviews": [_approval(login="required-approver"), _codex_review()],
             "review_threads": [],
         }
     )
@@ -409,7 +409,7 @@ def test_configured_approver_match_is_case_insensitive(monkeypatch) -> None:
     ev = _evaluate(
         {
             "pull_request": _open_pr(),
-            "reviews": [_approval(login="frankyxhl")],
+            "reviews": [_approval(login="frankyxhl"), _codex_review()],
             "review_threads": [],
         }
     )
@@ -427,7 +427,7 @@ def test_configured_approver_reverse_case(monkeypatch) -> None:
     ev = _evaluate(
         {
             "pull_request": _open_pr(),
-            "reviews": [_approval(login="Frankyxhl")],
+            "reviews": [_approval(login="Frankyxhl"), _codex_review()],
             "review_threads": [],
         }
     )

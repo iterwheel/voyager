@@ -1,12 +1,14 @@
-"""Tests for the codex-review gate on clearance_ready_for_approval (Stage 3).
+"""Tests for the codex-review gate on Stage 3 (clearance_ready_for_approval)
+and Stage 4 (clearance_ready).
 
 Operator-reported defect: Clearance requested the operator's review 9 seconds
 after PR creation (order_system_django #71) — before Codex had reviewed
 anything. The classifier treated "zero Codex review threads" as "review
 clear" and jumped straight to clearance_ready_for_approval.
 
-Decided rule: Stage 3 (and the review request it triggers) additionally
-requires codex-reviewed-current-head evidence — at least one of:
+Decided rule: reaching Stage 3 (and the review request it triggers) OR
+Stage 4 additionally requires codex-reviewed-current-head evidence — at
+least one of:
   (a) a Codex REVIEW submission whose commit_id == head_sha;
   (b) a Codex clean-verdict PR comment whose "Reviewed commit:" value
       prefix-matches the current head.
@@ -22,6 +24,15 @@ untouched review comment to carry the *new* commit id (VOY-1832 / TRN-1209:
 Whenever Codex reviews and leaves inline findings it necessarily also
 submits a PR review — so (a) already covers that case without trusting
 thread state.
+
+Round-3 review finding: the gate only covered Stage 3. An operator who
+approves the current head *before* Codex has reviewed it could still reach
+Stage 4 (clearance_ready) directly — via evaluate_clearance_snapshot's own
+early-return branch, or via apply_swm_overlay's independent promotion from
+automation["status"] in {"ready", "ready_with_low_priority"} — and a merge
+loop gating on "stage >= 3" would auto-merge a head Codex never saw.
+enforce_codex_review_gate now gates both clearance_ready_for_approval and
+clearance_ready.
 """
 
 from __future__ import annotations
@@ -453,11 +464,16 @@ def test_missing_snapshot_keys_default_to_no_evidence() -> None:
 
 
 # ---------------------------------------------------------------------------
-# enforce_codex_review_gate — no-op for other statuses
+# Round-3 P1: Stage 4 (clearance_ready) needs the same gate as Stage 3.
+# An operator approving before Codex has reviewed the current head must not
+# reach clearance_ready either — a merge loop gating on stage>=3 would
+# otherwise auto-merge a head Codex never saw.
 # ---------------------------------------------------------------------------
 
 
-def test_gate_is_noop_for_clearance_ready() -> None:
+def test_approved_before_codex_stays_pending_not_ready() -> None:
+    """The configured reviewer approves the current head, but Codex hasn't
+    reviewed it — must stay clearance_pending, not jump to clearance_ready."""
     ev = evaluate_clearance_snapshot(
         {
             "pull_request": _open_pr(),
@@ -466,7 +482,94 @@ def test_gate_is_noop_for_clearance_ready() -> None:
             "issue_comments": [],
         }
     )
+    assert ev["status"] == "clearance_pending"
+    assert ev["labels"]["add"] == ["clearance-1-pending"]
+    reasons = ev["confidence"]["reasons"]
+    assert any("codex" in r.lower() and "current head" in r.lower() for r in reasons), (
+        f"Expected a Codex-current-head reason, got: {reasons}"
+    )
+
+
+def test_approved_with_codex_review_reaches_clearance_ready() -> None:
+    """Positive control: approval + a head-anchored Codex review ⇒ Stage 4,
+    exactly as before this round's fix."""
+    ev = evaluate_clearance_snapshot(
+        {
+            "pull_request": _open_pr(),
+            "reviews": [_approval(login="required-approver"), _codex_review()],
+            "review_threads": [],
+            "issue_comments": [],
+        }
+    )
     assert ev["status"] == "clearance_ready"
+    assert ev["labels"]["add"] == ["clearance-4-ready-for-merge"]
+
+
+async def test_approved_before_codex_dispatches_no_review_request_end_to_end() -> None:
+    """End-to-end: same scenario through enrich_clearance_route — stays
+    pending, no review request (Stage 4 never dispatches one anyway, but the
+    readiness comment/labels must reflect pending, not ready)."""
+    from voyager.bots.clearance.enrichment import enrich_clearance_route
+
+    client = _StubClient(reviews=[_approval(login="required-approver")])
+    result = await enrich_clearance_route(client, _base_route(), repository="iterwheel/voyager")
+    assert result["validation"]["status"] == "clearance_pending"
+    assert result["validation"]["labels"]["add"] == ["clearance-1-pending"]
+    assert client.request_reviewers_calls == []
+    comment_body = result["writeback"]["comment_body"]
+    assert "codex" in comment_body.lower()
+
+
+async def test_swm_overlay_ready_status_approved_before_codex_stays_pending() -> None:
+    """Overlay path reproduction: automation reports 'ready' (e.g. zero Codex
+    threads found) and the configured reviewer already approved the current
+    head. apply_swm_overlay would promote straight to clearance_ready,
+    skipping Stage 3 entirely since the approver already approved —
+    enforce_codex_review_gate must still catch and demote it."""
+    from voyager.bots.clearance.enrichment import enrich_clearance_route
+
+    client = _StubClient(reviews=[_approval(login="required-approver")])
+    automation = {
+        "enabled": True,
+        "status": "ready",
+        "reason": "no Codex review threads on PR",
+        "sync_actions": [],
+        "sync_actions_count": 0,
+        "dry_run": False,
+        "head_sha": HEAD_SHA,
+    }
+    result = await enrich_clearance_route(
+        client, _base_route(), repository="iterwheel/voyager", automation=automation
+    )
+    assert result["validation"]["status"] == "clearance_pending", (
+        f"Expected clearance_pending (demoted) but got {result['validation']['status']!r}"
+    )
+    assert client.request_reviewers_calls == []
+
+
+async def test_swm_overlay_ready_status_approved_with_codex_evidence_reaches_ready() -> None:
+    """Same overlay path, but Codex actually reviewed the head — should proceed to Stage 4."""
+    from voyager.bots.clearance.enrichment import enrich_clearance_route
+
+    client = _StubClient(reviews=[_approval(login="required-approver"), _codex_review()])
+    automation = {
+        "enabled": True,
+        "status": "ready",
+        "reason": "all Codex review threads RESOLVED",
+        "sync_actions": [],
+        "sync_actions_count": 0,
+        "dry_run": False,
+        "head_sha": HEAD_SHA,
+    }
+    result = await enrich_clearance_route(
+        client, _base_route(), repository="iterwheel/voyager", automation=automation
+    )
+    assert result["validation"]["status"] == "clearance_ready"
+
+
+# ---------------------------------------------------------------------------
+# enforce_codex_review_gate — no-op for other statuses
+# ---------------------------------------------------------------------------
 
 
 def test_gate_is_noop_for_clearance_blocked() -> None:
