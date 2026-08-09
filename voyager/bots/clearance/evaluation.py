@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 
+from voyager.core.codex_review_watch import _is_clean_summary
+
+from .classify import is_codex_thread
 from .constants import (
     ALL_CLEARANCE_LABELS,
     CLEARANCE_BLOCKED_LABEL,
@@ -13,6 +16,7 @@ from .constants import (
     CLEARANCE_READY_FOR_APPROVAL_LABEL,
     CLEARANCE_READY_LABEL,
     configured_review_request_users,
+    is_codex_login,
 )
 
 
@@ -100,6 +104,97 @@ def latest_decisive_reviews_by_author(
             continue
         latest[author] = review
     return latest
+
+
+def codex_reviewed_current_head(snapshot: dict[str, Any]) -> bool:
+    """True when Codex has reviewed the PR's current head.
+
+    Operator-reported defect (order_system_django PR #71): Clearance requested
+    human approval 9 seconds after PR creation because "zero Codex review
+    threads" was treated as "review clear." Codex hadn't reviewed anything
+    yet. This predicate is head-anchored evidence that Codex actually has —
+    a review or comment for a since-superseded head does not count.
+
+    Any ONE of the following is sufficient:
+      (a) a non-dismissed Codex PR review (``reviews``) submitted against the
+          current head commit;
+      (b) a Codex clean-verdict PR comment (``issue_comments``) starting with
+          ``CODEX_REVIEW_RESULT_PREFIX`` whose parsed ``Reviewed commit:``
+          value prefix-matches the current head — reuses the exact parsing
+          precedent in ``voyager.core.codex_review_watch._is_clean_summary``;
+      (c) at least one Codex inline review thread (``review_threads``) exists
+          on the PR. By the time this predicate is consulted,
+          ``evaluate_clearance_snapshot`` has already routed any *unresolved*
+          thread to ``clearance_blocked``, so a Codex thread surviving to
+          this check is necessarily resolved — Codex reviewed and the
+          finding was addressed.
+    """
+    pull_request = snapshot["pull_request"]
+    head_sha = ((pull_request.get("head") or {}).get("sha")) or ""
+    if not head_sha:
+        return False
+
+    for review in snapshot.get("reviews") or []:
+        login = (review.get("user") or {}).get("login")
+        if (
+            is_codex_login(login)
+            and str(review.get("state") or "").upper() != "DISMISSED"
+            and review.get("commit_id") == head_sha
+        ):
+            return True
+
+    for comment in snapshot.get("issue_comments") or []:
+        login = (comment.get("user") or {}).get("login")
+        if is_codex_login(login) and _is_clean_summary(str(comment.get("body") or ""), head_sha):
+            return True
+
+    return any(is_codex_thread(thread) for thread in (snapshot.get("review_threads") or []))
+
+
+def enforce_codex_review_gate(
+    evaluation: ClearanceEvaluation, snapshot: dict[str, Any]
+) -> ClearanceEvaluation:
+    """Demote ``clearance_ready_for_approval`` back to ``clearance_pending``
+    when Codex has not reviewed the PR's current head (see
+    ``codex_reviewed_current_head``).
+
+    Applied as the last step of both ``evaluate_clearance_snapshot`` (so the
+    plain GitHub-review-state path is gated) and ``enrich_clearance_route``
+    (so the SWM overlay's own, separate Stage 3 promotion — which fires from
+    ``automation["status"] == "ready"`` and can reach Stage 3 without going
+    back through ``evaluate_clearance_snapshot``'s branch chain — is gated
+    too). No-op for every other status.
+    """
+    if evaluation["status"] != "clearance_ready_for_approval":
+        return evaluation
+    if codex_reviewed_current_head(snapshot):
+        return evaluation
+
+    updated: dict[str, Any] = dict(evaluation)
+    confidence = dict(updated["confidence"])
+    # Drop the "awaiting configured reviewer" reason: it implies Clearance is
+    # one step from requesting a human review, which is no longer true once
+    # this gate demotes back to pending — Codex hasn't reviewed yet, so no
+    # human review request has been (or will be) made.
+    kept_reasons = [
+        reason
+        for reason in confidence["reasons"]
+        if not str(reason).startswith("Awaiting approval from configured reviewer(s):")
+    ]
+    confidence["reasons"] = [
+        *kept_reasons,
+        "Waiting for Codex review of the current head before requesting operator approval.",
+    ]
+    updated["status"] = "clearance_pending"
+    updated["conclusion"] = "neutral"
+    updated["summary"] = "Clearance is not ready yet."
+    updated["confidence"] = confidence
+    updated["labels"] = {
+        "add": [CLEARANCE_PENDING_LABEL],
+        "remove": [item for item in ALL_CLEARANCE_LABELS if item != CLEARANCE_PENDING_LABEL],
+    }
+    updated["reactions"] = {"add": ["eyes"], "remove": ["+1", "rocket"]}
+    return cast(ClearanceEvaluation, updated)
 
 
 def evaluate_clearance_snapshot(snapshot: dict[str, Any]) -> ClearanceEvaluation:
@@ -246,4 +341,4 @@ def evaluate_clearance_snapshot(snapshot: dict[str, Any]) -> ClearanceEvaluation
             else "Clearance is not ready yet."
         ),
     }
-    return result
+    return enforce_codex_review_gate(result, snapshot)

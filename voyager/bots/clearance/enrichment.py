@@ -22,7 +22,7 @@ from .constants import (
     CLEARANCE_READY_LABEL,
     configured_review_request_users,
 )
-from .evaluation import ClearanceEvaluation, evaluate_clearance_snapshot
+from .evaluation import ClearanceEvaluation, enforce_codex_review_gate, evaluate_clearance_snapshot
 from .overlay import apply_swm_overlay
 
 _log = logging.getLogger(__name__)
@@ -673,9 +673,16 @@ async def enrich_clearance_route(
         "review_threads": await client.pull_request_review_threads(
             CLEARANCE_AGENT_SLUG, repository, pr_number
         ),
+        "issue_comments": await client.issue_comments(CLEARANCE_AGENT_SLUG, repository, pr_number),
     }
     evaluation = evaluate_clearance_snapshot(snapshot)
     evaluation = apply_swm_overlay(evaluation, automation)
+    # The SWM overlay can independently promote to clearance_ready_for_approval
+    # (from automation["status"] in {"ready", "ready_with_low_priority"}) without
+    # going back through evaluate_clearance_snapshot's own gate above — re-apply
+    # it here so every route to Stage 3 requires Codex-reviewed-current-head
+    # evidence. See enforce_codex_review_gate / codex_reviewed_current_head.
+    evaluation = enforce_codex_review_gate(evaluation, snapshot)
 
     review_request: dict[str, Any] | None = None
     if evaluation["status"] == "clearance_ready_for_approval":

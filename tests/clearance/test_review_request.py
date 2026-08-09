@@ -29,6 +29,7 @@ class _StubClient:
         pull_request_data: dict | None = None,
         reviews: list | None = None,
         review_threads: list | None = None,
+        issue_comments: list | None = None,
         request_reviewers_side_effect: Any = None,
     ) -> None:
         self._pr = pull_request_data or {
@@ -42,6 +43,7 @@ class _StubClient:
         }
         self._reviews = reviews or []
         self._review_threads = review_threads or []
+        self._issue_comments = issue_comments or []
         self._request_reviewers_calls: list[dict] = []
         self._request_reviewers_side_effect = request_reviewers_side_effect
 
@@ -53,6 +55,9 @@ class _StubClient:
 
     async def pull_request_review_threads(self, app_slug: str, repo: str, pr_number: int) -> list:
         return self._review_threads
+
+    async def issue_comments(self, app_slug: str, repo: str, issue_number: int) -> list:
+        return self._issue_comments
 
     async def request_pull_request_reviewers(
         self, app_slug: str, repo: str, pull_number: int, reviewers: list[str]
@@ -76,6 +81,16 @@ def _approval(*, login: str = "approver", commit_id: str = "sha-abc") -> dict:
         "commit_id": commit_id,
         "submitted_at": "2026-05-01T10:00:00Z",
         "user": {"login": login},
+    }
+
+
+def _codex_review(*, commit_id: str = "sha-abc") -> dict:
+    """A Codex PR review on the given head — satisfies the codex-review gate."""
+    return {
+        "state": "COMMENTED",
+        "commit_id": commit_id,
+        "submitted_at": "2026-05-01T09:30:00Z",
+        "user": {"login": "chatgpt-codex-connector[bot]"},
     }
 
 
@@ -190,7 +205,7 @@ async def test_dispatch_fires_for_ready_for_approval(monkeypatch) -> None:
     reset_review_request_users_cache()
 
     # Someone else approved → ready_for_approval → dispatch should fire
-    client = _StubClient(reviews=[_approval(login="someone-else")])
+    client = _StubClient(reviews=[_approval(login="someone-else"), _codex_review()])
     result = await _run_enrich(client, _base_route())
     assert result["validation"]["status"] == "clearance_ready_for_approval"
     # API was called with required-approver
@@ -210,7 +225,7 @@ async def test_pr_author_in_configured_list_is_skipped(monkeypatch) -> None:
     monkeypatch.setenv("VOYAGER_CLEARANCE_REVIEW_REQUEST_USERS", "pr-author,other-reviewer")
     reset_review_request_users_cache()
 
-    client = _StubClient(reviews=[_approval(login="someone-else")])
+    client = _StubClient(reviews=[_approval(login="someone-else"), _codex_review()])
     result = await _run_enrich(client, _base_route())
     assert result["validation"]["status"] == "clearance_ready_for_approval"
     # pr-author should NOT be in any API call
@@ -233,7 +248,7 @@ async def test_author_only_configured_reviewer_warns_and_does_not_request(
     reset_review_request_users_cache()
     caplog.set_level(logging.WARNING, logger="voyager.bots.clearance.enrichment")
 
-    client = _StubClient(reviews=[_approval(login="someone-else")])
+    client = _StubClient(reviews=[_approval(login="someone-else"), _codex_review()])
     result = await _run_enrich(client, _base_route())
 
     assert result["validation"]["status"] == "clearance_ready_for_approval"
@@ -266,7 +281,7 @@ async def test_multi_reviewer_author_skip_requests_eligible_without_deadlock(
     reset_review_request_users_cache()
     caplog.set_level(logging.WARNING, logger="voyager.bots.clearance.enrichment")
 
-    client = _StubClient(reviews=[_approval(login="someone-else")])
+    client = _StubClient(reviews=[_approval(login="someone-else"), _codex_review()])
     result = await _run_enrich(client, _base_route())
 
     requested = [u for call in client._request_reviewers_calls for u in call["reviewers"]]
@@ -303,7 +318,7 @@ async def test_already_requested_user_not_re_requested(monkeypatch) -> None:
     }
     client = _StubClient(
         pull_request_data=pr_data,
-        reviews=[_approval(login="someone-else")],
+        reviews=[_approval(login="someone-else"), _codex_review()],
     )
     result = await _run_enrich(client, _base_route())
     # API should NOT have been called (user already requested)
@@ -326,7 +341,7 @@ async def test_dry_run_no_api_call(monkeypatch) -> None:
     monkeypatch.setenv("DRY_RUN", "true")
     reset_review_request_users_cache()
 
-    client = _StubClient(reviews=[_approval(login="someone-else")])
+    client = _StubClient(reviews=[_approval(login="someone-else"), _codex_review()])
     result = await _run_enrich(client, _base_route())
     assert result["validation"]["status"] == "clearance_ready_for_approval"
     # No API call in dry-run
@@ -349,7 +364,7 @@ async def test_api_failure_gives_applied_false(monkeypatch) -> None:
     reset_review_request_users_cache()
 
     client = _StubClient(
-        reviews=[_approval(login="someone-else")],
+        reviews=[_approval(login="someone-else"), _codex_review()],
         request_reviewers_side_effect=httpx.HTTPError("connection reset"),
     )
     result = await _run_enrich(client, _base_route())
@@ -375,7 +390,7 @@ async def test_comment_includes_review_request_line(monkeypatch) -> None:
     monkeypatch.setenv("VOYAGER_CLEARANCE_REVIEW_REQUEST_USERS", "required-approver")
     reset_review_request_users_cache()
 
-    client = _StubClient(reviews=[_approval(login="someone-else")])
+    client = _StubClient(reviews=[_approval(login="someone-else"), _codex_review()])
     result = await _run_enrich(client, _base_route())
     comment_body = result["writeback"]["comment_body"]
     assert "Review request:" in comment_body
@@ -404,7 +419,7 @@ async def test_already_requested_match_is_case_insensitive(monkeypatch) -> None:
     }
     client = _StubClient(
         pull_request_data=pr_data,
-        reviews=[_approval(login="someone-else")],
+        reviews=[_approval(login="someone-else"), _codex_review()],
     )
     await _run_enrich(client, _base_route())
     # No API call should be made — user is already requested (case-insensitive match)
@@ -430,7 +445,7 @@ async def test_dispatch_honors_shared_dry_run_default(monkeypatch) -> None:
     monkeypatch.delenv("DRY_RUN", raising=False)
     reset_review_request_users_cache()
 
-    client = _StubClient(reviews=[_approval(login="someone-else")])
+    client = _StubClient(reviews=[_approval(login="someone-else"), _codex_review()])
     # Call _dispatch_review_request directly so we can inspect its return value precisely
     from voyager.bots.clearance.enrichment import _dispatch_review_request
 
@@ -493,7 +508,7 @@ async def test_dispatch_translates_422_to_already_requested(monkeypatch) -> None
     )
     exc_422 = httpx.HTTPStatusError("422", request=request_obj, response=response)
     client = _StubClient(
-        reviews=[_approval(login="someone-else")],
+        reviews=[_approval(login="someone-else"), _codex_review()],
         request_reviewers_side_effect=exc_422,
     )
     from voyager.bots.clearance.enrichment import _dispatch_review_request
@@ -549,7 +564,7 @@ async def test_dispatch_422_with_unrelated_error_is_not_already_requested(monkey
     )
     exc_422 = httpx.HTTPStatusError("422", request=request_obj, response=response)
     client = _StubClient(
-        reviews=[_approval(login="someone-else")],
+        reviews=[_approval(login="someone-else"), _codex_review()],
         request_reviewers_side_effect=exc_422,
     )
     from voyager.bots.clearance.enrichment import _dispatch_review_request
@@ -591,7 +606,7 @@ async def test_dispatch_does_not_leak_exception_url_in_comment(monkeypatch) -> N
 
     sensitive_msg = "https://api.github.com/repos/iterwheel/voyager/pulls/42/requested_reviewers token=ghp_abc123"
     client = _StubClient(
-        reviews=[_approval(login="someone-else")],
+        reviews=[_approval(login="someone-else"), _codex_review()],
         request_reviewers_side_effect=httpx.HTTPError(sensitive_msg),
     )
     from voyager.bots.clearance.enrichment import _dispatch_review_request

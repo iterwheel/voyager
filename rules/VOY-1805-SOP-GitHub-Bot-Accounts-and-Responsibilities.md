@@ -1,7 +1,7 @@
 # SOP-1805: GitHub Bot Accounts and Responsibilities
 
 **Applies to:** VOY project
-**Last updated:** 2026-06-28
+**Last updated:** 2026-08-09
 **Last reviewed:** 2026-06-22
 **Status:** Active
 **Related:** VOY-1802, VOY-1804
@@ -165,7 +165,7 @@ and VOY-1804.
    |-------|-------|-------------|
    | `clearance-1-pending` | `#FBCA04` (yellow) | Waiting for data, checks, webhook results, or bot review signal. |
    | `clearance-2-blocked` | `#D93F0B` (red) | Explicit blocker: unresolved review threads, changes requested, or failing required checks. |
-   | `clearance-3-ready-for-approval` | `#5319E7` (purple) | Automated conditions satisfied; configured human approval still missing. |
+   | `clearance-3-ready-for-approval` | `#5319E7` (purple) | Automated conditions satisfied, Codex has reviewed the current head (review/clean-verdict comment/inline thread on the current head — see `codex_reviewed_current_head`), and configured human approval is still missing. |
    | `clearance-4-ready-for-merge` | `#0E8A16` (green) | Configured human / current-head approval present and automated conditions satisfied. |
 
    ### Legacy labels (migration)
@@ -326,3 +326,4 @@ review/gate stages for the Assembly-authored PR.
 | 2026-05-23 | Added Actor Authorization for Assembly step (per VOY-1818): env-var policy, default-deny posture, bot precedence rule, unknown-metadata deny, refusal-disclosure non-goal | Claude (via VOY-1811 #76) |
 | 2026-06-22 | Designated Countdown as the final-gate review-thread resolver actor gated by Clearance evidence and live `viewerCanResolve` | Codex |
 | 2026-06-28 | Renamed the fixed Countdown machine-user resolver identity to `iterwheel-countdown-bot` for issue #226 | Codex |
+| 2026-08-09 | Clarified `clearance-3-ready-for-approval` requires Codex-reviewed-current-head evidence, not just automated conditions + missing approval (order_system_django #71 fix, PR #308) | Claude Code |

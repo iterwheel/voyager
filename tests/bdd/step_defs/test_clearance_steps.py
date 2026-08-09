@@ -160,6 +160,16 @@ def _dismissed(*, login: str = "reviewer") -> dict:
     }
 
 
+def _codex_review(*, commit_id: str = "abc1234") -> dict:
+    """A Codex PR review on the given head — satisfies the codex-review gate."""
+    return {
+        "state": "COMMENTED",
+        "commit_id": commit_id,
+        "submitted_at": "2026-05-10T09:30:00Z",
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+    }
+
+
 def _unresolved_thread() -> dict:
     return {"isResolved": False}
 
@@ -182,7 +192,11 @@ def _outdated_unresolved_thread() -> dict:
     "a clearance snapshot with an approved review on the current head", target_fixture="snapshot"
 )
 def snapshot_approved_current_head() -> dict:
-    return {"pull_request": _open_pr(), "reviews": [_approval()], "review_threads": []}
+    return {
+        "pull_request": _open_pr(),
+        "reviews": [_approval(), _codex_review()],
+        "review_threads": [],
+    }
 
 
 @given("a clearance snapshot for a draft PR with an approval", target_fixture="snapshot")

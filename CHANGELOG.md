@@ -20,6 +20,30 @@ release note for the explicit migration path.
   share/paste; the full file's write is best-effort and never blocks a
   merge ([#307](https://github.com/iterwheel/voyager/pull/307)).
 
+### Changed — Clearance Stage 3 requires Codex-reviewed-current-head evidence (BEHAVIOR CHANGE)
+
+- **Clearance no longer requests the operator's review before Codex has
+  reviewed the current PR head.** Operator-reported defect
+  (`order_system_django` #71): Clearance requested human approval 9 seconds
+  after PR creation because "zero Codex review threads" was treated as
+  "review clear" — Codex hadn't reviewed anything yet. `clearance_ready_for_approval`
+  (Stage 3), and the review request it triggers, now additionally requires
+  at least one of: (a) a non-dismissed Codex PR review submitted against the
+  current head commit; (b) a Codex clean-verdict PR comment whose
+  `Reviewed commit:` value prefix-matches the current head; (c) an existing
+  Codex inline review thread on the PR (which, by the time this check runs,
+  is necessarily resolved — unresolved threads already route to
+  `clearance_blocked`). Absent all three, status stays `clearance_pending`
+  with a "waiting for Codex review of the current head" reason and no review
+  request is made. New pure predicate `codex_reviewed_current_head` and gate
+  `enforce_codex_review_gate` in `voyager/bots/clearance/evaluation.py`,
+  applied both by `evaluate_clearance_snapshot` and — because the SWM overlay
+  can independently promote to Stage 3 from `automation["status"] == "ready"`
+  without going back through the classifier's own branch chain — again by
+  `enrich_clearance_route` after the overlay runs. The snapshot passed to
+  `evaluate_clearance_snapshot` gained an `issue_comments` key
+  ([#308](https://github.com/iterwheel/voyager/pull/308)).
+
 ## [0.11.0] — 2026-08-09
 
 ### Changed — Merge-loop approval gate (BREAKING for zero-touch flows)
