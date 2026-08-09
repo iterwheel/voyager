@@ -1218,6 +1218,7 @@ class TestRunMergeLoop:
             merge_gql=merge_gql,
             identity_gql=identity_gql or _identity_gql_ok,
             audit_path=None,
+            full_audit_path=None,
             **kwargs,
         )
         return summary, merges
@@ -1318,6 +1319,7 @@ class TestRunMergeLoop:
             merge_gql=merge_gql,
             identity_gql=_identity_gql_ok,
             audit_path=None,
+            full_audit_path=None,
         )
         assert merges == []
         (d,) = summary.decisions
@@ -1403,6 +1405,7 @@ class TestRunMergeLoop:
             merge_gql=merge_gql,
             identity_gql=_identity_gql_ok,
             audit_path=audit,
+            full_audit_path=None,
         )
         # fx_bin is not in _RAW_IDENTIFIER_REPOS: audit records must be
         # redacted like resolve-loop's (countdown_loop.py) — no pr/reason/head.
@@ -1468,6 +1471,7 @@ class TestRunMergeLoop:
             merge_gql=merge_gql,
             identity_gql=_identity_gql_ok,
             audit_path=audit,
+            full_audit_path=None,
         )
         intent_line, outcome_line = audit.read_text().strip().splitlines()
         intent = _json.loads(intent_line)
@@ -1499,6 +1503,7 @@ class TestRunMergeLoop:
             merge_gql=merge_gql,
             identity_gql=_identity_gql_ok,
             audit_path=audit,
+            full_audit_path=None,
         )
         intent_line, outcome_line = audit.read_text().strip().splitlines()
         intent = _json.loads(intent_line)
@@ -1526,6 +1531,7 @@ class TestRunMergeLoop:
             merge_gql=lambda query, variables: {},
             identity_gql=_identity_gql_ok,
             audit_path=None,
+            full_audit_path=None,
         )
         assert summary.systemic_failure is True
         assert summary.to_public_dict()["systemic_failure"] is True
@@ -1572,6 +1578,7 @@ class TestApplyTimeBaseFreshness:
             merge_gql=merge_gql,
             identity_gql=_identity_gql_ok,
             audit_path=audit,
+            full_audit_path=None,
         )
         assert calls == []  # merge_pr never called — no mutation issued
         (d,) = summary.decisions
@@ -1599,6 +1606,7 @@ class TestApplyTimeBaseFreshness:
             merge_gql=merge_gql,
             identity_gql=_identity_gql_ok,
             audit_path=None,
+            full_audit_path=None,
         )
         assert calls == []
         (d,) = summary.decisions
@@ -1624,6 +1632,7 @@ class TestApplyTimeBaseFreshness:
             merge_gql=merge_gql,
             identity_gql=_identity_gql_ok,
             audit_path=None,
+            full_audit_path=None,
         )
         assert calls == ["PR_1"]
         assert summary.merged == 1
@@ -1646,6 +1655,7 @@ class TestApplyTimeBaseFreshness:
             merge_gql=lambda q, v: {"mergePullRequest": {"pullRequest": {"merged": True}}},
             identity_gql=_identity_gql_ok,
             audit_path=None,
+            full_audit_path=None,
             dry_run=True,
         )
         assert len(calls) == 1
@@ -1682,6 +1692,7 @@ class TestApplyTimeBaseRetarget:
             merge_gql=merge_gql,
             identity_gql=_identity_gql_ok,
             audit_path=audit,
+            full_audit_path=None,
         )
         assert calls == []  # merge_pr never called — no mutation issued
         (d,) = summary.decisions
@@ -1709,6 +1720,7 @@ class TestApplyTimeBaseRetarget:
             merge_gql=merge_gql,
             identity_gql=_identity_gql_ok,
             audit_path=None,
+            full_audit_path=None,
         )
         assert calls == []
         (d,) = summary.decisions
@@ -1734,6 +1746,7 @@ class TestApplyTimeBaseRetarget:
             merge_gql=merge_gql,
             identity_gql=_identity_gql_ok,
             audit_path=None,
+            full_audit_path=None,
         )
         assert calls == ["PR_1"]
         assert summary.merged == 1
@@ -1756,6 +1769,7 @@ class TestApplyTimeBaseRetarget:
             merge_gql=lambda q, v: {"mergePullRequest": {"pullRequest": {"merged": True}}},
             identity_gql=_identity_gql_ok,
             audit_path=None,
+            full_audit_path=None,
             dry_run=True,
         )
         assert calls == []
@@ -1790,6 +1804,7 @@ class TestApplyTimeApprovalRevoked:
             merge_gql=merge_gql,
             identity_gql=_identity_gql_ok,
             audit_path=audit,
+            full_audit_path=None,
         )
         assert calls == []  # merge_pr never called — no mutation issued
         (d,) = summary.decisions
@@ -1824,6 +1839,7 @@ class TestApplyTimeApprovalRevoked:
             merge_gql=merge_gql,
             identity_gql=_identity_gql_ok,
             audit_path=audit,
+            full_audit_path=None,
         )
         assert calls == []  # merge_pr never called — no mutation issued
         (d,) = summary.decisions
@@ -1851,6 +1867,7 @@ class TestApplyTimeApprovalRevoked:
             merge_gql=merge_gql,
             identity_gql=_identity_gql_ok,
             audit_path=None,
+            full_audit_path=None,
         )
         assert calls == ["PR_1"]
         assert summary.merged == 1
@@ -1883,6 +1900,7 @@ class TestAuditIntent:
             merge_gql=merge_gql,
             identity_gql=_identity_gql_ok,
             audit_path=audit,
+            full_audit_path=None,
         )
         assert calls == []  # merge_pr was never called — no mutation issued
         (d,) = summary.decisions
@@ -1946,6 +1964,7 @@ class TestAuditIntent:
             merge_gql=merge_gql,
             identity_gql=_identity_gql_ok,
             audit_path=audit,
+            full_audit_path=None,
         )
         assert calls == []  # merge_pr was never called — no mutation issued
         (d,) = summary.decisions
@@ -1968,9 +1987,169 @@ class TestAuditIntent:
             merge_gql=merge_gql,
             identity_gql=_identity_gql_ok,
             audit_path=None,
+            full_audit_path=None,
         )
         assert calls == ["PR_1"]
         assert summary.merged == 1
+
+
+class TestFullAudit:
+    """Second, LOCAL-ONLY, full-fidelity audit sink (full_audit_path):
+    RAW pr/reason/head/review_decision for every repo, no redaction. Never
+    gates the merge — its write is best-effort. The redacted audit_path
+    file and its fail-closed write-ahead contract are unchanged (see
+    TestAuditIntent, TestDecisionRedaction)."""
+
+    def test_full_audit_is_raw_for_non_sandbox_repo(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        audit = tmp_path / "audit.jsonl"
+        full_audit = tmp_path / "audit.full.jsonl"
+        read = _fake_gql([_green_pr(1)], thread_pages={1: []}, comment_pages=_readiness_pages(1))
+
+        def merge_gql(query, variables):
+            return {"mergePullRequest": {"pullRequest": {"merged": True}}}
+
+        run_merge_loop(
+            ["frankyxhl/fx_bin"],
+            read_gql=read,
+            merge_gql=merge_gql,
+            identity_gql=_identity_gql_ok,
+            audit_path=audit,
+            full_audit_path=full_audit,
+        )
+        # Redacted file: unchanged contract — no pr/reason/head, redacted: true.
+        intent_line, outcome_line = audit.read_text().strip().splitlines()
+        intent = _json.loads(intent_line)
+        outcome = _json.loads(outcome_line)
+        assert intent["redacted"] is True
+        assert "pr" not in intent
+        assert outcome["redacted"] is True
+        assert "pr" not in outcome
+
+        # Full file: RAW for every repo, including this non-sandbox one.
+        full_intent_line, full_outcome_line = full_audit.read_text().strip().splitlines()
+        full_intent = _json.loads(full_intent_line)
+        full_outcome = _json.loads(full_outcome_line)
+        assert full_intent == {
+            "ts": full_intent["ts"],
+            "dry_run": False,
+            "repo": "frankyxhl/fx_bin",
+            "pr": 1,
+            "action": "merge_intent",
+            "reason": "",
+            "head": HEAD,
+            "review_decision": "APPROVED",
+        }
+        assert full_outcome == {
+            "ts": full_outcome["ts"],
+            "dry_run": False,
+            "repo": "frankyxhl/fx_bin",
+            "pr": 1,
+            "action": "merged",
+            "reason": "",
+            "head": HEAD,
+            "review_decision": "APPROVED",
+        }
+
+    def test_merge_intent_full_line_precedes_outcome_line(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        full_audit = tmp_path / "audit.full.jsonl"
+        read = _fake_gql([_green_pr(1)], thread_pages={1: []}, comment_pages=_readiness_pages(1))
+
+        def merge_gql(query, variables):
+            return {"mergePullRequest": {"pullRequest": {"merged": True}}}
+
+        run_merge_loop(
+            ["frankyxhl/fx_bin"],
+            read_gql=read,
+            merge_gql=merge_gql,
+            identity_gql=_identity_gql_ok,
+            audit_path=None,
+            full_audit_path=full_audit,
+        )
+        lines = [_json.loads(line) for line in full_audit.read_text().strip().splitlines()]
+        assert [line["action"] for line in lines] == ["merge_intent", "merged"]
+
+    def test_write_failure_records_error_once_and_merge_still_happens(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        audit = tmp_path / "audit.jsonl"
+        full_audit = tmp_path / "audit.full.jsonl"
+        read = _fake_gql([_green_pr(1)], thread_pages={1: []}, comment_pages=_readiness_pages(1))
+        calls: list[str] = []
+
+        def merge_gql(query, variables):
+            calls.append(variables["prId"])
+            return {"mergePullRequest": {"pullRequest": {"merged": True}}}
+
+        import voyager.core.merge_loop as ml_mod
+
+        real_append = ml_mod._append_merge_audit
+
+        def selective_boom(path, record):
+            if path == full_audit:
+                raise OSError("disk full")
+            return real_append(path, record)
+
+        monkeypatch.setattr(ml_mod, "_append_merge_audit", selective_boom)
+
+        summary = run_merge_loop(
+            ["frankyxhl/fx_bin"],
+            read_gql=read,
+            merge_gql=merge_gql,
+            identity_gql=_identity_gql_ok,
+            audit_path=audit,
+            full_audit_path=full_audit,
+        )
+        assert calls == ["PR_1"]  # merge mutation still issued — full audit is best-effort
+        assert summary.merged == 1
+        (d,) = summary.decisions
+        assert d.action == "merged"
+        # Recorded once per repo per run, even though full-audit write is
+        # attempted twice (merge_intent + outcome).
+        assert summary.errors == (("frankyxhl/fx_bin", "full audit write failed: OSError"),)
+        assert audit.exists()  # redacted file unaffected by the full-audit failure
+
+    def test_full_audit_path_none_disables_full_file(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        audit = tmp_path / "audit.jsonl"
+        read = _fake_gql([_green_pr(1)], thread_pages={1: []}, comment_pages=_readiness_pages(1))
+
+        def merge_gql(query, variables):
+            return {"mergePullRequest": {"pullRequest": {"merged": True}}}
+
+        summary = run_merge_loop(
+            ["frankyxhl/fx_bin"],
+            read_gql=read,
+            merge_gql=merge_gql,
+            identity_gql=_identity_gql_ok,
+            audit_path=audit,
+            full_audit_path=None,
+        )
+        assert summary.merged == 1
+        assert not (tmp_path / "audit.full.jsonl").exists()
+        assert audit.exists()  # redacted file still written
+
+    def test_dry_run_would_merge_lands_in_full_file(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        full_audit = tmp_path / "audit.full.jsonl"
+        read = _fake_gql([_green_pr(1)], thread_pages={1: []}, comment_pages=_readiness_pages(1))
+
+        summary = run_merge_loop(
+            ["frankyxhl/fx_bin"],
+            read_gql=read,
+            merge_gql=lambda q, v: {"mergePullRequest": {"pullRequest": {"merged": True}}},
+            identity_gql=_identity_gql_ok,
+            audit_path=None,
+            full_audit_path=full_audit,
+            dry_run=True,
+        )
+        assert summary.would_merge == 1
+        (line,) = [_json.loads(line) for line in full_audit.read_text().strip().splitlines()]
+        assert line["action"] == "would_merge"
+        assert line["dry_run"] is True
+        assert line["pr"] == 1
+        assert line["head"] == HEAD
+        assert line["review_decision"] == "APPROVED"
 
 
 class TestIdentityGate:
@@ -1995,6 +2174,7 @@ class TestIdentityGate:
                 merge_gql=merge_gql,
                 identity_gql=wrong_identity_gql,
                 audit_path=None,
+                full_audit_path=None,
             )
         assert calls == []  # zero merge mutations issued
 
@@ -2013,6 +2193,7 @@ class TestIdentityGate:
                 identity_gql=wrong_identity_gql,
                 dry_run=True,
                 audit_path=None,
+                full_audit_path=None,
             )
 
 
