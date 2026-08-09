@@ -8,6 +8,18 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+### Added
+
+- Merge loop writes a SECOND, local-only, full-fidelity audit file
+  (`~/.voyager/merge-loop.audit.full.jsonl`, mode `600`) alongside the
+  existing redacted `merge-loop.audit.jsonl`. Every repo's decision and
+  merge-intent record gets the raw `pr`, `reason`, `head`, and
+  `review_decision` — no redaction — for local forensics ("which PR did the
+  loop touch at HH:MM?"). The redacted file and its fail-closed
+  write-ahead contract are unchanged and remain the only one safe to
+  share/paste; the full file's write is best-effort and never blocks a
+  merge ([#306](https://github.com/iterwheel/voyager/pull/306)).
+
 ## [0.11.0] — 2026-08-09
 
 ### Changed — Merge-loop approval gate (BREAKING for zero-touch flows)
