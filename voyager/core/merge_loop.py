@@ -26,6 +26,12 @@ from voyager.core.resolve_conversation import (
     _assert_machine_identity,
 )
 
+#: Sentinel distinguishing "no override passed" from "override explicitly
+#: None" — the apply-time re-read's reviewDecision is itself str | None (no
+#: reviews yet is a real, common None), so plain None can't double as "use
+#: the snapshot value instead".
+_NO_OVERRIDE: Any = object()
+
 AGENT_PR_AUTHORS = frozenset({"ryosaeba1985"})
 CLEARANCE_APP_SLUG = "iterwheel-clearance"
 REQUIRED_READINESS_STAGE = 3
@@ -40,6 +46,7 @@ _LOGIN_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$")
 
 DEFAULT_MERGE_LOCK_PATH = Path.home() / ".voyager" / "merge-loop.lock"
 DEFAULT_MERGE_AUDIT_PATH = Path.home() / ".voyager" / "merge-loop.audit.jsonl"
+DEFAULT_MERGE_FULL_AUDIT_PATH = Path.home() / ".voyager" / "merge-loop.audit.full.jsonl"
 
 
 def merge_allowed_repos() -> frozenset[str]:
@@ -684,11 +691,20 @@ def _utc_now() -> str:
 
 
 def _append_merge_audit(path: Path, record: dict[str, Any]) -> None:
-    """Append one JSON line under an exclusive lock (0600, local-only)."""
+    """Append one JSON line under an exclusive lock (0600, local-only).
+
+    The 0o600 passed to os.open only applies at creation; a file that
+    already existed (e.g. from an older version, or written under a loose
+    umask) would otherwise keep its prior mode while this call appends raw
+    audit data to it. fchmod unconditionally on every call — cheap, and
+    guarantees the file is 0600 by the time this returns regardless of how
+    it got there.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     data = (json.dumps(record, separators=(",", ":")) + "\n").encode("utf-8")
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:
+        os.fchmod(fd, 0o600)
         fcntl.flock(fd, fcntl.LOCK_EX)
         # os.write can return fewer bytes than requested (e.g. ENOSPC mid
         # write). A short count is not a failure on a blocking fd — os.write
@@ -714,6 +730,7 @@ def run_merge_loop(
     max_merges: int = 3,
     dry_run: bool = False,
     audit_path: Path | None = DEFAULT_MERGE_AUDIT_PATH,
+    full_audit_path: Path | None = DEFAULT_MERGE_FULL_AUDIT_PATH,
     now: Callable[[], str] | None = None,
 ) -> MergeLoopSummary:
     """Scan allowlisted repos and rebase-merge fully-green agent PRs.
@@ -782,6 +799,20 @@ def run_merge_loop(
     clearance readiness. Orchestration-level gates layered on top by this
     function: per-run cap, same-repo same-cycle base movement, and the
     apply-time rechecks documented above.
+
+    *full_audit_path* (default DEFAULT_MERGE_FULL_AUDIT_PATH) is a SECOND,
+    LOCAL-ONLY audit sink written alongside every audit_path record: unlike
+    audit_path, it is never redacted — every repo gets raw pr/reason/head/
+    review_decision, including non-sandbox repos audit_path redacts. It
+    exists purely for local forensics ("which PR did the loop touch at
+    07:06?") and is 0600 like audit_path, but it must NEVER be pasted into
+    a public artifact (issue, PR comment, chat) — audit_path's redacted
+    file remains the only one safe to share. Its write is BEST-EFFORT and
+    strictly secondary to the merge: a failure there is caught, recorded at
+    most once per repo per run in the returned summary's errors, and never
+    blocks or skips a merge that audit_path's fail-closed write-ahead
+    contract has already cleared. Pass full_audit_path=None to disable it
+    (tests, dry contexts).
     """
     timestamp = (now or _utc_now)()
     allowed, skipped = gate_repos(requested_repos, ceiling=merge_allowed_repos())
@@ -794,12 +825,69 @@ def run_merge_loop(
     approved = 0
     capped = False
 
-    def _record(decision: MergeDecision) -> None:
+    full_audit_errored: set[str] = set()
+
+    def _record_full(
+        repo: str,
+        s: PrSnapshot,
+        action: str,
+        reason: str,
+        review_decision_override: str | None = _NO_OVERRIDE,
+    ) -> None:
+        """Best-effort full-fidelity mirror of _record: RAW pr/head/
+        review_decision for every repo, no redaction. Never blocks the
+        merge — an OSError here is caught and surfaced at most once per
+        repo per run via errors, exactly like the failure semantics
+        documented in this function's docstring.
+
+        review_decision_override lets apply-time call sites report the
+        value the DECISION was actually based on: for apply-time skips
+        (base_retargeted_at_apply, approval_revoked_at_apply, an apply-time
+        base_freshness_unreadable/base_stale_at_apply, and the
+        merged/merge_failed/merge_intent records that follow) that's the
+        apply-time re-read, not the stale snapshot — the snapshot's own
+        review_decision would otherwise contradict the reason (e.g. reason
+        approval_revoked_at_apply next to review_decision: APPROVED). It
+        defaults to the _NO_OVERRIDE sentinel rather than None because the
+        re-read value is itself str | None (no reviews yet at apply time is
+        a real, common None) and must still be distinguishable from "no
+        override passed". Snapshot-stage decisions (should_merge's reasons,
+        capped, base_moved_by_merge) pass no override and keep reporting
+        the snapshot value, which is what they were actually based on."""
+        if full_audit_path is None:
+            return
+        record = {
+            "ts": timestamp,
+            "dry_run": dry_run,
+            "repo": repo,
+            "pr": s.number,
+            "action": action,
+            "reason": reason,
+            "head": s.head_oid,
+            "review_decision": (
+                s.review_decision
+                if review_decision_override is _NO_OVERRIDE
+                else review_decision_override
+            ),
+        }
+        try:
+            _append_merge_audit(full_audit_path, record)
+        except OSError as exc:
+            if repo not in full_audit_errored:
+                full_audit_errored.add(repo)
+                errors.append((repo, f"full audit write failed: {type(exc).__name__}"))
+
+    def _record(
+        decision: MergeDecision,
+        s: PrSnapshot,
+        review_decision_override: str | None = _NO_OVERRIDE,
+    ) -> None:
         decisions.append(decision)
         if audit_path is not None:
             _append_merge_audit(
                 audit_path, {"ts": timestamp, "dry_run": dry_run, **decision.public()}
             )
+        _record_full(decision.repo, s, decision.action, decision.reason, review_decision_override)
 
     for repo in allowed:
         try:
@@ -820,14 +908,14 @@ def run_merge_loop(
                 continue  # never touched, never listed
             reason = should_merge(s, allowed_authors=allowed_authors)
             if reason != "ok":
-                _record(MergeDecision(repo, s.number, "skipped", reason))
+                _record(MergeDecision(repo, s.number, "skipped", reason), s)
                 continue
             if approved >= max_merges:
                 capped = True
-                _record(MergeDecision(repo, s.number, "skipped", "capped"))
+                _record(MergeDecision(repo, s.number, "skipped", "capped"), s)
                 continue
             if merged_in_repo:
-                _record(MergeDecision(repo, s.number, "skipped", "base_moved_by_merge"))
+                _record(MergeDecision(repo, s.number, "skipped", "base_moved_by_merge"), s)
                 continue
             if not dry_run:
                 # Apply-time re-read (P2 round 9, extended round 14; approval
@@ -859,28 +947,50 @@ def run_merge_loop(
                     read_gql, repo, s.number
                 )
                 if current_base is None:
-                    _record(MergeDecision(repo, s.number, "skipped", "base_freshness_unreadable"))
+                    _record(
+                        MergeDecision(repo, s.number, "skipped", "base_freshness_unreadable"),
+                        s,
+                        current_review_decision,
+                    )
                     continue
                 if current_base != s.base_ref or current_base not in ALLOWED_BASE_REFS:
-                    _record(MergeDecision(repo, s.number, "skipped", "base_retargeted_at_apply"))
+                    _record(
+                        MergeDecision(repo, s.number, "skipped", "base_retargeted_at_apply"),
+                        s,
+                        current_review_decision,
+                    )
                     continue
                 if current_review_decision != "APPROVED":
-                    _record(MergeDecision(repo, s.number, "skipped", "approval_revoked_at_apply"))
+                    _record(
+                        MergeDecision(repo, s.number, "skipped", "approval_revoked_at_apply"),
+                        s,
+                        current_review_decision,
+                    )
                     continue
                 fresh = _base_behind_by(read_gql, repo, current_base, s.number)
                 if fresh is None:
-                    _record(MergeDecision(repo, s.number, "skipped", "base_freshness_unreadable"))
+                    _record(
+                        MergeDecision(repo, s.number, "skipped", "base_freshness_unreadable"),
+                        s,
+                        current_review_decision,
+                    )
                     continue
                 if fresh > 0:
-                    _record(MergeDecision(repo, s.number, "skipped", "base_stale_at_apply"))
+                    _record(
+                        MergeDecision(repo, s.number, "skipped", "base_stale_at_apply"),
+                        s,
+                        current_review_decision,
+                    )
                     continue
             approved += 1
             if dry_run:
-                _record(MergeDecision(repo, s.number, "would_merge"))
+                _record(MergeDecision(repo, s.number, "would_merge"), s)
                 continue
             if audit_path is not None:
                 # Write-ahead intent: if the audit sink can't be written, abort
                 # BEFORE mutating GitHub — no unattended merge without a trail.
+                # This fail-closed contract covers audit_path only; the full
+                # audit's write below is best-effort and never gates the merge.
                 intent = MergeDecision(repo, s.number, "merge_intent")
                 try:
                     _append_merge_audit(
@@ -890,9 +1000,17 @@ def run_merge_loop(
                     # In-memory only: _record would retry the same broken sink
                     # and raise again. Fail closed without merging.
                     decisions.append(MergeDecision(repo, s.number, "skipped", "audit_unwritable"))
+                    _record_full(repo, s, "skipped", "audit_unwritable", current_review_decision)
                     continue
+            # Full-audit merge_intent line, written before the outcome line
+            # below regardless of audit_path (full_audit_path is controlled
+            # independently) — best-effort, see _record_full. Reached only
+            # after the apply-time re-read confirmed APPROVED, so this
+            # equals "APPROVED"; passed explicitly anyway for the same
+            # provenance reason as the skip sites above.
+            _record_full(repo, s, "merge_intent", "", current_review_decision)
             action, message = merge_pr(merge_gql, s.pr_id, s.head_oid)
-            _record(MergeDecision(repo, s.number, action, message))
+            _record(MergeDecision(repo, s.number, action, message), s, current_review_decision)
             if action == "merged":
                 merged_in_repo = True
 

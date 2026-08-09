@@ -133,6 +133,7 @@ These files are machine-local and must not be committed:
 | `/Users/frank/.voyager/bin/merge-loop-adaptive.sh` | Installed copy of the adaptive wrapper (from `deploy/wukong/`). | `755` |
 | `/Users/frank/.voyager/merge-loop.repos` | OWNER/REPO allowlist consumed by `vyg countdown merge-loop --repos`. | `600` |
 | `/Users/frank/.voyager/merge-loop.audit.jsonl` | Redacted append-only merge-loop audit trail written by `merge_loop.py`. | file `600`, parent directory `700` preferred |
+| `/Users/frank/.voyager/merge-loop.audit.full.jsonl` | Full-fidelity local forensics — never share/paste; the redacted `.audit.jsonl` is the shareable record. | file `600`, parent directory `700` preferred |
 | `/Users/frank/.voyager/merge-loop.lock` | Single-instance lock file created by the loop. | parent directory `700` preferred |
 | `/Users/frank/Library/LaunchAgents/com.iterwheel.voyager.merge-loop.plist` | Installed copy of the launchd plist. | `644` |
 | `/Users/frank/Library/Logs/voyager/` | launchd stdout/stderr logs (shared directory with the resolve-loop; distinct `merge-loop.out.log` / `merge-loop.err.log` files). | directory `755` |
@@ -382,6 +383,15 @@ Audit:
 tail -n 100 -F /Users/frank/.voyager/merge-loop.audit.jsonl
 ```
 
+Local forensics ("which PR did the loop touch at HH:MM?"): the full-fidelity
+`merge-loop.audit.full.jsonl` carries the raw PR number/reason/head/
+review_decision the redacted file above strips. It never leaves this machine
+— do not paste its contents into an issue, PR comment, or chat.
+
+```bash
+tail -n 100 -F /Users/frank/.voyager/merge-loop.audit.full.jsonl
+```
+
 ### 10. Roll Back
 
 Fastest stop:
@@ -510,3 +520,4 @@ Before declaring the scheduled deployment complete, record:
 | 2026-08-08 | Add pitfall: live path re-reads current `baseRefName` immediately before merging, before the base-freshness re-read (`base_retargeted_at_apply`) — a PR retargeted after the snapshot could otherwise merge outside `ALLOWED_BASE_REFS` since `expectedHeadOid` pins only the head (Codex round-14 review) | Claude Code |
 | 2026-08-09 | Operator reversed zero-touch: Target-repo GitHub Configuration table now REQUIRES `required_approving_review_count: 1` (was lowered to 0) — added a note pairing it with the loop's own approval gate; corrected the "no human terminal gate" pitfall and added `not_approved` / `approval_revoked_at_apply` pitfall detail ([#304](https://github.com/iterwheel/voyager/pull/304)) | Claude Code |
 | 2026-08-09 | Codex #304 review P2: the `(keep)` row's "in zero-touch mode" label was stale now that zero-touch is retired; reworded to "unaffected by this change". §Why reworded "rulesets must be loosened" to reflect the mixed loosen/keep/tighten reality (approval requirement is kept, not loosened) | Claude Code |
+| 2026-08-09 | Add SECOND local-only full-fidelity audit file `merge-loop.audit.full.jsonl` (§2 files table row, §9 inspection snippet) — raw pr/reason/head/review_decision for every repo, never redacted, never to be shared/pasted; the existing redacted `.audit.jsonl` remains the shareable record and its fail-closed write-ahead contract is unchanged ([#307](https://github.com/iterwheel/voyager/pull/307)) | Claude Code |
