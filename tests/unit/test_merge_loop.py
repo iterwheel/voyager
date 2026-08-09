@@ -1764,6 +1764,40 @@ class TestApplyTimeApprovalRevoked:
         lines = [_json.loads(line) for line in audit.read_text().strip().splitlines()]
         assert all(line["action"] != "merge_intent" for line in lines)
 
+    def test_retarget_and_revoked_approval_together_reports_retarget(self, monkeypatch, tmp_path):
+        """Precedence pin: when the apply-time re-read finds BOTH a moved
+        baseRefName AND a lost approval, base_retargeted_at_apply is checked
+        first — the recorded reason must be the base one, not
+        approval_revoked_at_apply. Base safety takes precedence over
+        approval state in reporting; still zero mutations either way."""
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        audit = tmp_path / "audit.jsonl"
+        read = _fake_gql(
+            [_green_pr(1)],
+            thread_pages={1: []},
+            comment_pages=_readiness_pages(1),
+            current_base_ref="release/1.x",
+            current_review_decision="REVIEW_REQUIRED",
+        )
+        calls: list[str] = []
+
+        def merge_gql(query, variables):
+            calls.append(variables["prId"])
+            return {"mergePullRequest": {"pullRequest": {"merged": True}}}
+
+        summary = run_merge_loop(
+            ["frankyxhl/fx_bin"],
+            read_gql=read,
+            merge_gql=merge_gql,
+            identity_gql=_identity_gql_ok,
+            audit_path=audit,
+        )
+        assert calls == []  # merge_pr never called — no mutation issued
+        (d,) = summary.decisions
+        assert (d.action, d.reason) == ("skipped", "base_retargeted_at_apply")
+        lines = [_json.loads(line) for line in audit.read_text().strip().splitlines()]
+        assert all(line["action"] != "merge_intent" for line in lines)
+
     def test_unchanged_approved_merge_proceeds(self, monkeypatch):
         monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
         read = _fake_gql(

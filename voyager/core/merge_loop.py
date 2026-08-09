@@ -841,6 +841,12 @@ def run_merge_loop(
                 # approved += 1, so a skip here consumes no cap slot.
                 # dry-run never mutates, so it skips all re-reads entirely
                 # and reports the snapshot value.
+                # base_retargeted_at_apply is checked BEFORE
+                # approval_revoked_at_apply deliberately, not incidentally:
+                # both fields come from the same _apply_time_pr_state
+                # snapshot, so when a re-read shows both a moved base AND a
+                # lost approval, the recorded reason is the base one — base
+                # safety takes precedence over approval state in reporting.
                 current_base, current_review_decision = _apply_time_pr_state(
                     read_gql, repo, s.number
                 )
