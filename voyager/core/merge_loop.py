@@ -685,11 +685,20 @@ def _utc_now() -> str:
 
 
 def _append_merge_audit(path: Path, record: dict[str, Any]) -> None:
-    """Append one JSON line under an exclusive lock (0600, local-only)."""
+    """Append one JSON line under an exclusive lock (0600, local-only).
+
+    The 0o600 passed to os.open only applies at creation; a file that
+    already existed (e.g. from an older version, or written under a loose
+    umask) would otherwise keep its prior mode while this call appends raw
+    audit data to it. fchmod unconditionally on every call — cheap, and
+    guarantees the file is 0600 by the time this returns regardless of how
+    it got there.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     data = (json.dumps(record, separators=(",", ":")) + "\n").encode("utf-8")
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:
+        os.fchmod(fd, 0o600)
         fcntl.flock(fd, fcntl.LOCK_EX)
         # os.write can return fewer bytes than requested (e.g. ENOSPC mid
         # write). A short count is not a failure on a blocking fd — os.write

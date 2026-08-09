@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json as _json
 import os
+import stat
 
 import pytest
 from typer.testing import CliRunner
@@ -2150,6 +2151,30 @@ class TestFullAudit:
         assert line["pr"] == 1
         assert line["head"] == HEAD
         assert line["review_decision"] == "APPROVED"
+
+    def test_preexisting_loose_perms_file_tightened_to_0600(self, monkeypatch, tmp_path):
+        """A pre-existing full-audit file (e.g. created by an older version,
+        or with a permissive umask) must be tightened to 0600 the moment this
+        loop writes raw data to it — os.open's mode arg only applies at
+        creation, so a loose pre-existing file would otherwise stay loose."""
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        full_audit = tmp_path / "audit.full.jsonl"
+        full_audit.write_text("")
+        os.chmod(full_audit, 0o644)
+        read = _fake_gql([_green_pr(1)], thread_pages={1: []}, comment_pages=_readiness_pages(1))
+
+        summary = run_merge_loop(
+            ["frankyxhl/fx_bin"],
+            read_gql=read,
+            merge_gql=lambda q, v: {"mergePullRequest": {"pullRequest": {"merged": True}}},
+            identity_gql=_identity_gql_ok,
+            audit_path=None,
+            full_audit_path=full_audit,
+        )
+        assert summary.merged == 1
+        assert stat.S_IMODE(os.stat(full_audit).st_mode) == 0o600
+        lines = [_json.loads(line) for line in full_audit.read_text().strip().splitlines()]
+        assert [line["action"] for line in lines] == ["merge_intent", "merged"]
 
 
 class TestIdentityGate:
