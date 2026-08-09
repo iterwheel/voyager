@@ -8,6 +8,8 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-08-09
+
 ### Changed — Merge-loop approval gate (BREAKING for zero-touch flows)
 
 - **BREAKING:** The merge loop no longer merges unapproved PRs. It now gates
@@ -996,7 +998,8 @@ auth, FastAPI webhook bridge, DeepSeek LLM adapter, rocket-factory
 pipeline state machine, SWM-1101 per-thread verdict pipeline. See
 `b2e4ca1` and prior history.
 
-[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/iterwheel/voyager/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/iterwheel/voyager/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/iterwheel/voyager/compare/v0.8.2...v0.9.0
 [0.8.2]: https://github.com/iterwheel/voyager/compare/v0.8.1...v0.8.2
