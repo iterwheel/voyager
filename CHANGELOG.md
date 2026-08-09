@@ -18,7 +18,7 @@ release note for the explicit migration path.
   loop touch at HH:MM?"). The redacted file and its fail-closed
   write-ahead contract are unchanged and remain the only one safe to
   share/paste; the full file's write is best-effort and never blocks a
-  merge ([#306](https://github.com/iterwheel/voyager/pull/306)).
+  merge ([#307](https://github.com/iterwheel/voyager/pull/307)).
 
 ## [0.11.0] — 2026-08-09
 
