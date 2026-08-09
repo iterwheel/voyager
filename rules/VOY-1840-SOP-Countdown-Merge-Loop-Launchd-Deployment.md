@@ -25,9 +25,10 @@ by hand from a development checkout does not give operators a repeatable
 schedule, rollback path, or audit location. This SOP makes the deployment
 contract explicit: the wheel is the artifact, secrets stay out of the
 repository, the repo allowlist is operator-owned, the target repo's GitHub
-rulesets must be loosened deliberately before any live merge, a capped canary
-gates full-rate operation, and every live merge is backed by the loop's JSONL
-audit trail.
+rulesets must be deliberately configured before any live merge (some gates
+loosened for the bot, the approving-review requirement kept — see below), a
+capped canary gates full-rate operation, and every live merge is backed by
+the loop's JSONL audit trail.
 
 ---
 
@@ -91,7 +92,7 @@ as `frankyxhl`; mirrors VOY-1839 §Target-repo GitHub configuration):
 | `protect main` | `require_code_owner_review` true → false | Bot cannot satisfy code-owner review; the operator's own approval (not a code-owner review) is what the loop gates on |
 | `main-pr-gates` | **Add** `required_status_checks` for the CI workflows, **with** `strict_required_status_checks_policy: true` ("Require branches to be up to date before merging") | Merge-time CI enforcement must live in GitHub, not only in the loop's predicate; the strict/up-to-date flag is REQUIRED, not optional — the loop's apply-time base re-read cannot eliminate the base-advance race (`mergePullRequest` has no `expectedBaseOid`), so this server-side gate is the only complete guarantee that merged commits were checked against the current base |
 | `main-owner-merge-only` | Add `iterwheel-countdown-bot` to `bypass_actors` | The `update` rule otherwise blocks bot-initiated merges (canary-verify first; skip if the merge succeeds without it) |
-| (keep) | `required_review_thread_resolution: true`, CodeQL gate | The remaining machine gates in zero-touch mode |
+| (keep) | `required_review_thread_resolution: true`, CodeQL gate | Machine gates unaffected by this change |
 
 External-PR safety: after loosening, non-agent PRs still cannot self-merge —
 merging requires write access, and the loop's author allowlist never selects
@@ -508,3 +509,4 @@ Before declaring the scheduled deployment complete, record:
 | 2026-08-08 | Promote "Require branches to be up to date before merging" (`strict_required_status_checks_policy: true`) from optional pitfall recommendation to REQUIRED entry in the Target-repo GitHub Configuration table (Codex round-10 review) | Claude Code |
 | 2026-08-08 | Add pitfall: live path re-reads current `baseRefName` immediately before merging, before the base-freshness re-read (`base_retargeted_at_apply`) — a PR retargeted after the snapshot could otherwise merge outside `ALLOWED_BASE_REFS` since `expectedHeadOid` pins only the head (Codex round-14 review) | Claude Code |
 | 2026-08-09 | Operator reversed zero-touch: Target-repo GitHub Configuration table now REQUIRES `required_approving_review_count: 1` (was lowered to 0) — added a note pairing it with the loop's own approval gate; corrected the "no human terminal gate" pitfall and added `not_approved` / `approval_revoked_at_apply` pitfall detail ([#304](https://github.com/iterwheel/voyager/pull/304)) | Claude Code |
+| 2026-08-09 | Codex #304 review P2: the `(keep)` row's "in zero-touch mode" label was stale now that zero-touch is retired; reworded to "unaffected by this change". §Why reworded "rulesets must be loosened" to reflect the mixed loosen/keep/tighten reality (approval requirement is kept, not loosened) | Claude Code |
