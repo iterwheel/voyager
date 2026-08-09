@@ -30,10 +30,13 @@ release note for the explicit migration path.
   (Stage 3), and the review request it triggers, now additionally requires
   at least one of: (a) a non-dismissed Codex PR review submitted against the
   current head commit; (b) a Codex clean-verdict PR comment whose
-  `Reviewed commit:` value prefix-matches the current head; (c) an existing
-  Codex inline review thread on the PR (which, by the time this check runs,
-  is necessarily resolved — unresolved threads already route to
-  `clearance_blocked`). Absent all three, status stays `clearance_pending`
+  `Reviewed commit:` value prefix-matches the current head; (c) a Codex
+  inline review thread on the PR that is resolved, or unresolved but not
+  outdated (a *fresh* unresolved thread already routes to
+  `clearance_blocked` before this check runs; an *outdated-and-unresolved*
+  thread is excluded on purpose — it anchors to a superseded head and its
+  finding was never confirmed addressed, so it is not current-head
+  evidence). Absent all three, status stays `clearance_pending`
   with a "waiting for Codex review of the current head" reason and no review
   request is made. New pure predicate `codex_reviewed_current_head` and gate
   `enforce_codex_review_gate` in `voyager/bots/clearance/evaluation.py`,

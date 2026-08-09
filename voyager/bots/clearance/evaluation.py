@@ -15,6 +15,7 @@ from .constants import (
     CLEARANCE_PENDING_LABEL,
     CLEARANCE_READY_FOR_APPROVAL_LABEL,
     CLEARANCE_READY_LABEL,
+    CODEX_REVIEW_RESULT_PREFIX,
     configured_review_request_users,
     is_codex_login,
 )
@@ -119,15 +120,25 @@ def codex_reviewed_current_head(snapshot: dict[str, Any]) -> bool:
       (a) a non-dismissed Codex PR review (``reviews``) submitted against the
           current head commit;
       (b) a Codex clean-verdict PR comment (``issue_comments``) starting with
-          ``CODEX_REVIEW_RESULT_PREFIX`` whose parsed ``Reviewed commit:``
-          value prefix-matches the current head — reuses the exact parsing
+          the same ``Codex Review:`` prefix as ``CODEX_REVIEW_RESULT_PREFIX``
+          (constants.py) whose parsed ``Reviewed commit:`` value
+          prefix-matches the current head — reuses the exact parsing
           precedent in ``voyager.core.codex_review_watch._is_clean_summary``;
-      (c) at least one Codex inline review thread (``review_threads``) exists
-          on the PR. By the time this predicate is consulted,
-          ``evaluate_clearance_snapshot`` has already routed any *unresolved*
-          thread to ``clearance_blocked``, so a Codex thread surviving to
-          this check is necessarily resolved — Codex reviewed and the
-          finding was addressed.
+      (c) a Codex inline review thread (``review_threads``) exists on the PR
+          AND is not in the "outdated-and-unresolved" state. Two disjoint
+          buckets survive to this check unblocked (a *fresh* unresolved
+          thread already routes to ``clearance_blocked`` before this
+          predicate ever runs, per ``evaluate_clearance_snapshot``'s own
+          unresolved-thread check):
+            - resolved (isResolved=True, any isOutdated) — Codex reviewed
+              and the finding was addressed: counts.
+            - outdated-and-unresolved (isResolved=False, isOutdated=True) —
+              exempted from BLOCKED because the anchor code changed, but
+              Codex's finding was never confirmed addressed *and* the
+              thread anchors to a superseded head: does NOT count. Without
+              this exclusion, pushing a new commit that merely invalidates
+              an old Codex thread's diff anchor — without any new Codex
+              activity — would satisfy this predicate for the new head.
     """
     pull_request = snapshot["pull_request"]
     head_sha = ((pull_request.get("head") or {}).get("sha")) or ""
@@ -145,10 +156,18 @@ def codex_reviewed_current_head(snapshot: dict[str, Any]) -> bool:
 
     for comment in snapshot.get("issue_comments") or []:
         login = (comment.get("user") or {}).get("login")
-        if is_codex_login(login) and _is_clean_summary(str(comment.get("body") or ""), head_sha):
+        body = str(comment.get("body") or "")
+        if (
+            is_codex_login(login)
+            and body.startswith(CODEX_REVIEW_RESULT_PREFIX)
+            and _is_clean_summary(body, head_sha)
+        ):
             return True
 
-    return any(is_codex_thread(thread) for thread in (snapshot.get("review_threads") or []))
+    return any(
+        is_codex_thread(thread) and (thread.get("isResolved") or not thread.get("isOutdated"))
+        for thread in (snapshot.get("review_threads") or [])
+    )
 
 
 def enforce_codex_review_gate(

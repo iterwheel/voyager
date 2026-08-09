@@ -122,10 +122,10 @@ def _clean_verdict_comment(
     }
 
 
-def _codex_thread(*, resolved: bool = True) -> dict:
+def _codex_thread(*, resolved: bool = True, outdated: bool = False) -> dict:
     return {
         "isResolved": resolved,
-        "isOutdated": False,
+        "isOutdated": outdated,
         "comments": {
             "nodes": [
                 {
@@ -231,6 +231,22 @@ def test_codex_thread_existing_is_reviewed() -> None:
         "issue_comments": [],
     }
     assert codex_reviewed_current_head(snapshot) is True
+
+
+def test_outdated_unresolved_codex_thread_is_not_reviewed() -> None:
+    """Critical fix: outdated+unresolved is exempt from BLOCKED (its anchor code
+    changed) but must NOT count as current-head Codex review evidence — the
+    finding was never confirmed addressed, and the thread anchors to a
+    superseded head. Without this exclusion, pushing a commit that merely
+    invalidates an old Codex thread's diff anchor (no new Codex activity at
+    all) would satisfy the gate for the new head."""
+    snapshot = {
+        "pull_request": _open_pr(),
+        "reviews": [],
+        "review_threads": [_codex_thread(resolved=False, outdated=True)],
+        "issue_comments": [],
+    }
+    assert codex_reviewed_current_head(snapshot) is False
 
 
 def test_missing_head_sha_is_not_reviewed() -> None:
@@ -339,6 +355,24 @@ def test_unresolved_codex_thread_stays_blocked_not_gated() -> None:
         }
     )
     assert ev["status"] == "clearance_blocked"
+
+
+def test_outdated_unresolved_codex_thread_on_new_head_stays_pending() -> None:
+    """Critical regression: zero reviews/comments + one outdated+unresolved
+    Codex thread against a NEW head must NOT reach Stage 3. This thread is
+    exempt from clearance_blocked (outdated anchor), so without the fix it
+    would fall straight through to clearance_ready_for_approval with zero
+    actual Codex review of the current head."""
+    ev = evaluate_clearance_snapshot(
+        {
+            "pull_request": _open_pr(),
+            "reviews": [],
+            "review_threads": [_codex_thread(resolved=False, outdated=True)],
+            "issue_comments": [],
+        }
+    )
+    assert ev["status"] == "clearance_pending"
+    assert ev["labels"]["add"] == ["clearance-1-pending"]
 
 
 def test_missing_snapshot_keys_default_to_no_evidence() -> None:
@@ -512,3 +546,15 @@ async def test_swm_overlay_ready_status_with_codex_evidence_does_dispatch(monkey
     )
     assert result["validation"]["status"] == "clearance_ready_for_approval"
     assert len(client.request_reviewers_calls) >= 1
+
+
+async def test_outdated_unresolved_codex_thread_dispatches_no_review_request() -> None:
+    """Critical regression, end-to-end: zero reviews/comments + one Codex
+    thread {isResolved: false, isOutdated: true} against a new head must stay
+    clearance_pending and must NOT dispatch a review request."""
+    from voyager.bots.clearance.enrichment import enrich_clearance_route
+
+    client = _StubClient(reviews=[], review_threads=[_codex_thread(resolved=False, outdated=True)])
+    result = await enrich_clearance_route(client, _base_route(), repository="iterwheel/voyager")
+    assert result["validation"]["status"] == "clearance_pending"
+    assert client.request_reviewers_calls == []
