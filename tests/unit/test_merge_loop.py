@@ -1293,6 +1293,39 @@ class TestRunMergeLoop:
         (d,) = summary.decisions
         assert (d.action, d.reason) == ("skipped", "not_approved")
 
+    def test_unapproved_green_pr_skips_expensive_reads(self, monkeypatch):
+        """P2 (Codex #304 review): cheap_green must fold in the approval
+        state so an otherwise-green-but-unapproved PR never pays for the
+        base-freshness compare, paginated thread read, or paginated comment
+        read just to land on not_approved."""
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        calls: list[str] = []
+        inner = _fake_gql([_pr_node(number=4, review_decision="REVIEW_REQUIRED")])
+
+        def spy(query, variables):
+            calls.append(query)
+            return inner(query, variables)
+
+        merges: list[str] = []
+
+        def merge_gql(query, variables):
+            merges.append(variables["prId"])
+            return {"mergePullRequest": {"pullRequest": {"merged": True}}}
+
+        summary = run_merge_loop(
+            ["frankyxhl/fx_bin"],
+            read_gql=spy,
+            merge_gql=merge_gql,
+            identity_gql=_identity_gql_ok,
+            audit_path=None,
+        )
+        assert merges == []
+        (d,) = summary.decisions
+        assert (d.action, d.reason) == ("skipped", "not_approved")
+        assert _PR_THREADS_QUERY not in calls
+        assert _PR_COMMENTS_QUERY not in calls
+        assert _BASE_FRESHNESS_QUERY not in calls
+
     def test_cap_stops_merging(self, monkeypatch):
         monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
         summary, merges = self._run(

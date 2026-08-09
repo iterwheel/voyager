@@ -574,8 +574,11 @@ def snapshots_for_repo(
     """Every open PR's merge-relevant state; thread counts fetched lazily.
 
     *allowed_authors* gates the cheap_green check (whether the expensive
-    per-PR reads below run at all); None resolves merge_allowed_authors() at
-    call time. Matching is case-insensitive.
+    per-PR reads below run at all) alongside draft state, CI, and
+    reviewDecision == APPROVED; None resolves merge_allowed_authors() at
+    call time. Matching is case-insensitive. An unapproved PR never pays for
+    the base-freshness compare, thread read, or comment read — should_merge
+    would report not_approved before any of those fields matter.
     """
     allowed = allowed_authors if allowed_authors is not None else merge_allowed_authors()
     owner, name = repo.split("/", 1)
@@ -602,7 +605,12 @@ def snapshots_for_repo(
             rollup_nodes = ((node.get("commits") or {}).get("nodes")) or [{}]
             rollup = ((rollup_nodes[0].get("commit") or {}).get("statusCheckRollup")) or {}
             checks_state = rollup.get("state")
-            cheap_green = author.lower() in allowed and not is_draft and checks_state == "SUCCESS"
+            cheap_green = (
+                author.lower() in allowed
+                and not is_draft
+                and checks_state == "SUCCESS"
+                and review_decision == "APPROVED"
+            )
             base_behind = _base_behind_by(gql, repo, base_ref, number) if cheap_green else None
             threads = _unresolved_thread_count(gql, repo, number) if cheap_green else None
             stage, r_head = _readiness_for_pr(gql, repo, number) if cheap_green else (None, None)
