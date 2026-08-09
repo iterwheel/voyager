@@ -1,8 +1,8 @@
 # SOP-1840: Countdown Merge Loop Launchd Deployment
 
 **Applies to:** VOY project
-**Last updated:** 2026-08-08
-**Last reviewed:** 2026-08-08
+**Last updated:** 2026-08-09
+**Last reviewed:** 2026-08-09
 **Status:** Active
 **Depends on:** VOY-1839
 **Related:** VOY-1835, VOY-1831
@@ -73,13 +73,22 @@ Steps 5–8 below implement this sequence in detail.
 
 ### Target-repo GitHub Configuration
 
+**Zero-touch is retired.** The row below previously lowered
+`required_approving_review_count` to 0 to remove the human-approve gate;
+the operator has reversed that decision. Target repos now REQUIRE
+`required_approving_review_count: 1` — the loop's own approval gate
+(`reviewDecision == "APPROVED"`, VOY-1839 §Merge predicate condition 2) and
+this ruleset gate are a deliberate pair: the ruleset is what makes
+`reviewDecision` non-null in the first place, and the loop refuses to merge
+without it. Do not lower this value to 0.
+
 Required on `frankyxhl/fx_bin` before enabling live mode (one-time, operator-run
-as `frankyxhl`; copied verbatim from VOY-1839 §Target-repo GitHub configuration):
+as `frankyxhl`; mirrors VOY-1839 §Target-repo GitHub configuration):
 
 | Ruleset | Change | Why |
 |---------|--------|-----|
-| `main-pr-gates` | `required_approving_review_count` 1 → 0 | Removes the human-approve gate |
-| `protect main` | `require_code_owner_review` true → false | Same — bot cannot satisfy code-owner review |
+| `main-pr-gates` | `required_approving_review_count` stays at (or is raised to) `1` — do NOT lower to 0 | The loop's approval gate needs a real ruleset behind it; without this, `reviewDecision` reads `null` and the loop can never merge here |
+| `protect main` | `require_code_owner_review` true → false | Bot cannot satisfy code-owner review; the operator's own approval (not a code-owner review) is what the loop gates on |
 | `main-pr-gates` | **Add** `required_status_checks` for the CI workflows, **with** `strict_required_status_checks_policy: true` ("Require branches to be up to date before merging") | Merge-time CI enforcement must live in GitHub, not only in the loop's predicate; the strict/up-to-date flag is REQUIRED, not optional — the loop's apply-time base re-read cannot eliminate the base-advance race (`mergePullRequest` has no `expectedBaseOid`), so this server-side gate is the only complete guarantee that merged commits were checked against the current base |
 | `main-owner-merge-only` | Add `iterwheel-countdown-bot` to `bypass_actors` | The `update` rule otherwise blocks bot-initiated merges (canary-verify first; skip if the merge succeeds without it) |
 | (keep) | `required_review_thread_resolution: true`, CodeQL gate | The remaining machine gates in zero-touch mode |
@@ -421,9 +430,22 @@ Before declaring the scheduled deployment complete, record:
 
 ## Pitfalls
 
-- This loop has no LLM gate and no human terminal gate — the deterministic
-  predicate plus GitHub's merge-time ruleset enforcement are the only safety
-  layers. Do not treat this SOP as adding a review step; it does not have one.
+- This loop has no LLM gate. It DOES now have a human terminal gate: the
+  operator's own approving review (GraphQL `reviewDecision == "APPROVED"`) is
+  required before any merge — zero-touch is retired. The deterministic
+  predicate plus GitHub's merge-time ruleset enforcement remain the other
+  safety layers; this SOP's job is only to keep the target-repo ruleset (1
+  required approving review) and the loop's approval gate in sync — see the
+  note above the Target-repo GitHub Configuration table.
+- An unapproved PR (missing, `REVIEW_REQUIRED`, or `CHANGES_REQUESTED`
+  `reviewDecision`) is skipped fail-closed as `not_approved` at snapshot
+  time. An approval revoked between snapshot and apply (e.g. a reviewer
+  re-requests changes after this PR was already scanned green) is caught by
+  the apply-time re-read and skipped as `approval_revoked_at_apply`, with
+  zero mutations and no cap slot consumed. A repo whose ruleset does not
+  require any approving review returns a null `reviewDecision` and is
+  therefore permanently `not_approved` here until that ruleset is set —
+  this is not a bug, it is the fail-closed default.
 - The author allowlist is fixed to `ryosaeba1985`. The loop never touches PRs
   by any other author, including the repo owner. Do not "fix" a stuck non-agent
   PR by widening the allowlist.
@@ -485,3 +507,4 @@ Before declaring the scheduled deployment complete, record:
 | 2026-08-08 | Add pitfall: live path re-reads base freshness immediately before merging (`base_stale_at_apply`), narrowing but not eliminating the base-advance race since the merge mutation has no `expectedBaseOid` (Codex round-9 review) | Claude Code |
 | 2026-08-08 | Promote "Require branches to be up to date before merging" (`strict_required_status_checks_policy: true`) from optional pitfall recommendation to REQUIRED entry in the Target-repo GitHub Configuration table (Codex round-10 review) | Claude Code |
 | 2026-08-08 | Add pitfall: live path re-reads current `baseRefName` immediately before merging, before the base-freshness re-read (`base_retargeted_at_apply`) — a PR retargeted after the snapshot could otherwise merge outside `ALLOWED_BASE_REFS` since `expectedHeadOid` pins only the head (Codex round-14 review) | Claude Code |
+| 2026-08-09 | Operator reversed zero-touch: Target-repo GitHub Configuration table now REQUIRES `required_approving_review_count: 1` (was lowered to 0) — added a note pairing it with the loop's own approval gate; corrected the "no human terminal gate" pitfall and added `not_approved` / `approval_revoked_at_apply` pitfall detail ([#303](https://github.com/iterwheel/voyager/pull/303)) | Claude Code |
