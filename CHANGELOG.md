@@ -22,7 +22,7 @@ release note for the explicit migration path.
   `reviewDecision` and is deliberately unmergeable by the loop until that
   ruleset is set. New skip reasons: `not_approved` (snapshot time),
   `approval_revoked_at_apply` (approve-then-revoke race)
-  ([#303](https://github.com/iterwheel/voyager/pull/303)).
+  ([#304](https://github.com/iterwheel/voyager/pull/304)).
 
 ## [0.10.0] — 2026-08-08
 
