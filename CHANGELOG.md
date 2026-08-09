@@ -8,6 +8,22 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
+### Changed — Merge-loop approval gate (BREAKING for zero-touch flows)
+
+- **BREAKING:** The merge loop no longer merges unapproved PRs. It now gates
+  on GraphQL `reviewDecision == "APPROVED"`, re-verified both at snapshot
+  time (`PrSnapshot.review_decision`) and again immediately before the merge
+  mutation (apply-time recheck, alongside the existing base-retarget guard).
+  This reverses the v0.9.0 zero-touch design: every target repo's ruleset
+  must now require at least one approving review
+  (`required_approving_review_count: 1`), and the loop only completes a
+  merge the operator has actually approved — "once I approve, it merges
+  itself." A repo with no required-review ruleset configured returns a null
+  `reviewDecision` and is deliberately unmergeable by the loop until that
+  ruleset is set. New skip reasons: `not_approved` (snapshot time),
+  `approval_revoked_at_apply` (approve-then-revoke race)
+  ([#303](https://github.com/iterwheel/voyager/pull/303)).
+
 ## [0.10.0] — 2026-08-08
 
 ### Added — Merge-loop operator-configurable author allowlist
