@@ -2152,6 +2152,58 @@ class TestFullAudit:
         assert line["head"] == HEAD
         assert line["review_decision"] == "APPROVED"
 
+    def test_apply_time_skip_full_line_uses_reread_review_decision(self, monkeypatch, tmp_path):
+        """approval_revoked_at_apply is an apply-time skip: the DECISION was
+        based on the apply-time re-read (REVIEW_REQUIRED), not the stale
+        snapshot (APPROVED). The full-audit line must report the value the
+        decision actually used — otherwise the reason and the field
+        contradict each other."""
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        full_audit = tmp_path / "audit.full.jsonl"
+        read = _fake_gql(
+            [_green_pr(1)],
+            thread_pages={1: []},
+            comment_pages=_readiness_pages(1),
+            current_review_decision="REVIEW_REQUIRED",
+        )
+
+        run_merge_loop(
+            ["frankyxhl/fx_bin"],
+            read_gql=read,
+            merge_gql=lambda q, v: {"mergePullRequest": {"pullRequest": {"merged": True}}},
+            identity_gql=_identity_gql_ok,
+            audit_path=None,
+            full_audit_path=full_audit,
+        )
+        (line,) = [_json.loads(line) for line in full_audit.read_text().strip().splitlines()]
+        assert line["reason"] == "approval_revoked_at_apply"
+        assert line["review_decision"] == "REVIEW_REQUIRED"
+
+    def test_snapshot_stage_skip_full_line_still_uses_snapshot_value(self, monkeypatch, tmp_path):
+        """Contrast case: not_approved fires at snapshot stage (should_merge),
+        before any apply-time re-read exists. Its full-audit line must keep
+        reporting the snapshot's own review_decision — no apply-time override
+        applies here."""
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        full_audit = tmp_path / "audit.full.jsonl"
+        read = _fake_gql(
+            [_pr_node(number=1, review_decision="REVIEW_REQUIRED")],
+            thread_pages={1: []},
+            comment_pages=_readiness_pages(1),
+        )
+
+        run_merge_loop(
+            ["frankyxhl/fx_bin"],
+            read_gql=read,
+            merge_gql=lambda q, v: {"mergePullRequest": {"pullRequest": {"merged": True}}},
+            identity_gql=_identity_gql_ok,
+            audit_path=None,
+            full_audit_path=full_audit,
+        )
+        (line,) = [_json.loads(line) for line in full_audit.read_text().strip().splitlines()]
+        assert line["reason"] == "not_approved"
+        assert line["review_decision"] == "REVIEW_REQUIRED"
+
     def test_preexisting_loose_perms_file_tightened_to_0600(self, monkeypatch, tmp_path):
         """A pre-existing full-audit file (e.g. created by an older version,
         or with a permissive umask) must be tightened to 0600 the moment this
