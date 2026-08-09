@@ -95,6 +95,7 @@ class PrSnapshot:
     readiness_stage: int | None  # parsed clearance readiness stage
     readiness_head: str | None  # head SHA the readiness comment was computed for
     base_ref: str  # baseRefName; "" if missing (fail closed against ALLOWED_BASE_REFS)
+    review_decision: str | None  # GraphQL reviewDecision; None if missing (fail closed)
 
 
 @dataclass(frozen=True)
@@ -178,10 +179,10 @@ def parse_readiness(body: str) -> tuple[int, str] | None:
 
 def should_merge(s: PrSnapshot, *, allowed_authors: frozenset[str] | None = None) -> str:
     """Deterministic merge predicate. Returns "ok" or a stable skip reason:
-    not_agent_author | base_not_allowed | draft | checks_not_green |
-    base_freshness_unreadable | base_stale | threads_unreadable |
-    threads_unresolved | readiness_missing | readiness_not_ready |
-    readiness_stale_head.
+    not_agent_author | base_not_allowed | not_approved | draft |
+    checks_not_green | base_freshness_unreadable | base_stale |
+    threads_unreadable | threads_unresolved | readiness_missing |
+    readiness_not_ready | readiness_stale_head.
 
     *allowed_authors* is the built-in agent author plus operator-local
     extras (VOYAGER_MERGE_EXTRA_AUTHORS); None resolves merge_allowed_authors()
@@ -193,6 +194,20 @@ def should_merge(s: PrSnapshot, *, allowed_authors: frozenset[str] | None = None
     against a rebase merge landing on a base (main) that advanced past the
     commit the head's checks_state was computed against — expectedHeadOid
     only pins the PR head, not the base.
+
+    not_approved (operator design reversal, VOY-1839 §Merge predicate):
+    zero-touch is retired — every target repo's ruleset now requires an
+    approving review, and this loop only merges a PR the operator has
+    actually approved. Mirrors GitHub's own semantics: gate on GraphQL
+    `reviewDecision == "APPROVED"` on the PR as a whole, not on any single
+    review event, so an approval survives a later push as long as the
+    repo's ruleset has "dismiss stale reviews" off — that knob lives in the
+    target repo's ruleset (VOY-1840), not in this loop. review_decision is
+    None (missing), "REVIEW_REQUIRED", and "CHANGES_REQUESTED" all fail
+    closed to not_approved alike — including a repo with NO required-review
+    ruleset configured, whose reviewDecision reads null: such a repo is
+    deliberately unmergeable by this loop until its ruleset requires at
+    least one approving review.
 
     "base_moved_by_merge", "base_stale_at_apply", and "base_retargeted_at_apply"
     are NOT return values of this function — all three are orchestration-level
@@ -213,6 +228,8 @@ def should_merge(s: PrSnapshot, *, allowed_authors: frozenset[str] | None = None
         return "not_agent_author"
     if s.base_ref not in ALLOWED_BASE_REFS:
         return "base_not_allowed"
+    if s.review_decision != "APPROVED":
+        return "not_approved"
     if s.is_draft:
         return "draft"
     if s.checks_state != "SUCCESS":
@@ -247,6 +264,7 @@ query AgentOpenPrs($owner: String!, $name: String!, $after: String) {
         isDraft
         headRefOid
         baseRefName
+        reviewDecision
         author { login }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
       }
@@ -301,15 +319,19 @@ query($owner: String!, $name: String!, $baseRef: String!, $prHeadRef: String!) {
 }
 """
 
-# Apply-time retarget guard (P2 round 14): a PR's base branch can be changed
-# after the snapshot/apply-time freshness reads but before mergePullRequest.
+# Apply-time retarget + approval-revocation guard (P2 round 14; approval gate
+# added when the operator reversed zero-touch, VOY-1839): a PR's base branch
+# can be changed, and its reviewDecision can flip from APPROVED, after the
+# snapshot/apply-time freshness reads but before mergePullRequest.
 # expectedHeadOid pins only the head, so this is the only read that catches
-# a retarget onto a base outside ALLOWED_BASE_REFS.
+# either a retarget onto a base outside ALLOWED_BASE_REFS or an approval
+# revoked after the snapshot.
 _PR_BASE_QUERY = """
 query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
       baseRefName
+      reviewDecision
     }
   }
 }
@@ -432,20 +454,33 @@ def _base_behind_by(gql: GqlFn, repo: str, base_ref: str, number: int) -> int | 
     return behind_by if isinstance(behind_by, int) else None
 
 
-def _current_base_ref(gql: GqlFn, repo: str, number: int) -> str | None:
-    """This PR's current baseRefName; None on any read fault, a missing
-    pullRequest, or a non-str baseRefName (fail closed) — a PR retargeted
-    since the snapshot must never read as unchanged."""
+def _apply_time_pr_state(gql: GqlFn, repo: str, number: int) -> tuple[str | None, str | None]:
+    """This PR's current (baseRefName, reviewDecision), read together in one
+    round trip since both live on the same _PR_BASE_QUERY node. Each field
+    fails closed to None independently — on a read fault or a missing
+    pullRequest both come back None; a present-but-wrong-typed field (a
+    non-str baseRefName or a non-str reviewDecision) fails closed only for
+    that field. A PR retargeted, or an approval revoked, since the snapshot
+    must never read as unchanged.
+
+    One combined helper rather than two parallel ones deliberately avoids a
+    second GraphQL round trip for what the API already returns from a
+    single node read.
+    """
     owner, name = repo.split("/", 1)
     try:
         data = gql(_PR_BASE_QUERY, {"owner": owner, "name": name, "number": number})
     except ResolveConversationError:
-        return None
+        return None, None
     pull = ((data or {}).get("repository") or {}).get("pullRequest")
     if pull is None:
-        return None
+        return None, None
     base_ref = pull.get("baseRefName")
-    return base_ref if isinstance(base_ref, str) else None
+    review_decision = pull.get("reviewDecision")
+    return (
+        base_ref if isinstance(base_ref, str) else None,
+        review_decision if isinstance(review_decision, str) else None,
+    )
 
 
 def _is_clearance_bot(author: dict[str, Any] | None) -> bool:
@@ -539,8 +574,11 @@ def snapshots_for_repo(
     """Every open PR's merge-relevant state; thread counts fetched lazily.
 
     *allowed_authors* gates the cheap_green check (whether the expensive
-    per-PR reads below run at all); None resolves merge_allowed_authors() at
-    call time. Matching is case-insensitive.
+    per-PR reads below run at all) alongside draft state, CI, and
+    reviewDecision == APPROVED; None resolves merge_allowed_authors() at
+    call time. Matching is case-insensitive. An unapproved PR never pays for
+    the base-freshness compare, thread read, or comment read — should_merge
+    would report not_approved before any of those fields matter.
     """
     allowed = allowed_authors if allowed_authors is not None else merge_allowed_authors()
     owner, name = repo.split("/", 1)
@@ -563,10 +601,16 @@ def snapshots_for_repo(
             is_draft = bool(node.get("isDraft"))
             head_oid = str(node.get("headRefOid") or "")
             base_ref = str(node.get("baseRefName") or "")
+            review_decision = node.get("reviewDecision")
             rollup_nodes = ((node.get("commits") or {}).get("nodes")) or [{}]
             rollup = ((rollup_nodes[0].get("commit") or {}).get("statusCheckRollup")) or {}
             checks_state = rollup.get("state")
-            cheap_green = author.lower() in allowed and not is_draft and checks_state == "SUCCESS"
+            cheap_green = (
+                author.lower() in allowed
+                and not is_draft
+                and checks_state == "SUCCESS"
+                and review_decision == "APPROVED"
+            )
             base_behind = _base_behind_by(gql, repo, base_ref, number) if cheap_green else None
             threads = _unresolved_thread_count(gql, repo, number) if cheap_green else None
             stage, r_head = _readiness_for_pr(gql, repo, number) if cheap_green else (None, None)
@@ -583,6 +627,7 @@ def snapshots_for_repo(
                     readiness_stage=stage,
                     readiness_head=r_head,
                     base_ref=base_ref,
+                    review_decision=review_decision,
                 )
             )
         page = conn.get("pageInfo") or {}
@@ -691,29 +736,35 @@ def run_merge_loop(
     the base either and must not suppress later candidates.
 
     LIVE path only: immediately before the write-ahead intent + merge_pr
-    call, baseRefName is re-read first (_current_base_ref), then base_behind
-    is re-read (_base_behind_by) — rather than trusting the snapshot taken
-    earlier in this same repo's scan. This narrows the snapshot->mutation
-    window (during which main could advance from a human push, a release
-    bot, or another loop instance — or the PR itself could be retargeted to
-    a different base) from the length of a full repo scan down to seconds.
-    The residual race is accepted: the mergePullRequest mutation has no
-    expectedBaseOid and no base-ref guard at all, only expectedHeadOid, so
-    no read-then-mutate window can be closed to zero from this side alone;
-    GitHub's "require branches up to date" branch protection (VOY-1840),
-    when enabled, is the server-side backstop. A None baseRefName re-read
-    records ("skipped", "base_freshness_unreadable") (reused — it is a
-    base-state read fault like the base_behind one); a re-read that no
-    longer matches the snapshot's base_ref, or that isn't in
+    call, baseRefName AND reviewDecision are re-read together in one round
+    trip (_apply_time_pr_state), then base_behind is re-read separately
+    (_base_behind_by) — rather than trusting the snapshot taken earlier in
+    this same repo's scan. This narrows the snapshot->mutation window
+    (during which main could advance from a human push, a release bot, or
+    another loop instance; the PR could be retargeted to a different base;
+    or the operator's approval could be revoked) from the length of a full
+    repo scan down to seconds. The residual race is accepted: the
+    mergePullRequest mutation has no expectedBaseOid and no base-ref or
+    approval guard at all, only expectedHeadOid, so no read-then-mutate
+    window can be closed to zero from this side alone; GitHub's "require
+    branches up to date" branch protection and the required-approving-review
+    ruleset (VOY-1840), when enabled, are the server-side backstop. A None
+    baseRefName re-read records ("skipped", "base_freshness_unreadable")
+    (reused — it is a base-state read fault like the base_behind one); a
+    re-read that no longer matches the snapshot's base_ref, or that isn't in
     ALLOWED_BASE_REFS, records ("skipped", "base_retargeted_at_apply")
-    (P2 round 14) — checked BEFORE the base_behind re-read, which then runs
-    against the freshly-verified current base. A None base_behind re-read
-    also records ("skipped", "base_freshness_unreadable"); a positive
-    re-read records ("skipped", "base_stale_at_apply") — distinct from
-    should_merge's snapshot-time "base_stale". None of these apply-time
-    skips write an intent audit line or consume a cap slot. dry-run never
-    mutates, so it skips both re-reads entirely and reports the snapshot
-    value as-is.
+    (P2 round 14) — checked BEFORE the reviewDecision recheck, which is in
+    turn checked BEFORE the base_behind re-read. A reviewDecision re-read
+    that is no longer "APPROVED" records ("skipped",
+    "approval_revoked_at_apply") — the apply-time counterpart of
+    should_merge's snapshot-time "not_approved" guard, covering an
+    approve-then-revoke race in the window between snapshot and apply. A
+    None base_behind re-read also records ("skipped",
+    "base_freshness_unreadable"); a positive re-read records ("skipped",
+    "base_stale_at_apply") — distinct from should_merge's snapshot-time
+    "base_stale". None of these apply-time skips write an intent audit line
+    or consume a cap slot. dry-run never mutates, so it skips all of these
+    re-reads entirely and reports the snapshot value as-is.
 
     *identity_gql* asserts the fixed machine identity (mirrors
     run_resolve_loop) BEFORE any repo is scanned — including in dry-run,
@@ -723,6 +774,14 @@ def run_merge_loop(
     both snapshots_for_repo and should_merge for every repo in this run —
     mirroring the repo ceiling: an env change mid-run must not split the
     run's view of which authors are eligible.
+
+    Gates applied per PR, in should_merge's order: author allowlist, base
+    ref allowlist, human approval (reviewDecision == "APPROVED" — the
+    operator's own end-state: approve once, and the loop completes the
+    merge), not-draft, CI green, base freshness, unresolved threads,
+    clearance readiness. Orchestration-level gates layered on top by this
+    function: per-run cap, same-repo same-cycle base movement, and the
+    apply-time rechecks documented above.
     """
     timestamp = (now or _utc_now)()
     allowed, skipped = gate_repos(requested_repos, ceiling=merge_allowed_repos())
@@ -771,28 +830,42 @@ def run_merge_loop(
                 _record(MergeDecision(repo, s.number, "skipped", "base_moved_by_merge"))
                 continue
             if not dry_run:
-                # Apply-time re-read (P2 round 9, extended round 14):
-                # base_behind AND baseRefName on this snapshot were both read
-                # during snapshots_for_repo, but either can change between
-                # that read and the mutation below (a human push, a release
-                # bot, another loop instance, or a PR retarget).
+                # Apply-time re-read (P2 round 9, extended round 14; approval
+                # recheck added with the operator's zero-touch reversal,
+                # VOY-1839): base_behind, baseRefName, AND reviewDecision on
+                # this snapshot were all read during snapshots_for_repo, but
+                # any of them can change between that read and the mutation
+                # below (a human push, a release bot, another loop instance,
+                # a PR retarget, or an approve-then-revoke race).
                 # expectedHeadOid only pins the PR head; the merge mutation
-                # has no expectedBaseOid and no base-ref guard at all, so a
-                # PR retargeted onto a base outside ALLOWED_BASE_REFS after
-                # the snapshot would otherwise merge there undetected.
-                # Re-read baseRefName FIRST — before trusting a base_behind
+                # has no expectedBaseOid and no base-ref or approval guard at
+                # all, so a PR retargeted outside ALLOWED_BASE_REFS, or one
+                # whose approval was pulled, would otherwise merge undetected
+                # after the snapshot. Re-read baseRefName and reviewDecision
+                # FIRST (one round trip) — before trusting a base_behind
                 # compare against a base that may no longer be the one
-                # should_merge validated. Both re-reads sit immediately
-                # before the write-ahead intent + merge_pr call, before
+                # should_merge validated. All re-reads sit immediately before
+                # the write-ahead intent + merge_pr call, before
                 # approved += 1, so a skip here consumes no cap slot.
-                # dry-run never mutates, so it skips both re-reads entirely
+                # dry-run never mutates, so it skips all re-reads entirely
                 # and reports the snapshot value.
-                current_base = _current_base_ref(read_gql, repo, s.number)
+                # base_retargeted_at_apply is checked BEFORE
+                # approval_revoked_at_apply deliberately, not incidentally:
+                # both fields come from the same _apply_time_pr_state
+                # snapshot, so when a re-read shows both a moved base AND a
+                # lost approval, the recorded reason is the base one — base
+                # safety takes precedence over approval state in reporting.
+                current_base, current_review_decision = _apply_time_pr_state(
+                    read_gql, repo, s.number
+                )
                 if current_base is None:
                     _record(MergeDecision(repo, s.number, "skipped", "base_freshness_unreadable"))
                     continue
                 if current_base != s.base_ref or current_base not in ALLOWED_BASE_REFS:
                     _record(MergeDecision(repo, s.number, "skipped", "base_retargeted_at_apply"))
+                    continue
+                if current_review_decision != "APPROVED":
+                    _record(MergeDecision(repo, s.number, "skipped", "approval_revoked_at_apply"))
                     continue
                 fresh = _base_behind_by(read_gql, repo, current_base, s.number)
                 if fresh is None:

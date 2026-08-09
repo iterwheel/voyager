@@ -1,8 +1,8 @@
 # PRP-1839: Countdown Merge-Loop — Autonomous Agent-PR Merge
 
 **Applies to:** VOY project — Countdown PR automation
-**Last updated:** 2026-08-08
-**Last reviewed:** 2026-08-08
+**Last updated:** 2026-08-09
+**Last reviewed:** 2026-08-09
 **Status:** Draft
 **Related:** VOY-1831 (resolve-loop PRP), VOY-1835 (resolve-loop launchd deployment), CHG-1829/1830 (machine-account identity lineage)
 
@@ -12,8 +12,9 @@
 
 A multi-repo autonomous merge loop, `vyg countdown merge-loop`, that runs as the
 fixed machine account (`iterwheel-countdown-bot`) and **directly rebase-merges
-agent-authored PRs when every deterministic condition is green** — no human
-approve, no GitHub auto-merge arming. It reuses the resolve-loop skeleton:
+agent-authored PRs when every deterministic condition is green, including a
+human's GitHub-native approving review** — no separate merge-click, no GitHub
+auto-merge arming. It reuses the resolve-loop skeleton:
 allowlist ceiling, open-PR enumeration, single-instance lock, per-run mutation
 cap, redacted audit trail, adaptive launchd daemon, fail-closed env kill switch.
 
@@ -24,8 +25,9 @@ codex review → agent fixes → clearance verdict → resolve-loop clears threa
 → merge-loop rebase-merges → cd-release semantic-release → PyPI
 ```
 
-The operator's only remaining controls are the `MERGE_LOOP_ENABLED` kill switch
-and the repo allowlist. There is deliberately no per-PR human gate.
+The operator's remaining controls are the `MERGE_LOOP_ENABLED` kill switch, the
+repo allowlist, and the GitHub-native approving review each PR still requires —
+there is no separate per-PR merge-click gate once a PR is approved and green.
 
 ---
 
@@ -53,15 +55,31 @@ A PR is merged only when ALL of the following hold on the **current head**:
    the GraphQL login form `dependabot`, not the REST/UI renderings
    `app/dependabot` or `dependabot[bot]`. PRs by any other author — including
    the repo owner and external contributors — are never touched.
-2. PR is open and not a draft.
-3. CI: `statusCheckRollup` for the head commit is entirely `SUCCESS`
+2. **Human approval:** GraphQL `reviewDecision == "APPROVED"` on the PR,
+   checked at snapshot time (`PrSnapshot.review_decision`) and re-verified
+   immediately before the merge mutation (apply-time re-read, alongside the
+   base-retarget check). Mirrors GitHub's own semantics — an approval
+   surviving a later push is the platform behavior when "dismiss stale
+   reviews" is off; that knob lives in the target repo's ruleset (VOY-1840),
+   not in this loop. `reviewDecision` of `null` (missing), `REVIEW_REQUIRED`,
+   and `CHANGES_REQUESTED` all fail closed to `not_approved` alike — a repo
+   with NO required-review ruleset configured also returns `reviewDecision:
+   null` and is therefore deliberately unmergeable by this loop until the
+   repo's ruleset requires at least one approving review (VOY-1840 table).
+   An approval revoked between snapshot and apply is caught by the
+   apply-time re-read and skips with `approval_revoked_at_apply`, zero
+   mutations. This condition retires the original zero-touch design below:
+   the operator's end-state is now "approve once, and the loop completes
+   the merge."
+3. PR is open and not a draft.
+4. CI: `statusCheckRollup` for the head commit is entirely `SUCCESS`
    (fail-closed on `null`/pending/missing).
-4. Review threads: zero unresolved threads (paginated reviewThreads read,
+5. Review threads: zero unresolved threads (paginated reviewThreads read,
    same as the resolve-loop's TRN-3044-style read).
-5. Clearance readiness: the machine-written clearance readiness marker reports
+6. Clearance readiness: the machine-written clearance readiness marker reports
    Stage 3 (Ready for approval) **for the current head SHA**. A stale marker
    from an older head does not count.
-6. Not already merged/closed between enumeration and apply (re-check at apply;
+7. Not already merged/closed between enumeration and apply (re-check at apply;
    benign skip on race).
 
 When the predicate passes, the loop executes **one mutation**: a rebase merge
@@ -72,8 +90,11 @@ loop moves on — it never retries within a run and never escalates privileges.
 
 ### What this loop deliberately does NOT do
 
-- No LLM gate — the deterministic predicate plus GitHub's merge-time ruleset
-  enforcement are the safety layers; there is no human terminal gate to protect.
+- No LLM gate. It DOES have a human terminal gate: the operator's own
+  approving review (`reviewDecision == "APPROVED"`) is required before any
+  merge — zero-touch is retired (VOY-1840 §Pitfalls). The deterministic
+  predicate plus GitHub's merge-time ruleset enforcement remain the other
+  safety layers.
 - No disarm/rollback logic — a merge is final; anything not yet merged is
   simply skipped next round if conditions regress.
 - No approve-writing, no auto-merge arming, no thread resolution (that is the
@@ -101,11 +122,11 @@ Required on `frankyxhl/fx_bin` before enabling live mode:
 
 | Ruleset | Change | Why |
 |---------|--------|-----|
-| `main-pr-gates` | `required_approving_review_count` 1 → 0 | Removes the human-approve gate |
-| `protect main` | `require_code_owner_review` true → false | Same — bot cannot satisfy code-owner review |
+| `main-pr-gates` | keep/ensure `required_approving_review_count: 1` (REQUIRED — do NOT lower to 0) | The loop's approval gate reads `reviewDecision`, which only becomes APPROVED when the ruleset requires review |
+| `protect main` | `require_code_owner_review` true → false | Bot cannot satisfy code-owner review; the operator's own approval (not a code-owner review) is what the loop gates on |
 | `main-pr-gates` | **Add** `required_status_checks` for the CI workflows, **with** `strict_required_status_checks_policy: true` ("Require branches to be up to date before merging") | Merge-time CI enforcement must live in GitHub, not only in the loop's predicate; the strict/up-to-date flag is REQUIRED — `mergePullRequest` has no `expectedBaseOid`, so the loop's apply-time base re-read cannot fully close the base-advance race and this server-side gate is the only complete guarantee |
 | `main-owner-merge-only` | Add `iterwheel-countdown-bot` to `bypass_actors` | The `update` rule otherwise blocks bot-initiated merges (canary-verify first; skip if the merge succeeds without it) |
-| (keep) | `required_review_thread_resolution: true`, CodeQL gate | The remaining machine gates in zero-touch mode |
+| (keep) | `required_review_thread_resolution: true`, CodeQL gate | Machine gates unaffected by this change |
 
 External-PR safety: after loosening, non-agent PRs still cannot self-merge —
 merging requires write access, and the loop's author allowlist never selects
@@ -135,15 +156,20 @@ them. They stay open for manual handling.
 
 ## Risks
 
-- **Zero-touch merges to a published package.** Accepted by the operator by
-  design; mitigations are the deterministic predicate, GitHub merge-time
-  gates (threads, CodeQL, required checks), the author allowlist, the per-run
-  cap, and the kill switch.
+- **Autonomous merges to a published package, gated by one human approval.**
+  Accepted by the operator by design; mitigations are the human approval gate,
+  the deterministic predicate, GitHub merge-time gates (threads, CodeQL,
+  required checks), the author allowlist, the per-run cap, and the kill
+  switch.
 - **Clearance marker trust.** The predicate trusts the clearance bot's Stage 3
   marker; a clearance bug becomes a merge-loop bug. Mitigated by requiring the
   marker to be head-anchored and by the independent CI/thread conditions.
-- **Ruleset drift.** If the operator later re-adds an approve requirement,
-  merges fail closed (`merge_failed` audit entries, no retries) — safe, visible.
+- **Ruleset drift.** If the operator lowers `required_approving_review_count`
+  back to 0 (VOY-1840 table says not to), `reviewDecision` reads `null` and
+  the repo becomes permanently unmergeable by this loop, failing closed as
+  `not_approved` — safe and visible, but not "drift causes an unintended
+  merge"; the opposite failure mode (a repo that can never merge) is the one
+  to watch for.
 
 ---
 
@@ -154,3 +180,5 @@ them. They stay open for manual handling.
 | 2026-08-08 | Initial draft after operator design session (scope: fx_bin only; zero-touch agent-PR merge; rebase method) | Claude Code |
 | 2026-08-08 | Mirror VOY-1840: `required_status_checks` row now mandates `strict_required_status_checks_policy: true` — the up-to-date gate is required, not optional (Codex round-11 review) | Claude Code |
 | 2026-08-08 | Author allowlist bullet documents the `VOYAGER_MERGE_EXTRA_AUTHORS` operator-local extension (`merge_allowed_authors()`), enabling dependabot dependency-bump PRs on fx_bin | Claude Code |
+| 2026-08-09 | Operator reversed zero-touch: target-repo rulesets now require an approving review. Added merge-predicate condition 2, "Human approval" (GraphQL `reviewDecision == "APPROVED"`, snapshot + apply-time re-verified), renumbered the remaining conditions ([#304](https://github.com/iterwheel/voyager/pull/304)) | Claude Code |
+| 2026-08-09 | Codex #304 review P2: Target-repo GitHub configuration table still carried the zero-touch-era `required_approving_review_count` 1 → 0 row, permanently unmergeable under the new approval gate; replaced with a keep-at-1 row. Swept the doc for other stale zero-touch phrasing that contradicted the approval gate (top summary, Risks section, "No LLM gate" bullet) and aligned it with condition 2 / VOY-1840 | Claude Code |

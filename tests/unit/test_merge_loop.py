@@ -19,8 +19,8 @@ from voyager.core.merge_loop import (
     MergeDecision,
     MergeLoopSummary,
     PrSnapshot,
+    _apply_time_pr_state,
     _base_behind_by,
-    _current_base_ref,
     _is_clearance_bot,
     _readiness_for_pr,
     _unresolved_thread_count,
@@ -173,6 +173,7 @@ def snap(**overrides) -> PrSnapshot:
         "readiness_stage": 3,
         "readiness_head": HEAD,
         "base_ref": "main",
+        "review_decision": "APPROVED",
     }
     base.update(overrides)
     return PrSnapshot(**base)
@@ -200,10 +201,18 @@ class TestShouldMerge:
             ({"readiness_head": "b" * 40}, "readiness_stale_head"),
             ({"base_ref": "release/1.x"}, "base_not_allowed"),
             ({"base_ref": ""}, "base_not_allowed"),
+            ({"review_decision": None}, "not_approved"),
+            ({"review_decision": "REVIEW_REQUIRED"}, "not_approved"),
+            ({"review_decision": "CHANGES_REQUESTED"}, "not_approved"),
         ],
     )
     def test_each_condition_fails_closed(self, overrides, reason):
         assert should_merge(snap(**overrides)) == reason
+
+    def test_not_approved_fires_before_draft_check(self):
+        """review_decision is guarded right after base_ref, before is_draft —
+        an unapproved draft must report not_approved, not draft."""
+        assert should_merge(snap(review_decision=None, is_draft=True)) == "not_approved"
 
     def test_stage_4_ready_for_merge_also_ok(self):
         assert should_merge(snap(readiness_stage=4)) == "ok"
@@ -225,7 +234,13 @@ class TestShouldMerge:
 
 
 def _pr_node(
-    number=1, author="ryosaeba1985", draft=False, checks="SUCCESS", head=HEAD, base_ref="main"
+    number=1,
+    author="ryosaeba1985",
+    draft=False,
+    checks="SUCCESS",
+    head=HEAD,
+    base_ref="main",
+    review_decision="APPROVED",
 ):
     return {
         "id": f"PR_{number}",
@@ -233,6 +248,7 @@ def _pr_node(
         "isDraft": draft,
         "headRefOid": head,
         "baseRefName": base_ref,
+        "reviewDecision": review_decision,
         "author": {"login": author},
         "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": checks}}}]},
     }
@@ -255,12 +271,18 @@ def _identity_gql_ok(query, variables):
 
 
 def _fake_gql(
-    pr_nodes, thread_pages=None, comment_pages=None, behind_by=0, current_base_ref="main"
+    pr_nodes,
+    thread_pages=None,
+    comment_pages=None,
+    behind_by=0,
+    current_base_ref="main",
+    current_review_decision="APPROVED",
 ):
     """Return a gql callable serving PR pages, thread pages, comment pages,
     base-freshness compares (default behindBy 0 — base is up to date), and
-    the apply-time current-baseRefName read (default "main" — unchanged from
-    the snapshot, so happy-path tests are unaffected).
+    the apply-time current-baseRefName/reviewDecision read (default "main" /
+    "APPROVED" — unchanged from the snapshot, so happy-path tests are
+    unaffected).
 
     behind_by may be a fixed int (every compare returns the same value) or a
     list consumed left-to-right across successive compares — e.g. [0, 2] for
@@ -284,7 +306,14 @@ def _fake_gql(
         if query is _PR_BASE_QUERY:
             if current_base_ref is None:
                 return {"repository": {"pullRequest": None}}
-            return {"repository": {"pullRequest": {"baseRefName": current_base_ref}}}
+            return {
+                "repository": {
+                    "pullRequest": {
+                        "baseRefName": current_base_ref,
+                        "reviewDecision": current_review_decision,
+                    }
+                }
+            }
         if query is _AGENT_PR_PAGE_QUERY:
             return {
                 "repository": {
@@ -344,6 +373,14 @@ class TestSnapshotsForRepo:
         assert s.readiness_head == HEAD
         assert s.base_ref == "main"
         assert s.base_behind == 0
+        assert s.review_decision == "APPROVED"
+
+    def test_review_decision_none_when_missing(self):
+        node = _pr_node()
+        del node["reviewDecision"]
+        gql = _fake_gql([node], thread_pages={1: []}, comment_pages={1: [[]]})
+        (s,) = snapshots_for_repo(gql, "frankyxhl/fx_bin")
+        assert s.review_decision is None
 
     def test_missing_base_ref_name_is_empty_string(self):
         node = _pr_node()
@@ -1046,38 +1083,57 @@ class TestBaseBehindBy:
         assert _base_behind_by(gql, "frankyxhl/fx_bin", "main", 1) is None
 
 
-class TestCurrentBaseRef:
-    """_current_base_ref fails closed to None on any read fault, a missing
-    pullRequest, or a non-str baseRefName — a retargeted PR must never read
-    as unchanged (P2 round 14: expectedHeadOid pins only the head, so a base
-    retarget between the freshness read and mergePullRequest could land a
-    PR outside ALLOWED_BASE_REFS)."""
+class TestApplyTimePrState:
+    """_apply_time_pr_state fails closed to (None, None) — or to None for
+    whichever field is malformed — on any read fault, a missing
+    pullRequest, a non-str baseRefName, or a non-str reviewDecision. A
+    retargeted or approval-revoked PR must never read as unchanged (P2
+    round 14 for base retarget: expectedHeadOid pins only the head, so a
+    base retarget between the freshness read and mergePullRequest could
+    land a PR outside ALLOWED_BASE_REFS; same rationale extends to an
+    approval revoked between snapshot and apply)."""
 
-    def test_returns_base_ref(self):
+    def test_returns_base_ref_and_review_decision(self):
         def gql(query, variables):
             assert query is _PR_BASE_QUERY
             assert variables == {"owner": "frankyxhl", "name": "fx_bin", "number": 1}
-            return {"repository": {"pullRequest": {"baseRefName": "main"}}}
+            return {
+                "repository": {"pullRequest": {"baseRefName": "main", "reviewDecision": "APPROVED"}}
+            }
 
-        assert _current_base_ref(gql, "frankyxhl/fx_bin", 1) == "main"
+        assert _apply_time_pr_state(gql, "frankyxhl/fx_bin", 1) == ("main", "APPROVED")
 
-    def test_read_failure_returns_none(self):
+    def test_read_failure_returns_none_none(self):
         def gql(query, variables):
             raise ResolveConversationError("boom")
 
-        assert _current_base_ref(gql, "frankyxhl/fx_bin", 1) is None
+        assert _apply_time_pr_state(gql, "frankyxhl/fx_bin", 1) == (None, None)
 
-    def test_null_pull_request_returns_none(self):
+    def test_null_pull_request_returns_none_none(self):
         def gql(query, variables):
             return {"repository": {"pullRequest": None}}
 
-        assert _current_base_ref(gql, "frankyxhl/fx_bin", 1) is None
+        assert _apply_time_pr_state(gql, "frankyxhl/fx_bin", 1) == (None, None)
 
-    def test_non_str_base_ref_returns_none(self):
+    def test_non_str_base_ref_returns_none_for_base_ref(self):
         def gql(query, variables):
-            return {"repository": {"pullRequest": {"baseRefName": None}}}
+            return {
+                "repository": {"pullRequest": {"baseRefName": None, "reviewDecision": "APPROVED"}}
+            }
 
-        assert _current_base_ref(gql, "frankyxhl/fx_bin", 1) is None
+        assert _apply_time_pr_state(gql, "frankyxhl/fx_bin", 1) == (None, "APPROVED")
+
+    def test_non_str_review_decision_returns_none_for_review_decision(self):
+        def gql(query, variables):
+            return {"repository": {"pullRequest": {"baseRefName": "main", "reviewDecision": None}}}
+
+        assert _apply_time_pr_state(gql, "frankyxhl/fx_bin", 1) == ("main", None)
+
+    def test_missing_review_decision_key_returns_none(self):
+        def gql(query, variables):
+            return {"repository": {"pullRequest": {"baseRefName": "main"}}}
+
+        assert _apply_time_pr_state(gql, "frankyxhl/fx_bin", 1) == ("main", None)
 
 
 class TestMergeReadGqlWhitelist:
@@ -1225,6 +1281,50 @@ class TestRunMergeLoop:
         assert merges == []
         (d,) = summary.decisions
         assert (d.action, d.reason) == ("skipped", "readiness_missing")
+
+    def test_green_but_unapproved_pr_is_skipped(self, monkeypatch):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        summary, merges = self._run(
+            [_pr_node(number=4, review_decision="REVIEW_REQUIRED")],
+            thread_pages={4: []},
+            comment_pages=_readiness_pages(4),
+        )
+        assert merges == []
+        (d,) = summary.decisions
+        assert (d.action, d.reason) == ("skipped", "not_approved")
+
+    def test_unapproved_green_pr_skips_expensive_reads(self, monkeypatch):
+        """P2 (Codex #304 review): cheap_green must fold in the approval
+        state so an otherwise-green-but-unapproved PR never pays for the
+        base-freshness compare, paginated thread read, or paginated comment
+        read just to land on not_approved."""
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        calls: list[str] = []
+        inner = _fake_gql([_pr_node(number=4, review_decision="REVIEW_REQUIRED")])
+
+        def spy(query, variables):
+            calls.append(query)
+            return inner(query, variables)
+
+        merges: list[str] = []
+
+        def merge_gql(query, variables):
+            merges.append(variables["prId"])
+            return {"mergePullRequest": {"pullRequest": {"merged": True}}}
+
+        summary = run_merge_loop(
+            ["frankyxhl/fx_bin"],
+            read_gql=spy,
+            merge_gql=merge_gql,
+            identity_gql=_identity_gql_ok,
+            audit_path=None,
+        )
+        assert merges == []
+        (d,) = summary.decisions
+        assert (d.action, d.reason) == ("skipped", "not_approved")
+        assert _PR_THREADS_QUERY not in calls
+        assert _PR_COMMENTS_QUERY not in calls
+        assert _BASE_FRESHNESS_QUERY not in calls
 
     def test_cap_stops_merging(self, monkeypatch):
         monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
@@ -1660,6 +1760,100 @@ class TestApplyTimeBaseRetarget:
         )
         assert calls == []
         assert summary.would_merge == 1
+
+
+class TestApplyTimeApprovalRevoked:
+    """Approve-then-revoke race: the snapshot read APPROVED, but the
+    apply-time re-read (same _PR_BASE_QUERY, now extended with
+    reviewDecision) finds the approval gone. Checked in the same apply-time
+    block as the base-retarget guard, before the base-freshness re-read —
+    fires with zero mutations, no intent audit line, no cap slot consumed."""
+
+    def test_approval_revoked_at_apply_skips_with_no_mutation(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        audit = tmp_path / "audit.jsonl"
+        read = _fake_gql(
+            [_green_pr(1)],
+            thread_pages={1: []},
+            comment_pages=_readiness_pages(1),
+            current_review_decision="REVIEW_REQUIRED",
+        )
+        calls: list[str] = []
+
+        def merge_gql(query, variables):
+            calls.append(variables["prId"])
+            return {"mergePullRequest": {"pullRequest": {"merged": True}}}
+
+        summary = run_merge_loop(
+            ["frankyxhl/fx_bin"],
+            read_gql=read,
+            merge_gql=merge_gql,
+            identity_gql=_identity_gql_ok,
+            audit_path=audit,
+        )
+        assert calls == []  # merge_pr never called — no mutation issued
+        (d,) = summary.decisions
+        assert (d.action, d.reason) == ("skipped", "approval_revoked_at_apply")
+        lines = [_json.loads(line) for line in audit.read_text().strip().splitlines()]
+        assert all(line["action"] != "merge_intent" for line in lines)
+
+    def test_retarget_and_revoked_approval_together_reports_retarget(self, monkeypatch, tmp_path):
+        """Precedence pin: when the apply-time re-read finds BOTH a moved
+        baseRefName AND a lost approval, base_retargeted_at_apply is checked
+        first — the recorded reason must be the base one, not
+        approval_revoked_at_apply. Base safety takes precedence over
+        approval state in reporting; still zero mutations either way."""
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        audit = tmp_path / "audit.jsonl"
+        read = _fake_gql(
+            [_green_pr(1)],
+            thread_pages={1: []},
+            comment_pages=_readiness_pages(1),
+            current_base_ref="release/1.x",
+            current_review_decision="REVIEW_REQUIRED",
+        )
+        calls: list[str] = []
+
+        def merge_gql(query, variables):
+            calls.append(variables["prId"])
+            return {"mergePullRequest": {"pullRequest": {"merged": True}}}
+
+        summary = run_merge_loop(
+            ["frankyxhl/fx_bin"],
+            read_gql=read,
+            merge_gql=merge_gql,
+            identity_gql=_identity_gql_ok,
+            audit_path=audit,
+        )
+        assert calls == []  # merge_pr never called — no mutation issued
+        (d,) = summary.decisions
+        assert (d.action, d.reason) == ("skipped", "base_retargeted_at_apply")
+        lines = [_json.loads(line) for line in audit.read_text().strip().splitlines()]
+        assert all(line["action"] != "merge_intent" for line in lines)
+
+    def test_unchanged_approved_merge_proceeds(self, monkeypatch):
+        monkeypatch.setenv("VOYAGER_MERGE_EXTRA_REPOS", "frankyxhl/fx_bin")
+        read = _fake_gql(
+            [_green_pr(1)],
+            thread_pages={1: []},
+            comment_pages=_readiness_pages(1),
+            current_review_decision="APPROVED",
+        )
+        calls: list[str] = []
+
+        def merge_gql(query, variables):
+            calls.append(variables["prId"])
+            return {"mergePullRequest": {"pullRequest": {"merged": True}}}
+
+        summary = run_merge_loop(
+            ["frankyxhl/fx_bin"],
+            read_gql=read,
+            merge_gql=merge_gql,
+            identity_gql=_identity_gql_ok,
+            audit_path=None,
+        )
+        assert calls == ["PR_1"]
+        assert summary.merged == 1
 
 
 class TestAuditIntent:
