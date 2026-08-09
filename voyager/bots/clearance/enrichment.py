@@ -9,7 +9,11 @@ from typing import Any
 import httpx
 
 from voyager.core.github_app import GitHubAppClient
-from voyager.core.writeback import dry_run_enabled, format_writeback_failure_warning
+from voyager.core.writeback import (
+    _safe_exception_fields,
+    dry_run_enabled,
+    format_writeback_failure_warning,
+)
 
 from .constants import (
     CHECKBOX_ACTION_LABELS,
@@ -667,6 +671,47 @@ async def enrich_clearance_route(
 ) -> dict[str, Any]:
     pr_number = int(route["validation"]["pr_number"])
     pull_request = await client.pull_request(CLEARANCE_AGENT_SLUG, repository, pr_number)
+
+    # Both fetches below feed ONLY the codex-thumbs-reaction gate evidence
+    # (type (c) in codex_reviewed_current_head) — unlike reviews/threads/
+    # comments, that evidence is optional (types (a)/(b) can still gate/pass
+    # without it). A GraphQL/REST hiccup here must not abort the whole route
+    # (no labels/readiness comment at all) when a head-anchored review or
+    # comment already has the PR covered. Fail open to "no reaction
+    # evidence" — codex_reviewed_current_head already treats an empty
+    # head_updated_at as "reaction evidence unavailable" and skips type (c).
+    # Same try/except/_safe_exception_fields/_log.warning convention as the
+    # equivalent optional fetches in pipeline.py.
+    try:
+        reactions = await client.issue_reactions(CLEARANCE_AGENT_SLUG, repository, pr_number)
+    except Exception as exc:
+        safe = _safe_exception_fields(exc)
+        _log.warning(
+            "issue_reactions fetch failed for %s#%s (codex thumbs-reaction signal disabled): "
+            "class=%s status=%s",
+            repository,
+            pr_number,
+            safe["error_class"],
+            safe["status"],
+        )
+        reactions = []
+
+    try:
+        head_updated_at = await client.pull_request_head_updated_at(
+            CLEARANCE_AGENT_SLUG, repository, pr_number
+        )
+    except Exception as exc:
+        safe = _safe_exception_fields(exc)
+        _log.warning(
+            "head update timestamp fetch failed for %s#%s (codex thumbs-reaction signal "
+            "disabled): class=%s status=%s",
+            repository,
+            pr_number,
+            safe["error_class"],
+            safe["status"],
+        )
+        head_updated_at = None
+
     snapshot = {
         "pull_request": pull_request,
         "reviews": await client.pull_request_reviews(CLEARANCE_AGENT_SLUG, repository, pr_number),
@@ -674,10 +719,8 @@ async def enrich_clearance_route(
             CLEARANCE_AGENT_SLUG, repository, pr_number
         ),
         "issue_comments": await client.issue_comments(CLEARANCE_AGENT_SLUG, repository, pr_number),
-        "reactions": await client.issue_reactions(CLEARANCE_AGENT_SLUG, repository, pr_number),
-        "head_updated_at": await client.pull_request_head_updated_at(
-            CLEARANCE_AGENT_SLUG, repository, pr_number
-        ),
+        "reactions": reactions,
+        "head_updated_at": head_updated_at,
     }
     evaluation = evaluate_clearance_snapshot(snapshot)
     evaluation = apply_swm_overlay(evaluation, automation)

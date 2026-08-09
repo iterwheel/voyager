@@ -63,7 +63,12 @@ release note for the explicit migration path.
   {"ready", "ready_with_low_priority"}` without going back through the
   classifier's own branch chain — again by `enrich_clearance_route` after
   the overlay runs. The snapshot passed to `evaluate_clearance_snapshot`
-  gained `issue_comments`, `reactions`, and `head_updated_at` keys
+  gained `issue_comments`, `reactions`, and `head_updated_at` keys. The two
+  new optional fetches (`reactions`, `head_updated_at` — both feed *only*
+  the (c) reaction evidence) are individually wrapped so a GraphQL/REST
+  failure degrades to "no reaction evidence" instead of aborting the whole
+  route before evaluation runs; a head-anchored review/comment ((a)/(b))
+  still gates or passes normally when either optional fetch fails
   ([#308](https://github.com/iterwheel/voyager/pull/308)).
 
 ## [0.11.0] — 2026-08-09

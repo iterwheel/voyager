@@ -79,6 +79,8 @@ class _StubClient:
         issue_comments: list | None = None,
         reactions: list | None = None,
         head_updated_at: str | None = None,
+        reactions_raise: bool = False,
+        head_updated_at_raise: bool = False,
     ) -> None:
         self._pr = pull_request_data or {
             "number": 71,
@@ -94,6 +96,8 @@ class _StubClient:
         self._issue_comments = issue_comments or []
         self._reactions = reactions or []
         self._head_updated_at = head_updated_at
+        self._reactions_raise = reactions_raise
+        self._head_updated_at_raise = head_updated_at_raise
         self.request_reviewers_calls: list[dict[str, Any]] = []
 
     async def pull_request(self, app_slug: str, repo: str, pr_number: int) -> dict:
@@ -109,11 +113,15 @@ class _StubClient:
         return self._issue_comments
 
     async def issue_reactions(self, app_slug: str, repo: str, issue_number: int) -> list:
+        if self._reactions_raise:
+            raise RuntimeError("issue_reactions boom")
         return self._reactions
 
     async def pull_request_head_updated_at(
         self, app_slug: str, repo: str, pull_number: int
     ) -> str | None:
+        if self._head_updated_at_raise:
+            raise RuntimeError("pull_request_head_updated_at boom")
         return self._head_updated_at
 
     async def request_pull_request_reviewers(
@@ -955,6 +963,51 @@ async def test_thumbs_reaction_missing_head_updated_at_dispatches_no_review_requ
         reactions=[_codex_thumbs_reaction(created_at="2026-05-01T09:15:00Z")],
         head_updated_at=None,
     )
+    result = await enrich_clearance_route(client, _base_route(), repository="iterwheel/voyager")
+    assert result["validation"]["status"] == "clearance_pending"
+    assert client.request_reviewers_calls == []
+
+
+# ---------------------------------------------------------------------------
+# Round-5 P2: optional-fetch failures (head_updated_at / reactions) must not
+# abort the whole route — only reaction evidence (c) becomes unavailable;
+# head-anchored evidence (a)/(b) must still gate/pass normally.
+# ---------------------------------------------------------------------------
+
+
+async def test_head_updated_at_fetch_raising_does_not_abort_route(monkeypatch) -> None:
+    """pull_request_head_updated_at raises (GraphQL error/timeout) -> the
+    route must still complete and evaluate normally. A head-anchored Codex
+    review (type a) reaches Stage 3 regardless of the reaction-timestamp
+    fetch failing."""
+    monkeypatch.setenv("DRY_RUN", "false")
+    from voyager.bots.clearance.enrichment import enrich_clearance_route
+
+    client = _StubClient(reviews=[_approval(), _codex_review()], head_updated_at_raise=True)
+    result = await enrich_clearance_route(client, _base_route(), repository="iterwheel/voyager")
+    assert result["validation"]["status"] == "clearance_ready_for_approval"
+    assert len(client.request_reviewers_calls) >= 1
+
+
+async def test_reactions_fetch_raising_does_not_abort_route(monkeypatch) -> None:
+    """issue_reactions raises -> same-shaped degradation: route completes,
+    head-anchored evidence (type a) still reaches Stage 3."""
+    monkeypatch.setenv("DRY_RUN", "false")
+    from voyager.bots.clearance.enrichment import enrich_clearance_route
+
+    client = _StubClient(reviews=[_approval(), _codex_review()], reactions_raise=True)
+    result = await enrich_clearance_route(client, _base_route(), repository="iterwheel/voyager")
+    assert result["validation"]["status"] == "clearance_ready_for_approval"
+    assert len(client.request_reviewers_calls) >= 1
+
+
+async def test_both_optional_fetches_raising_falls_back_to_pending_not_crash() -> None:
+    """Both optional fetches fail AND there's no head-anchored evidence
+    either -> the route still completes (no crash) and correctly stays
+    pending; reaction evidence was simply never available to check."""
+    from voyager.bots.clearance.enrichment import enrich_clearance_route
+
+    client = _StubClient(reviews=[_approval()], reactions_raise=True, head_updated_at_raise=True)
     result = await enrich_clearance_route(client, _base_route(), repository="iterwheel/voyager")
     assert result["validation"]["status"] == "clearance_pending"
     assert client.request_reviewers_calls == []
