@@ -63,12 +63,17 @@ release note for the explicit migration path.
   {"ready", "ready_with_low_priority"}` without going back through the
   classifier's own branch chain — again by `enrich_clearance_route` after
   the overlay runs. The snapshot passed to `evaluate_clearance_snapshot`
-  gained `issue_comments`, `reactions`, and `head_updated_at` keys. The two
-  new optional fetches (`reactions`, `head_updated_at` — both feed *only*
-  the (c) reaction evidence) are individually wrapped so a GraphQL/REST
-  failure degrades to "no reaction evidence" instead of aborting the whole
-  route before evaluation runs; a head-anchored review/comment ((a)/(b))
-  still gates or passes normally when either optional fetch fails
+  gained `issue_comments`, `reactions`, and `head_updated_at` keys. All
+  three of these evidence-feeding fetches (`reactions`/`head_updated_at`
+  for (c), `issue_comments` for (b)) are individually wrapped so a
+  GraphQL/REST failure on any one degrades to "that evidence type is
+  unavailable" instead of aborting the whole route before evaluation runs;
+  the other evidence types still gate/pass normally — e.g. a head-anchored
+  Codex review (a) reaches Stage 3 even if the comments or reactions fetch
+  failed. `GitHubAppClient.issue_reactions` is now paginated (same
+  page/`per_page=100` loop shape as `issue_comments`) — previously a Codex
+  `+1` posted after 100 other PR-body reactions accumulated was invisible,
+  leaving a thumbs-only-clean PR stuck pending forever
   ([#308](https://github.com/iterwheel/voyager/pull/308)).
 
 ## [0.11.0] — 2026-08-09

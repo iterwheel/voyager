@@ -672,16 +672,21 @@ async def enrich_clearance_route(
     pr_number = int(route["validation"]["pr_number"])
     pull_request = await client.pull_request(CLEARANCE_AGENT_SLUG, repository, pr_number)
 
-    # Both fetches below feed ONLY the codex-thumbs-reaction gate evidence
-    # (type (c) in codex_reviewed_current_head) — unlike reviews/threads/
-    # comments, that evidence is optional (types (a)/(b) can still gate/pass
-    # without it). A GraphQL/REST hiccup here must not abort the whole route
-    # (no labels/readiness comment at all) when a head-anchored review or
-    # comment already has the PR covered. Fail open to "no reaction
-    # evidence" — codex_reviewed_current_head already treats an empty
-    # head_updated_at as "reaction evidence unavailable" and skips type (c).
-    # Same try/except/_safe_exception_fields/_log.warning convention as the
-    # equivalent optional fetches in pipeline.py.
+    # The three fetches below (reactions, head_updated_at, issue_comments)
+    # each feed exactly ONE codex_reviewed_current_head evidence type — (c),
+    # (c), and (b) respectively — never the core review/thread data that
+    # evaluate_clearance_snapshot's own blocking/approval logic needs. Each
+    # is individually wrapped: a GraphQL/REST hiccup on any one of them must
+    # not abort the whole route (no labels/readiness comment at all) when a
+    # *different* evidence type already has the PR covered — e.g. a
+    # head-anchored Codex review (type a) reaching Stage 3 even though
+    # issue_comments failed. codex_reviewed_current_head already treats an
+    # empty/falsy value for any of these as "that evidence type is
+    # unavailable" and fails closed on it alone, so "fetch failed" and "PR
+    # genuinely has none of this evidence" produce the same, already-correct
+    # downstream behavior. Same try/except/_safe_exception_fields/
+    # _log.warning convention as the equivalent optional fetches in
+    # pipeline.py.
     try:
         reactions = await client.issue_reactions(CLEARANCE_AGENT_SLUG, repository, pr_number)
     except Exception as exc:
@@ -712,13 +717,33 @@ async def enrich_clearance_route(
         )
         head_updated_at = None
 
+    # issue_comments feeds ONLY the codex clean-verdict-comment gate evidence
+    # (type (b)) — codex_reviewed_current_head treats an empty list the same
+    # as "no clean-verdict comment found," which is already a normal, correct
+    # outcome. A fetch failure here must not abort the route either: types
+    # (a)/(c) still gate/pass normally. Same convention as the two fetches
+    # above. Codex round 6 P2.
+    try:
+        issue_comments = await client.issue_comments(CLEARANCE_AGENT_SLUG, repository, pr_number)
+    except Exception as exc:
+        safe = _safe_exception_fields(exc)
+        _log.warning(
+            "issue_comments fetch failed for %s#%s (codex clean-verdict-comment signal "
+            "disabled): class=%s status=%s",
+            repository,
+            pr_number,
+            safe["error_class"],
+            safe["status"],
+        )
+        issue_comments = []
+
     snapshot = {
         "pull_request": pull_request,
         "reviews": await client.pull_request_reviews(CLEARANCE_AGENT_SLUG, repository, pr_number),
         "review_threads": await client.pull_request_review_threads(
             CLEARANCE_AGENT_SLUG, repository, pr_number
         ),
-        "issue_comments": await client.issue_comments(CLEARANCE_AGENT_SLUG, repository, pr_number),
+        "issue_comments": issue_comments,
         "reactions": reactions,
         "head_updated_at": head_updated_at,
     }

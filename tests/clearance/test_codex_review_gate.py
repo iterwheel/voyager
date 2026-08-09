@@ -81,6 +81,7 @@ class _StubClient:
         head_updated_at: str | None = None,
         reactions_raise: bool = False,
         head_updated_at_raise: bool = False,
+        issue_comments_raise: bool = False,
     ) -> None:
         self._pr = pull_request_data or {
             "number": 71,
@@ -98,6 +99,7 @@ class _StubClient:
         self._head_updated_at = head_updated_at
         self._reactions_raise = reactions_raise
         self._head_updated_at_raise = head_updated_at_raise
+        self._issue_comments_raise = issue_comments_raise
         self.request_reviewers_calls: list[dict[str, Any]] = []
 
     async def pull_request(self, app_slug: str, repo: str, pr_number: int) -> dict:
@@ -110,6 +112,8 @@ class _StubClient:
         return self._review_threads
 
     async def issue_comments(self, app_slug: str, repo: str, issue_number: int) -> list:
+        if self._issue_comments_raise:
+            raise RuntimeError("issue_comments boom")
         return self._issue_comments
 
     async def issue_reactions(self, app_slug: str, repo: str, issue_number: int) -> list:
@@ -1008,6 +1012,41 @@ async def test_both_optional_fetches_raising_falls_back_to_pending_not_crash() -
     from voyager.bots.clearance.enrichment import enrich_clearance_route
 
     client = _StubClient(reviews=[_approval()], reactions_raise=True, head_updated_at_raise=True)
+    result = await enrich_clearance_route(client, _base_route(), repository="iterwheel/voyager")
+    assert result["validation"]["status"] == "clearance_pending"
+    assert client.request_reviewers_calls == []
+
+
+# ---------------------------------------------------------------------------
+# Round-6 P2: issue_comments fetch failure must not abort the route either —
+# it feeds only evidence (b); types (a)/(c) must still gate/pass normally.
+# ---------------------------------------------------------------------------
+
+
+async def test_issue_comments_fetch_raising_does_not_abort_route(monkeypatch) -> None:
+    """issue_comments raises -> route completes, a head-anchored Codex review
+    (type a) still reaches Stage 3 and dispatches a review request."""
+    monkeypatch.setenv("DRY_RUN", "false")
+    from voyager.bots.clearance.enrichment import enrich_clearance_route
+
+    client = _StubClient(reviews=[_approval(), _codex_review()], issue_comments_raise=True)
+    result = await enrich_clearance_route(client, _base_route(), repository="iterwheel/voyager")
+    assert result["validation"]["status"] == "clearance_ready_for_approval"
+    assert len(client.request_reviewers_calls) >= 1
+
+
+async def test_all_three_optional_fetches_raising_falls_back_to_pending_not_crash() -> None:
+    """All three optional fetches fail AND there's no head-anchored evidence
+    either -> the route still completes (no crash) and correctly stays
+    pending."""
+    from voyager.bots.clearance.enrichment import enrich_clearance_route
+
+    client = _StubClient(
+        reviews=[_approval()],
+        reactions_raise=True,
+        head_updated_at_raise=True,
+        issue_comments_raise=True,
+    )
     result = await enrich_clearance_route(client, _base_route(), repository="iterwheel/voyager")
     assert result["validation"]["status"] == "clearance_pending"
     assert client.request_reviewers_calls == []
