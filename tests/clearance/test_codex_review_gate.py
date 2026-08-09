@@ -188,6 +188,20 @@ def _clean_verdict_comment(
     }
 
 
+def _footerless_clean_comment(
+    *, created_at: str, login: str = "chatgpt-codex-connector[bot]"
+) -> dict:
+    """A Codex clean-verdict comment with NO 'Reviewed commit:' footer — the
+    dialect pipeline.py's own _is_clean_current_codex_issue_comment already
+    accepts (time-anchored), which codex_review_watch._is_clean_summary
+    (footer-only) rejects."""
+    return {
+        "user": {"login": login},
+        "created_at": created_at,
+        "body": "Codex Review: No major issues found.",
+    }
+
+
 def _codex_thread(*, resolved: bool = True, outdated: bool = False) -> dict:
     return {
         "isResolved": resolved,
@@ -287,6 +301,84 @@ def test_clean_verdict_comment_from_non_codex_login_does_not_count() -> None:
         "issue_comments": [_clean_verdict_comment(reviewed_commit=HEAD_SHA, login="random-user")],
     }
     assert codex_reviewed_current_head(snapshot) is False
+
+
+# ---------------------------------------------------------------------------
+# Round-7 P2: footer-less clean comment (b2), time-anchored like pipeline.py
+# already accepts for the SWM per-thread pipeline's own clean-signal check.
+# ---------------------------------------------------------------------------
+
+
+def test_footerless_clean_comment_after_head_arrival_is_reviewed() -> None:
+    """codex_review_watch requires a 'Reviewed commit:' footer; pipeline.py's
+    own clean-comment check does not. The gate must accept this dialect too,
+    time-anchored the same way as (c)."""
+    snapshot = {
+        "pull_request": _open_pr(),
+        "reviews": [_approval()],
+        "review_threads": [],
+        "issue_comments": [_footerless_clean_comment(created_at="2026-05-01T09:15:00Z")],
+        "head_updated_at": HEAD_UPDATED_AT,
+    }
+    assert codex_reviewed_current_head(snapshot) is True
+
+
+def test_footerless_clean_comment_before_head_arrival_is_not_reviewed() -> None:
+    """Stale footer-less clean comment from an old head — created_at predates
+    head_updated_at, so it must NOT count."""
+    snapshot = {
+        "pull_request": _open_pr(),
+        "reviews": [_approval()],
+        "review_threads": [],
+        "issue_comments": [_footerless_clean_comment(created_at="2026-05-01T08:00:00Z")],
+        "head_updated_at": HEAD_UPDATED_AT,
+    }
+    assert codex_reviewed_current_head(snapshot) is False
+
+
+def test_footerless_clean_comment_missing_head_updated_at_fails_closed() -> None:
+    """FAIL CLOSED: no head_updated_at available -> (b2) never fires, even
+    though the comment's own timestamp would otherwise qualify. (a)/(b1)
+    remain unaffected by this (there's no review or footer here at all)."""
+    snapshot = {
+        "pull_request": _open_pr(),
+        "reviews": [_approval()],
+        "review_threads": [],
+        "issue_comments": [_footerless_clean_comment(created_at="2026-05-01T09:15:00Z")],
+        "head_updated_at": None,
+    }
+    assert codex_reviewed_current_head(snapshot) is False
+
+
+def test_wrong_head_footer_posted_after_head_arrival_is_not_reviewed() -> None:
+    """Explicit footer beats timestamp: a comment WITH a 'Reviewed commit:'
+    footer naming an OLD head, but posted (created_at) after the current
+    head arrived, must still be rejected — it does not fall through to the
+    time-anchored (b2) check just because it's freshly timestamped. The
+    footer is explicit evidence of which head Codex actually reviewed."""
+    comment = _clean_verdict_comment(reviewed_commit=OLD_SHA)
+    comment["created_at"] = "2026-05-01T09:15:00Z"  # after HEAD_UPDATED_AT
+    snapshot = {
+        "pull_request": _open_pr(),
+        "reviews": [_approval()],
+        "review_threads": [],
+        "issue_comments": [comment],
+        "head_updated_at": HEAD_UPDATED_AT,
+    }
+    assert codex_reviewed_current_head(snapshot) is False
+
+
+def test_matching_head_footer_still_works_with_head_updated_at_present() -> None:
+    """(b1) is unaffected by (b2)'s addition: a correctly head-anchored
+    footer still counts regardless of head_updated_at being present."""
+    snapshot = {
+        "pull_request": _open_pr(),
+        "reviews": [_approval()],
+        "review_threads": [],
+        "issue_comments": [_clean_verdict_comment(reviewed_commit=HEAD_SHA)],
+        "head_updated_at": HEAD_UPDATED_AT,
+    }
+    assert codex_reviewed_current_head(snapshot) is True
 
 
 # ---------------------------------------------------------------------------
@@ -509,6 +601,49 @@ def test_old_head_clean_verdict_stays_pending() -> None:
             "reviews": [_approval()],
             "review_threads": [],
             "issue_comments": [_clean_verdict_comment(reviewed_commit=OLD_SHA)],
+        }
+    )
+    assert ev["status"] == "clearance_pending"
+
+
+def test_footerless_clean_comment_after_head_arrival_reaches_stage_3() -> None:
+    ev = evaluate_clearance_snapshot(
+        {
+            "pull_request": _open_pr(),
+            "reviews": [_approval()],
+            "review_threads": [],
+            "issue_comments": [_footerless_clean_comment(created_at="2026-05-01T09:15:00Z")],
+            "head_updated_at": HEAD_UPDATED_AT,
+        }
+    )
+    assert ev["status"] == "clearance_ready_for_approval"
+    assert ev["labels"]["add"] == ["clearance-3-ready-for-approval"]
+
+
+def test_footerless_clean_comment_before_head_arrival_stays_pending() -> None:
+    ev = evaluate_clearance_snapshot(
+        {
+            "pull_request": _open_pr(),
+            "reviews": [_approval()],
+            "review_threads": [],
+            "issue_comments": [_footerless_clean_comment(created_at="2026-05-01T08:00:00Z")],
+            "head_updated_at": HEAD_UPDATED_AT,
+        }
+    )
+    assert ev["status"] == "clearance_pending"
+
+
+def test_wrong_head_footer_after_head_arrival_stays_pending() -> None:
+    """Classifier-level: explicit stale footer wins over a fresh timestamp."""
+    comment = _clean_verdict_comment(reviewed_commit=OLD_SHA)
+    comment["created_at"] = "2026-05-01T09:15:00Z"
+    ev = evaluate_clearance_snapshot(
+        {
+            "pull_request": _open_pr(),
+            "reviews": [_approval()],
+            "review_threads": [],
+            "issue_comments": [comment],
+            "head_updated_at": HEAD_UPDATED_AT,
         }
     )
     assert ev["status"] == "clearance_pending"
@@ -1046,6 +1181,40 @@ async def test_all_three_optional_fetches_raising_falls_back_to_pending_not_cras
         reactions_raise=True,
         head_updated_at_raise=True,
         issue_comments_raise=True,
+    )
+    result = await enrich_clearance_route(client, _base_route(), repository="iterwheel/voyager")
+    assert result["validation"]["status"] == "clearance_pending"
+    assert client.request_reviewers_calls == []
+
+
+# ---------------------------------------------------------------------------
+# Round-7 P2: footer-less clean comment, end-to-end
+# ---------------------------------------------------------------------------
+
+
+async def test_footerless_clean_comment_after_head_arrival_dispatches_review_request(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DRY_RUN", "false")
+    from voyager.bots.clearance.enrichment import enrich_clearance_route
+
+    client = _StubClient(
+        reviews=[_approval()],
+        issue_comments=[_footerless_clean_comment(created_at="2026-05-01T09:15:00Z")],
+        head_updated_at=HEAD_UPDATED_AT,
+    )
+    result = await enrich_clearance_route(client, _base_route(), repository="iterwheel/voyager")
+    assert result["validation"]["status"] == "clearance_ready_for_approval"
+    assert len(client.request_reviewers_calls) >= 1
+
+
+async def test_footerless_clean_comment_before_head_arrival_dispatches_no_review_request() -> None:
+    from voyager.bots.clearance.enrichment import enrich_clearance_route
+
+    client = _StubClient(
+        reviews=[_approval()],
+        issue_comments=[_footerless_clean_comment(created_at="2026-05-01T08:00:00Z")],
+        head_updated_at=HEAD_UPDATED_AT,
     )
     result = await enrich_clearance_route(client, _base_route(), repository="iterwheel/voyager")
     assert result["validation"]["status"] == "clearance_pending"

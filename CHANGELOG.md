@@ -32,9 +32,19 @@ release note for the explicit migration path.
   reachable directly when an approval is already present, e.g. the operator
   approves before Codex reviews) now additionally require at least one of:
   (a) a non-dismissed Codex PR review submitted against the current head
-  commit; (b) a Codex clean-verdict PR comment whose `Reviewed commit:`
-  value prefix-matches the current head. Absent both, status stays
-  `clearance_pending` with a "waiting for Codex review of the current head"
+  commit; (b) a Codex clean-verdict PR comment — in either of two dialects:
+  (b1) one carrying a `Reviewed commit:` footer that prefix-matches the
+  current head (head-anchored), or (b2) one with NO footer at all, accepted
+  when its `created_at` is later than the current head's arrival timestamp
+  (time-anchored, same mechanism as (c) below — reuses `pipeline.py`'s own
+  `_is_clean_current_codex_issue_comment` verbatim, since the SWM
+  per-thread pipeline already treats this footer-less dialect as clean and
+  the gate needed to agree with it rather than re-implement a third parser).
+  A footer naming a *different* head is rejected outright and never falls
+  through to the time-anchored check, however freshly timestamped — an
+  explicit wrong-head footer is stronger evidence than a timestamp. Absent
+  all current-head evidence, status stays `clearance_pending` with a
+  "waiting for Codex review of the current head"
   reason, no review request is made, and (new) the PR is not reported
   merge-ready either — closing the path where an operator approving early
   let a stage>=3-gated merge loop auto-merge a head Codex never saw. Also

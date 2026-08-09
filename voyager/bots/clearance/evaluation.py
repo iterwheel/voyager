@@ -18,6 +18,7 @@ from .constants import (
     configured_review_request_users,
     is_codex_login,
 )
+from .pipeline import _is_clean_current_codex_issue_comment
 
 
 class ReviewStateView(TypedDict):
@@ -121,10 +122,25 @@ def codex_reviewed_current_head(snapshot: dict[str, Any]) -> bool:
           ``commit_id``;
       (b) a Codex clean-verdict PR comment (``issue_comments``) starting with
           the same ``Codex Review:`` prefix as ``CODEX_REVIEW_RESULT_PREFIX``
-          (constants.py) whose parsed ``Reviewed commit:`` value
-          prefix-matches the current head — head-anchored via that value;
-          reuses the exact parsing precedent in
-          ``voyager.core.codex_review_watch._is_clean_summary``;
+          (constants.py). Two dialects, both observed in production:
+            (b1) the comment carries a ``Reviewed commit:`` footer — it
+                 counts only when that footer's value prefix-matches the
+                 current head (head-anchored). Reuses the exact parsing
+                 precedent in
+                 ``voyager.core.codex_review_watch._is_clean_summary``. A
+                 footer naming a DIFFERENT head is explicit evidence the
+                 comment is stale and is rejected outright — it does NOT
+                 fall through to (b2) even if freshly timestamped;
+            (b2) the comment has NO ``Reviewed commit:`` footer at all — it
+                 counts when its ``created_at`` is later than
+                 ``snapshot["head_updated_at"]`` (time-anchored, same
+                 mechanism as (c) below). Reuses
+                 ``pipeline.py``'s own ``_is_clean_current_codex_issue_comment``
+                 verbatim rather than re-implementing a third clean-verdict
+                 parser — that function already accepts this exact
+                 footer-less dialect for the SWM per-thread pipeline's own
+                 clean-signal detection, so the gate and the pipeline now
+                 agree on what counts as "Codex said this head is clean."
       (c) a Codex ``+1`` reaction on the PR body (``reactions``) — Codex's
           third clean-verdict signal alongside (b), mirrored from
           ``codex_review_watch._detect_signal``'s "thumbs" branch. A
@@ -135,8 +151,9 @@ def codex_reviewed_current_head(snapshot: dict[str, Any]) -> bool:
           ``GitHubAppClient.pull_request_head_updated_at`` — already used by
           ``pipeline.py`` for the identical problem, judging whether a Codex
           issue-comment clean signal predates the current head). FAIL
-          CLOSED: a missing/empty ``head_updated_at`` means (c) never fires,
-          regardless of how many ``+1`` reactions exist.
+          CLOSED: a missing/empty ``head_updated_at`` means (c) — and (b2) —
+          never fire, regardless of how many ``+1`` reactions or footer-less
+          clean comments exist.
 
     Deliberately NOT evidence: review-thread existence/resolution
     (``review_threads``). Round-2 review finding: thread state cannot be
@@ -167,21 +184,30 @@ def codex_reviewed_current_head(snapshot: dict[str, Any]) -> bool:
         ):
             return True
 
+    # head_updated_at is time-anchored evidence for (b2) and (c) — GitHub
+    # emits ISO-8601 UTC ('Z'-suffixed) timestamps throughout, which are
+    # lexicographically comparable as plain strings (same convention
+    # pipeline.py already uses for its own current-head-freshness checks).
+    head_updated_at = str(snapshot.get("head_updated_at") or "")
+
     for comment in snapshot.get("issue_comments") or []:
         login = (comment.get("user") or {}).get("login")
         body = str(comment.get("body") or "")
-        if (
-            is_codex_login(login)
-            and body.startswith(CODEX_REVIEW_RESULT_PREFIX)
-            and _is_clean_summary(body, head_sha)
-        ):
+        if not (is_codex_login(login) and body.startswith(CODEX_REVIEW_RESULT_PREFIX)):
+            continue
+        if "reviewed commit:" in body.lower():
+            # (b1): an explicit footer is authoritative — either it matches
+            # the current head, or the comment is stale. Never fall through
+            # to the time-anchored (b2) check for a footer that names a
+            # different head.
+            if _is_clean_summary(body, head_sha):
+                return True
+            continue
+        # (b2): no footer at all — reuse pipeline.py's own time-anchored
+        # footer-less clean-comment predicate verbatim.
+        if _is_clean_current_codex_issue_comment(comment, current_head_updated_at=head_updated_at):
             return True
 
-    # (c) is time-anchored, not head-anchored — GitHub emits ISO-8601 UTC
-    # ('Z'-suffixed) timestamps throughout, which are lexicographically
-    # comparable as plain strings (same convention pipeline.py already uses
-    # for its own current-head-freshness comment check).
-    head_updated_at = str(snapshot.get("head_updated_at") or "")
     if head_updated_at:
         for reaction in snapshot.get("reactions") or []:
             login = (reaction.get("user") or {}).get("login")

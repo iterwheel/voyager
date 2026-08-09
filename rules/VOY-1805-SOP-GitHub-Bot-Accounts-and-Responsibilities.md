@@ -165,7 +165,7 @@ and VOY-1804.
    |-------|-------|-------------|
    | `clearance-1-pending` | `#FBCA04` (yellow) | Waiting for data, checks, webhook results, or bot review signal. |
    | `clearance-2-blocked` | `#D93F0B` (red) | Explicit blocker: unresolved review threads, changes requested, or failing required checks. |
-   | `clearance-3-ready-for-approval` | `#5319E7` (purple) | Automated conditions satisfied, Codex has reviewed the current head (a head-anchored Codex PR review, clean-verdict comment, or a `+1` PR-body reaction time-anchored to after the current head arrived — see `codex_reviewed_current_head`; review-thread state is not evidence, it cannot be reliably head-anchored), and configured human approval is still missing. |
+   | `clearance-3-ready-for-approval` | `#5319E7` (purple) | Automated conditions satisfied, Codex has reviewed the current head (a head-anchored Codex PR review; a clean-verdict comment, either head-anchored via a `Reviewed commit:` footer or, footer-less, time-anchored to after the current head arrived — a wrong-head footer always loses to a fresh timestamp; or a `+1` PR-body reaction time-anchored to after the current head arrived — see `codex_reviewed_current_head`; review-thread state is not evidence, it cannot be reliably head-anchored), and configured human approval is still missing. |
    | `clearance-4-ready-for-merge` | `#0E8A16` (green) | Configured human / current-head approval present, automated conditions satisfied, AND Codex has reviewed the current head (same evidence as Stage 3 — see `codex_reviewed_current_head`). An approval that lands before Codex reviews the head does not advance this label by itself. |
 
    ### Legacy labels (migration)
@@ -330,3 +330,4 @@ review/gate stages for the Assembly-authored PR.
 | 2026-08-09 | Removed review-thread state as Codex-reviewed-current-head evidence — not reliably head-anchored; only a head-anchored Codex review or clean-verdict comment counts (PR #308 round-2 review fix) | Claude Code |
 | 2026-08-09 | Extended the Codex-reviewed-current-head requirement to `clearance-4-ready-for-merge` (Stage 4), not just Stage 3 — an early operator approval no longer bypasses the Codex-review gate on its own (PR #308 round-3 review fix) | Claude Code |
 | 2026-08-09 | Added a time-anchored Codex `+1` PR-body reaction as a third form of Codex-reviewed-current-head evidence, mirroring `codex_review_watch.py`'s thumbs clean signal (PR #308 round-4 review fix) | Claude Code |
+| 2026-08-09 | Added a footer-less, time-anchored dialect of the clean-verdict-comment evidence (reusing `pipeline.py`'s own clean-comment check), with an explicit wrong-head footer always overriding a fresh timestamp (PR #308 round-7 review fix) | Claude Code |
