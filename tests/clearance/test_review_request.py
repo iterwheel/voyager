@@ -30,6 +30,8 @@ class _StubClient:
         reviews: list | None = None,
         review_threads: list | None = None,
         issue_comments: list | None = None,
+        reactions: list | None = None,
+        head_updated_at: str | None = None,
         request_reviewers_side_effect: Any = None,
     ) -> None:
         self._pr = pull_request_data or {
@@ -44,6 +46,8 @@ class _StubClient:
         self._reviews = reviews or []
         self._review_threads = review_threads or []
         self._issue_comments = issue_comments or []
+        self._reactions = reactions or []
+        self._head_updated_at = head_updated_at
         self._request_reviewers_calls: list[dict] = []
         self._request_reviewers_side_effect = request_reviewers_side_effect
 
@@ -58,6 +62,14 @@ class _StubClient:
 
     async def issue_comments(self, app_slug: str, repo: str, issue_number: int) -> list:
         return self._issue_comments
+
+    async def issue_reactions(self, app_slug: str, repo: str, issue_number: int) -> list:
+        return self._reactions
+
+    async def pull_request_head_updated_at(
+        self, app_slug: str, repo: str, pull_number: int
+    ) -> str | None:
+        return self._head_updated_at
 
     async def request_pull_request_reviewers(
         self, app_slug: str, repo: str, pull_number: int, reviewers: list[str]

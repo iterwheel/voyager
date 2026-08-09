@@ -37,22 +37,33 @@ release note for the explicit migration path.
   `clearance_pending` with a "waiting for Codex review of the current head"
   reason, no review request is made, and (new) the PR is not reported
   merge-ready either — closing the path where an operator approving early
-  let a stage>=3-gated merge loop auto-merge a head Codex never saw. (A
-  third evidence type — Codex review-thread existence/resolution — was
-  considered and rejected: thread state cannot be reliably head-anchored,
-  since a thread resolved on an old head still reads "resolved" after a push
-  with zero new Codex activity, and GitHub can re-anchor an old, untouched
-  comment to carry the *new* commit id; whenever Codex leaves inline
-  findings it also submits a PR review, so (a) already covers that case
-  without trusting thread state.) New pure predicate
-  `codex_reviewed_current_head` and gate `enforce_codex_review_gate` (now
-  covering both stages) in `voyager/bots/clearance/evaluation.py`, applied
-  both by `evaluate_clearance_snapshot` and — because the SWM overlay can
+  let a stage>=3-gated merge loop auto-merge a head Codex never saw. Also
+  (c) a Codex `+1` reaction on the PR body posted after the current head
+  arrived — mirroring the "thumbs" clean signal
+  `voyager/core/codex_review_watch.py` already treats as clean, and the same
+  signal the `reaction` webhook already routes Clearance for. A reaction
+  carries no commit id, so it's anchored by TIME instead of head SHA: it
+  only counts when its `created_at` is later than the current head's
+  arrival timestamp (`GitHubAppClient.pull_request_head_updated_at` — the
+  same GraphQL timestamp `pipeline.py` already uses for the identical
+  staleness problem on Codex clean-verdict issue comments). Fails closed:
+  no arrival timestamp available means the reaction never counts, no matter
+  how recent. (A fourth candidate evidence type — Codex review-thread
+  existence/resolution — was considered and rejected: thread state cannot
+  be reliably head-anchored, since a thread resolved on an old head still
+  reads "resolved" after a push with zero new Codex activity, and GitHub
+  can re-anchor an old, untouched comment to carry the *new* commit id;
+  whenever Codex leaves inline findings it also submits a PR review, so (a)
+  already covers that case without trusting thread state.) New pure
+  predicate `codex_reviewed_current_head` and gate
+  `enforce_codex_review_gate` (covering both stages) in
+  `voyager/bots/clearance/evaluation.py`, applied both by
+  `evaluate_clearance_snapshot` and — because the SWM overlay can
   independently promote to either stage from `automation["status"] in
   {"ready", "ready_with_low_priority"}` without going back through the
   classifier's own branch chain — again by `enrich_clearance_route` after
   the overlay runs. The snapshot passed to `evaluate_clearance_snapshot`
-  gained an `issue_comments` key
+  gained `issue_comments`, `reactions`, and `head_updated_at` keys
   ([#308](https://github.com/iterwheel/voyager/pull/308)).
 
 ## [0.11.0] — 2026-08-09

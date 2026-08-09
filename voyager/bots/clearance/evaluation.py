@@ -115,16 +115,28 @@ def codex_reviewed_current_head(snapshot: dict[str, Any]) -> bool:
     yet. This predicate is head-anchored evidence that Codex actually has —
     a review or comment for a since-superseded head does not count.
 
-    Any ONE of the following is sufficient — both are head-anchored via the
-    review/comment's own ``commit_id`` / ``Reviewed commit:`` value, not via
-    review-thread state:
+    Any ONE of the following is sufficient:
       (a) a non-dismissed Codex PR review (``reviews``) submitted against the
-          current head commit;
+          current head commit — head-anchored via the review's own
+          ``commit_id``;
       (b) a Codex clean-verdict PR comment (``issue_comments``) starting with
           the same ``Codex Review:`` prefix as ``CODEX_REVIEW_RESULT_PREFIX``
           (constants.py) whose parsed ``Reviewed commit:`` value
-          prefix-matches the current head — reuses the exact parsing
-          precedent in ``voyager.core.codex_review_watch._is_clean_summary``.
+          prefix-matches the current head — head-anchored via that value;
+          reuses the exact parsing precedent in
+          ``voyager.core.codex_review_watch._is_clean_summary``;
+      (c) a Codex ``+1`` reaction on the PR body (``reactions``) — Codex's
+          third clean-verdict signal alongside (b), mirrored from
+          ``codex_review_watch._detect_signal``'s "thumbs" branch. A
+          reaction carries no commit id, so it is TIME-anchored instead: it
+          only counts when its ``created_at`` is later than
+          ``snapshot["head_updated_at"]``, the best-available "current head
+          arrived on this PR" timestamp (see
+          ``GitHubAppClient.pull_request_head_updated_at`` — already used by
+          ``pipeline.py`` for the identical problem, judging whether a Codex
+          issue-comment clean signal predates the current head). FAIL
+          CLOSED: a missing/empty ``head_updated_at`` means (c) never fires,
+          regardless of how many ``+1`` reactions exist.
 
     Deliberately NOT evidence: review-thread existence/resolution
     (``review_threads``). Round-2 review finding: thread state cannot be
@@ -164,6 +176,22 @@ def codex_reviewed_current_head(snapshot: dict[str, Any]) -> bool:
             and _is_clean_summary(body, head_sha)
         ):
             return True
+
+    # (c) is time-anchored, not head-anchored — GitHub emits ISO-8601 UTC
+    # ('Z'-suffixed) timestamps throughout, which are lexicographically
+    # comparable as plain strings (same convention pipeline.py already uses
+    # for its own current-head-freshness comment check).
+    head_updated_at = str(snapshot.get("head_updated_at") or "")
+    if head_updated_at:
+        for reaction in snapshot.get("reactions") or []:
+            login = (reaction.get("user") or {}).get("login")
+            created_at = str(reaction.get("created_at") or "")
+            if (
+                is_codex_login(login)
+                and reaction.get("content") == "+1"
+                and created_at > head_updated_at
+            ):
+                return True
 
     return False
 

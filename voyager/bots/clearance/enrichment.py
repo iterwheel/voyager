@@ -674,6 +674,10 @@ async def enrich_clearance_route(
             CLEARANCE_AGENT_SLUG, repository, pr_number
         ),
         "issue_comments": await client.issue_comments(CLEARANCE_AGENT_SLUG, repository, pr_number),
+        "reactions": await client.issue_reactions(CLEARANCE_AGENT_SLUG, repository, pr_number),
+        "head_updated_at": await client.pull_request_head_updated_at(
+            CLEARANCE_AGENT_SLUG, repository, pr_number
+        ),
     }
     evaluation = evaluate_clearance_snapshot(snapshot)
     evaluation = apply_swm_overlay(evaluation, automation)

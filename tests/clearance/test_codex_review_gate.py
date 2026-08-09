@@ -11,9 +11,12 @@ Stage 4 additionally requires codex-reviewed-current-head evidence — at
 least one of:
   (a) a Codex REVIEW submission whose commit_id == head_sha;
   (b) a Codex clean-verdict PR comment whose "Reviewed commit:" value
-      prefix-matches the current head.
-Absent both, status stays clearance_pending with a reason, and no review
-request is made.
+      prefix-matches the current head;
+  (c) a Codex "+1" reaction on the PR body whose created_at is later than
+      the current head's arrival timestamp (time-anchored, not
+      head-anchored — a reaction carries no commit id).
+Absent all three, status stays clearance_pending with a reason, and no
+review request is made.
 
 Round-2 review finding: a third evidence type — "a Codex inline review
 thread exists on the PR" — was removed. Thread state cannot be reliably
@@ -33,6 +36,17 @@ automation["status"] in {"ready", "ready_with_low_priority"} — and a merge
 loop gating on "stage >= 3" would auto-merge a head Codex never saw.
 enforce_codex_review_gate now gates both clearance_ready_for_approval and
 clearance_ready.
+
+Round-4 review finding (P2): the gate ignored Codex's PR-body "+1" reaction
+clean signal — the same signal codex_review_watch._detect_signal's "thumbs"
+branch already treats as clean, and the same signal the reaction webhook
+already routes Clearance for (routing.py). A thumbs-only clean PR could
+never reach Stage 3/4 through this gate. Added as evidence type (c), above,
+anchored by time (a reaction has no commit id) against
+GitHubAppClient.pull_request_head_updated_at — the same "current head
+arrival" timestamp pipeline.py already uses for the identical staleness
+problem on Codex issue-comment clean signals. Fails closed: no
+head_updated_at means no reaction evidence, full stop.
 """
 
 from __future__ import annotations
@@ -50,6 +64,7 @@ from voyager.bots.clearance.evaluation import (
 
 HEAD_SHA = "abc1234567890def"
 OLD_SHA = "111111a2222222b3"
+HEAD_UPDATED_AT = "2026-05-01T09:00:00Z"  # when the current head arrived on the PR
 
 
 class _StubClient:
@@ -62,6 +77,8 @@ class _StubClient:
         reviews: list | None = None,
         review_threads: list | None = None,
         issue_comments: list | None = None,
+        reactions: list | None = None,
+        head_updated_at: str | None = None,
     ) -> None:
         self._pr = pull_request_data or {
             "number": 71,
@@ -75,6 +92,8 @@ class _StubClient:
         self._reviews = reviews or []
         self._review_threads = review_threads or []
         self._issue_comments = issue_comments or []
+        self._reactions = reactions or []
+        self._head_updated_at = head_updated_at
         self.request_reviewers_calls: list[dict[str, Any]] = []
 
     async def pull_request(self, app_slug: str, repo: str, pr_number: int) -> dict:
@@ -88,6 +107,14 @@ class _StubClient:
 
     async def issue_comments(self, app_slug: str, repo: str, issue_number: int) -> list:
         return self._issue_comments
+
+    async def issue_reactions(self, app_slug: str, repo: str, issue_number: int) -> list:
+        return self._reactions
+
+    async def pull_request_head_updated_at(
+        self, app_slug: str, repo: str, pull_number: int
+    ) -> str | None:
+        return self._head_updated_at
 
     async def request_pull_request_reviewers(
         self, app_slug: str, repo: str, pull_number: int, reviewers: list[str]
@@ -128,6 +155,13 @@ def _codex_review(*, commit_id: str = HEAD_SHA, state: str = "COMMENTED") -> dic
         "submitted_at": "2026-05-01T09:30:00Z",
         "user": {"login": "chatgpt-codex-connector[bot]"},
     }
+
+
+def _codex_thumbs_reaction(
+    *, created_at: str, content: str = "+1", login: str = "chatgpt-codex-connector[bot]"
+) -> dict:
+    """A PR-body reaction, matching codex_review_watch._detect_signal's 'thumbs' branch."""
+    return {"user": {"login": login}, "content": content, "created_at": created_at}
 
 
 def _clean_verdict_comment(
@@ -239,6 +273,96 @@ def test_clean_verdict_comment_from_non_codex_login_does_not_count() -> None:
         "reviews": [_approval()],
         "review_threads": [],
         "issue_comments": [_clean_verdict_comment(reviewed_commit=HEAD_SHA, login="random-user")],
+    }
+    assert codex_reviewed_current_head(snapshot) is False
+
+
+# ---------------------------------------------------------------------------
+# Round-4 P2: Codex thumbs-up PR-body reaction (time-anchored, not head-anchored)
+# ---------------------------------------------------------------------------
+
+
+def test_thumbs_reaction_after_head_arrival_is_reviewed() -> None:
+    """codex_review_watch's 'thumbs' clean signal, mirrored: a +1 reaction
+    from Codex posted AFTER the current head arrived is sufficient evidence."""
+    snapshot = {
+        "pull_request": _open_pr(),
+        "reviews": [_approval()],
+        "review_threads": [],
+        "issue_comments": [],
+        "reactions": [_codex_thumbs_reaction(created_at="2026-05-01T09:15:00Z")],
+        "head_updated_at": HEAD_UPDATED_AT,
+    }
+    assert codex_reviewed_current_head(snapshot) is True
+
+
+def test_thumbs_reaction_before_head_arrival_is_not_reviewed() -> None:
+    """Stale thumbs from an OLD head: the reaction predates head_updated_at,
+    so it is not evidence for the current head — Codex reacted before the
+    latest push, never re-reviewed since."""
+    snapshot = {
+        "pull_request": _open_pr(),
+        "reviews": [_approval()],
+        "review_threads": [],
+        "issue_comments": [],
+        "reactions": [_codex_thumbs_reaction(created_at="2026-05-01T08:00:00Z")],
+        "head_updated_at": HEAD_UPDATED_AT,
+    }
+    assert codex_reviewed_current_head(snapshot) is False
+
+
+def test_thumbs_reaction_without_head_updated_at_fails_closed() -> None:
+    """FAIL CLOSED: no head_updated_at available at all -> reaction evidence
+    never fires, even though the reaction's own timestamp would otherwise
+    qualify."""
+    snapshot = {
+        "pull_request": _open_pr(),
+        "reviews": [_approval()],
+        "review_threads": [],
+        "issue_comments": [],
+        "reactions": [_codex_thumbs_reaction(created_at="2026-05-01T09:15:00Z")],
+        "head_updated_at": None,
+    }
+    assert codex_reviewed_current_head(snapshot) is False
+
+
+def test_thumbs_reaction_missing_snapshot_key_fails_closed() -> None:
+    """Same fail-closed behavior when head_updated_at is entirely absent from
+    the snapshot (legacy caller that hasn't been updated to fetch it)."""
+    snapshot = {
+        "pull_request": _open_pr(),
+        "reviews": [_approval()],
+        "review_threads": [],
+        "issue_comments": [],
+        "reactions": [_codex_thumbs_reaction(created_at="2026-05-01T09:15:00Z")],
+    }
+    assert codex_reviewed_current_head(snapshot) is False
+
+
+def test_thumbs_reaction_from_non_codex_login_does_not_count() -> None:
+    snapshot = {
+        "pull_request": _open_pr(),
+        "reviews": [_approval()],
+        "review_threads": [],
+        "issue_comments": [],
+        "reactions": [
+            _codex_thumbs_reaction(created_at="2026-05-01T09:15:00Z", login="random-user")
+        ],
+        "head_updated_at": HEAD_UPDATED_AT,
+    }
+    assert codex_reviewed_current_head(snapshot) is False
+
+
+def test_eyes_reaction_does_not_count_as_clean_signal() -> None:
+    """'eyes' means Codex is still reviewing, not a clean verdict — only '+1'
+    counts, matching codex_review_watch._detect_signal's thumbs check."""
+    snapshot = {
+        "pull_request": _open_pr(),
+        "reviews": [_approval()],
+        "review_threads": [],
+        "issue_comments": [],
+        "reactions": [_codex_thumbs_reaction(created_at="2026-05-01T09:15:00Z", content="eyes")],
+        "head_updated_at": HEAD_UPDATED_AT,
     }
     assert codex_reviewed_current_head(snapshot) is False
 
@@ -373,6 +497,51 @@ def test_old_head_clean_verdict_stays_pending() -> None:
             "reviews": [_approval()],
             "review_threads": [],
             "issue_comments": [_clean_verdict_comment(reviewed_commit=OLD_SHA)],
+        }
+    )
+    assert ev["status"] == "clearance_pending"
+
+
+def test_thumbs_reaction_after_head_arrival_reaches_stage_3() -> None:
+    ev = evaluate_clearance_snapshot(
+        {
+            "pull_request": _open_pr(),
+            "reviews": [_approval()],
+            "review_threads": [],
+            "issue_comments": [],
+            "reactions": [_codex_thumbs_reaction(created_at="2026-05-01T09:15:00Z")],
+            "head_updated_at": HEAD_UPDATED_AT,
+        }
+    )
+    assert ev["status"] == "clearance_ready_for_approval"
+    assert ev["labels"]["add"] == ["clearance-3-ready-for-approval"]
+
+
+def test_thumbs_reaction_before_head_arrival_stays_pending() -> None:
+    """Stale thumbs from an old head must NOT reach Stage 3."""
+    ev = evaluate_clearance_snapshot(
+        {
+            "pull_request": _open_pr(),
+            "reviews": [_approval()],
+            "review_threads": [],
+            "issue_comments": [],
+            "reactions": [_codex_thumbs_reaction(created_at="2026-05-01T08:00:00Z")],
+            "head_updated_at": HEAD_UPDATED_AT,
+        }
+    )
+    assert ev["status"] == "clearance_pending"
+
+
+def test_thumbs_reaction_missing_head_updated_at_stays_pending() -> None:
+    """FAIL CLOSED at the classifier level too."""
+    ev = evaluate_clearance_snapshot(
+        {
+            "pull_request": _open_pr(),
+            "reviews": [_approval()],
+            "review_threads": [],
+            "issue_comments": [],
+            "reactions": [_codex_thumbs_reaction(created_at="2026-05-01T09:15:00Z")],
+            "head_updated_at": None,
         }
     )
     assert ev["status"] == "clearance_pending"
@@ -735,6 +904,57 @@ async def test_thread_resolved_on_old_head_then_pushed_dispatches_no_review_requ
     from voyager.bots.clearance.enrichment import enrich_clearance_route
 
     client = _StubClient(reviews=[], review_threads=[_codex_thread(resolved=True)])
+    result = await enrich_clearance_route(client, _base_route(), repository="iterwheel/voyager")
+    assert result["validation"]["status"] == "clearance_pending"
+    assert client.request_reviewers_calls == []
+
+
+# ---------------------------------------------------------------------------
+# Round-4 P2: thumbs-reaction evidence, end-to-end
+# ---------------------------------------------------------------------------
+
+
+async def test_thumbs_reaction_after_head_arrival_dispatches_review_request(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DRY_RUN", "false")
+    from voyager.bots.clearance.enrichment import enrich_clearance_route
+
+    client = _StubClient(
+        reviews=[_approval()],
+        reactions=[_codex_thumbs_reaction(created_at="2026-05-01T09:15:00Z")],
+        head_updated_at=HEAD_UPDATED_AT,
+    )
+    result = await enrich_clearance_route(client, _base_route(), repository="iterwheel/voyager")
+    assert result["validation"]["status"] == "clearance_ready_for_approval"
+    assert len(client.request_reviewers_calls) >= 1
+
+
+async def test_thumbs_reaction_before_head_arrival_dispatches_no_review_request() -> None:
+    """Stale thumbs from an old head, end-to-end: stays pending, no dispatch."""
+    from voyager.bots.clearance.enrichment import enrich_clearance_route
+
+    client = _StubClient(
+        reviews=[_approval()],
+        reactions=[_codex_thumbs_reaction(created_at="2026-05-01T08:00:00Z")],
+        head_updated_at=HEAD_UPDATED_AT,
+    )
+    result = await enrich_clearance_route(client, _base_route(), repository="iterwheel/voyager")
+    assert result["validation"]["status"] == "clearance_pending"
+    assert client.request_reviewers_calls == []
+
+
+async def test_thumbs_reaction_missing_head_updated_at_dispatches_no_review_request() -> None:
+    """FAIL CLOSED, end-to-end: the stub client returns head_updated_at=None
+    (as a real fetch failure/absence would look), so the reaction alone must
+    not be enough to dispatch a review request."""
+    from voyager.bots.clearance.enrichment import enrich_clearance_route
+
+    client = _StubClient(
+        reviews=[_approval()],
+        reactions=[_codex_thumbs_reaction(created_at="2026-05-01T09:15:00Z")],
+        head_updated_at=None,
+    )
     result = await enrich_clearance_route(client, _base_route(), repository="iterwheel/voyager")
     assert result["validation"]["status"] == "clearance_pending"
     assert client.request_reviewers_calls == []
