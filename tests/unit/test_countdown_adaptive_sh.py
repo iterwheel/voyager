@@ -1,4 +1,4 @@
-"""Functional harness for the adaptive scheduler's trigger helpers (CHG-1838 D4).
+"""Functional harness for the adaptive scheduler's trigger helpers (CHG-1841 D4).
 
 Extracts the pure helper functions (trigger_path / consume_trigger /
 trigger_newer_than / sliced_sleep) out of

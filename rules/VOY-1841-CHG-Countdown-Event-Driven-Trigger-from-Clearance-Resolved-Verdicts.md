@@ -1,4 +1,4 @@
-# CHG-1838: Countdown Event-Driven Trigger from Clearance Resolved Verdicts
+# CHG-1841: Countdown Event-Driven Trigger from Clearance Resolved Verdicts
 
 **Applies to:** VOY project
 **Last updated:** 2026-08-12
