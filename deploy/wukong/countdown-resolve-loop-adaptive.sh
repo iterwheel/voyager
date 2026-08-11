@@ -8,6 +8,17 @@
 # otherwise keep the fast lane (and one DeepSeek gate call per candidate per
 # run) open forever.
 #
+# Event-driven fast path (CHG-1838): every sleep is sliced into <=30s steps
+# so the loop can wake early when the bridge's Countdown trigger route
+# touches the trigger file (a Clearance RESOLVED-verdict reply). The trigger
+# is consumed (deleted) immediately before each `vyg` invocation so one
+# trigger yields at most one extra scan; a trigger that lands mid-scan has a
+# newer mtime than the run start and survives to end the following sleep
+# early. A trigger-fired run is otherwise indistinguishable from a
+# timer-fired one, so it participates in fast/slow/streak accounting for
+# free. Polling remains the delivery-loss fallback — the trigger only closes
+# the gap between a webhook and the next lane wakeup.
+#
 # Deployment contract (VOY-1835):
 #   - Template lives in the repo; copy to /Users/frank/.voyager/bin/ and
 #     chmod 755 before use. Do not run from a development checkout.
@@ -24,10 +35,55 @@ set -u
 ENV_FILE="/Users/frank/.voyager/countdown-resolve-loop.env"
 REPOS_FILE="/Users/frank/.voyager/countdown-resolve-loop.repos"
 VYG="/Users/frank/.voyager/.venv/bin/vyg"
+DEFAULT_TRIGGER_PATH="/Users/frank/.voyager/countdown-resolve-loop.trigger"
+SLEEP_SLICE=30
 
 fast_streak=0
 
+# trigger_path — resolve the trigger file path (COUNTDOWN_TRIGGER_PATH override
+# or the default), matching the bridge route's own resolution.
+trigger_path() {
+  echo "${COUNTDOWN_TRIGGER_PATH:-$DEFAULT_TRIGGER_PATH}"
+}
+
+# consume_trigger — delete the trigger file so one arrival yields at most one
+# extra scan (CHG-1838 D4). Called immediately before every `vyg` invocation.
+consume_trigger() {
+  rm -f "$(trigger_path)" 2>/dev/null
+}
+
+# trigger_newer_than <epoch_seconds> — true when the trigger file exists and
+# its mtime is newer than the given epoch (the current run's start).
+trigger_newer_than() {
+  # NOTE: the local var is deliberately not named "path" — zsh ties that
+  # name to $PATH, and shadowing it here empties PATH for the rest of this
+  # function's scope (breaks `stat`).
+  local since="$1" trigger_file mtime
+  trigger_file="$(trigger_path)"
+  [[ -f "$trigger_file" ]] || return 1
+  mtime=$(stat -f %m "$trigger_file" 2>/dev/null) || return 1
+  (( mtime > since ))
+}
+
+# sliced_sleep <total_seconds> <run_start_epoch> — sleep in <=SLEEP_SLICE
+# chunks, waking early the moment a trigger newer than run_start appears.
+sliced_sleep() {
+  local total="$1" since="$2" elapsed=0 remaining this_slice
+  while (( elapsed < total )); do
+    remaining=$(( total - elapsed ))
+    this_slice=$(( remaining < SLEEP_SLICE ? remaining : SLEEP_SLICE ))
+    sleep "$this_slice"
+    elapsed=$(( elapsed + this_slice ))
+    if trigger_newer_than "$since"; then
+      echo "adaptive: trigger detected; ending sleep early"
+      return 0
+    fi
+  done
+}
+
 while true; do
+  run_start=$(date +%s)
+
   # Re-source every iteration so env edits apply without a launchd reload.
   # Fail closed on reload: clear the managed variables first, so a vanished,
   # unreadable, or truncated env file (or a deleted line) cannot leave a stale
@@ -36,8 +92,8 @@ while true; do
   # launchd restart.
   unset COUNTDOWN_RESOLVE_LOOP_ENABLED COUNTDOWN_MAX_RESOLVES \
         COUNTDOWN_FAST_INTERVAL COUNTDOWN_SLOW_INTERVAL \
-        COUNTDOWN_FAST_STREAK_MAX VOYAGER_DEEPSEEK_API_KEY \
-        VOYAGER_RESOLVE_EXTRA_REPOS
+        COUNTDOWN_FAST_STREAK_MAX COUNTDOWN_TRIGGER_PATH \
+        VOYAGER_DEEPSEEK_API_KEY VOYAGER_RESOLVE_EXTRA_REPOS
   set -a
   if ! source "$ENV_FILE" 2>/dev/null; then
     set +a
@@ -45,7 +101,7 @@ while true; do
     # half-loaded knob.
     echo "adaptive: cannot source ${ENV_FILE}; failing closed, sleeping 3600s"
     fast_streak=0
-    sleep 3600
+    sliced_sleep 3600 "$run_start"
     continue
   fi
   set +a
@@ -73,10 +129,11 @@ while true; do
   if [[ "${COUNTDOWN_RESOLVE_LOOP_ENABLED:-false}" != "true" ]]; then
     echo "COUNTDOWN_RESOLVE_LOOP_ENABLED is not true; sleeping ${slow}s"
     fast_streak=0
-    sleep "$slow"
+    sliced_sleep "$slow" "$run_start"
     continue
   fi
 
+  consume_trigger
   out=$("$VYG" countdown resolve-loop \
         --repos "$REPOS_FILE" \
         --max-resolves "${COUNTDOWN_MAX_RESOLVES:-20}" \
@@ -92,7 +149,7 @@ while true; do
     # failures, not like quiet runs; take the slow lane and say why.
     echo "adaptive: vyg exited rc=${rc}; sleeping ${slow}s before retry"
     fast_streak=0
-    sleep "$slow"
+    sliced_sleep "$slow" "$run_start"
     continue
   fi
 
@@ -106,7 +163,7 @@ except Exception:
   if [[ "$decisions" -gt 0 && "$fast_streak" -lt "$streak_max" ]]; then
     fast_streak=$((fast_streak + 1))
     echo "adaptive: ${decisions} decision(s); fast recheck in ${fast}s (streak ${fast_streak}/${streak_max})"
-    sleep "$fast"
+    sliced_sleep "$fast" "$run_start"
   else
     if [[ "$decisions" -gt 0 ]]; then
       echo "adaptive: fast-streak cap reached; backing off to ${slow}s"
@@ -114,6 +171,6 @@ except Exception:
       echo "adaptive: idle; next check in ${slow}s"
     fi
     fast_streak=0
-    sleep "$slow"
+    sliced_sleep "$slow" "$run_start"
   fi
 done
