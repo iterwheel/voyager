@@ -24,6 +24,7 @@ from voyager.bots.blueprint import route_blueprint_event
 from voyager.bots.changelog import route_changelog_event
 from voyager.bots.cleanup import route_pr_merge_cleanup
 from voyager.bots.clearance import route_clearance_event
+from voyager.bots.countdown import route_countdown_trigger
 from voyager.bots.review_fix import route_review_fix_event
 from voyager.bots.stack import route_stack_event
 from voyager.build_info import BUILD_COMMIT, VERSION
@@ -801,6 +802,7 @@ async def github_webhook(
         *route_assembly_event(x_github_event, payload, cfg=cfg),
         *route_review_fix_event(x_github_event, payload, cfg=cfg),
         *route_pr_merge_cleanup(x_github_event, payload),
+        *route_countdown_trigger(x_github_event, payload),
     ]
     routes, denied_routes = _filter_routes_by_repository(candidate_routes, repository, cfg)
     if denied_routes:
