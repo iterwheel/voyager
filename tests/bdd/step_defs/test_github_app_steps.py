@@ -870,6 +870,63 @@ def comments_endpoint_call_count(state: ClientState, expected: int) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Given / When / Then — Codex round 6 P2: issue_reactions pagination
+# ---------------------------------------------------------------------------
+
+
+@given("GitHub returns 2 pages of issue reactions with a codex +1 on page 2")
+def mock_paginated_issue_reactions(state: ClientState) -> None:
+    page1 = [{"id": i, "content": "eyes", "user": {"login": "someone-else"}} for i in range(100)]
+    page2 = [
+        {"id": 100 + i, "content": "heart", "user": {"login": "someone-else"}} for i in range(4)
+    ] + [{"id": 104, "content": "+1", "user": {"login": "chatgpt-codex-connector[bot]"}}]
+    existing = getattr(state, "_mock_responses", [])
+    state._mock_responses = [  # type: ignore[attr-defined]
+        *existing,
+        _json_list_response(200, page1),
+        _json_list_response(200, page2),
+    ]
+
+
+@when(
+    parsers.parse('issue_reactions is called for "{repo}" issue {issue_number:d}'),
+    target_fixture="reactions_result",
+)
+def call_issue_reactions(state: ClientState, repo: str, issue_number: int) -> list[dict]:
+    import asyncio
+
+    responses = getattr(state, "_mock_responses", [])
+    state.client = _build_client(state, responses)
+    return asyncio.run(state.client.issue_reactions("test-bot", repo, issue_number))
+
+
+@then(parsers.parse("issue_reactions returned {expected:d} items"))
+def reactions_returned_count(reactions_result: list, expected: int) -> None:
+    assert len(reactions_result) == expected, (
+        f"issue_reactions returned {len(reactions_result)} items, expected {expected}"
+    )
+
+
+@then("the reactions include a codex +1 reaction")
+def reactions_include_codex_thumbs(reactions_result: list) -> None:
+    assert any(
+        r.get("content") == "+1"
+        and (r.get("user") or {}).get("login") == "chatgpt-codex-connector[bot]"
+        for r in reactions_result
+    ), f"codex +1 reaction not found in: {reactions_result}"
+
+
+@then(parsers.parse("the reactions endpoint was called {expected:d} times"))
+def reactions_endpoint_call_count(state: ClientState, expected: int) -> None:
+    reaction_calls = [r for r in state.captured_requests if "/reactions" in str(r.url)]
+    actual = len(reaction_calls)
+    urls = [str(r.url) for r in reaction_calls]
+    assert actual == expected, (
+        f"reactions endpoint called {actual} times, expected {expected}: {urls}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Given / When / Then — Wave 7B-3: pull_request_diff
 # ---------------------------------------------------------------------------
 

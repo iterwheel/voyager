@@ -688,12 +688,32 @@ class GitHubAppClient:
         *,
         content: str | None = None,
     ) -> list[dict[str, Any]]:
+        """Fetch ALL reactions on an issue/PR body, paginating beyond the first 100.
+
+        Without pagination, a Codex `+1` clean-verdict reaction posted after
+        100 other reactions accumulated on a busy PR body would be invisible
+        to Clearance's codex-review gate, leaving a thumbs-only-clean PR
+        stuck pending forever. Same pagination shape as issue_comments().
+        Codex round 6 P2.
+        """
         owner, name = repo.split("/", 1)
-        path = f"/repos/{owner}/{name}/issues/{issue_number}/reactions?per_page=100"
-        if content:
-            path = f"{path}&content={quote(content, safe='')}"
-        payload = await self.request(app_slug, "GET", path, repository=repo)
-        return list(payload or [])
+        all_reactions: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            path = f"/repos/{owner}/{name}/issues/{issue_number}/reactions?per_page=100&page={page}"
+            if content:
+                path = f"{path}&content={quote(content, safe='')}"
+            payload = await self.request(app_slug, "GET", path, repository=repo)
+            items = list(payload or [])
+            all_reactions.extend(items)
+            if len(items) < 100:
+                break
+            page += 1
+            if page > 50:
+                # Safety bound: 5,000 reactions. Past that, something is
+                # wrong upstream and we should not infinite-loop.
+                break
+        return all_reactions
 
     async def add_issue_reaction(
         self,

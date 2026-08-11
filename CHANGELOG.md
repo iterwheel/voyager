@@ -20,6 +20,72 @@ release note for the explicit migration path.
   share/paste; the full file's write is best-effort and never blocks a
   merge ([#307](https://github.com/iterwheel/voyager/pull/307)).
 
+### Changed — Clearance Stage 3 AND Stage 4 require Codex-reviewed-current-head evidence (BEHAVIOR CHANGE)
+
+- **Clearance no longer requests the operator's review, nor reports the PR
+  merge-ready, before Codex has reviewed the current PR head.**
+  Operator-reported defect (`order_system_django` #71): Clearance requested
+  human approval 9 seconds after PR creation because "zero Codex review
+  threads" was treated as "review clear" — Codex hadn't reviewed anything
+  yet. Both `clearance_ready_for_approval` (Stage 3, gating the review
+  request) and `clearance_ready` (Stage 4, "ready for Countdown"/merge —
+  reachable directly when an approval is already present, e.g. the operator
+  approves before Codex reviews) now additionally require at least one of:
+  (a) a non-dismissed Codex PR review submitted against the current head
+  commit; (b) a Codex clean-verdict PR comment — in either of two dialects:
+  (b1) one carrying a `Reviewed commit:` footer that prefix-matches the
+  current head (head-anchored), or (b2) one with NO footer at all, accepted
+  when its `created_at` is later than the current head's arrival timestamp
+  (time-anchored, same mechanism as (c) below — reuses `pipeline.py`'s own
+  `_is_clean_current_codex_issue_comment` verbatim, since the SWM
+  per-thread pipeline already treats this footer-less dialect as clean and
+  the gate needed to agree with it rather than re-implement a third parser).
+  A footer naming a *different* head is rejected outright and never falls
+  through to the time-anchored check, however freshly timestamped — an
+  explicit wrong-head footer is stronger evidence than a timestamp. Absent
+  all current-head evidence, status stays `clearance_pending` with a
+  "waiting for Codex review of the current head"
+  reason, no review request is made, and (new) the PR is not reported
+  merge-ready either — closing the path where an operator approving early
+  let a stage>=3-gated merge loop auto-merge a head Codex never saw. Also
+  (c) a Codex `+1` reaction on the PR body posted after the current head
+  arrived — mirroring the "thumbs" clean signal
+  `voyager/core/codex_review_watch.py` already treats as clean, and the same
+  signal the `reaction` webhook already routes Clearance for. A reaction
+  carries no commit id, so it's anchored by TIME instead of head SHA: it
+  only counts when its `created_at` is later than the current head's
+  arrival timestamp (`GitHubAppClient.pull_request_head_updated_at` — the
+  same GraphQL timestamp `pipeline.py` already uses for the identical
+  staleness problem on Codex clean-verdict issue comments). Fails closed:
+  no arrival timestamp available means the reaction never counts, no matter
+  how recent. (A fourth candidate evidence type — Codex review-thread
+  existence/resolution — was considered and rejected: thread state cannot
+  be reliably head-anchored, since a thread resolved on an old head still
+  reads "resolved" after a push with zero new Codex activity, and GitHub
+  can re-anchor an old, untouched comment to carry the *new* commit id;
+  whenever Codex leaves inline findings it also submits a PR review, so (a)
+  already covers that case without trusting thread state.) New pure
+  predicate `codex_reviewed_current_head` and gate
+  `enforce_codex_review_gate` (covering both stages) in
+  `voyager/bots/clearance/evaluation.py`, applied both by
+  `evaluate_clearance_snapshot` and — because the SWM overlay can
+  independently promote to either stage from `automation["status"] in
+  {"ready", "ready_with_low_priority"}` without going back through the
+  classifier's own branch chain — again by `enrich_clearance_route` after
+  the overlay runs. The snapshot passed to `evaluate_clearance_snapshot`
+  gained `issue_comments`, `reactions`, and `head_updated_at` keys. All
+  three of these evidence-feeding fetches (`reactions`/`head_updated_at`
+  for (c), `issue_comments` for (b)) are individually wrapped so a
+  GraphQL/REST failure on any one degrades to "that evidence type is
+  unavailable" instead of aborting the whole route before evaluation runs;
+  the other evidence types still gate/pass normally — e.g. a head-anchored
+  Codex review (a) reaches Stage 3 even if the comments or reactions fetch
+  failed. `GitHubAppClient.issue_reactions` is now paginated (same
+  page/`per_page=100` loop shape as `issue_comments`) — previously a Codex
+  `+1` posted after 100 other PR-body reactions accumulated was invisible,
+  leaving a thumbs-only-clean PR stuck pending forever
+  ([#308](https://github.com/iterwheel/voyager/pull/308)).
+
 ## [0.11.0] — 2026-08-09
 
 ### Changed — Merge-loop approval gate (BREAKING for zero-touch flows)
