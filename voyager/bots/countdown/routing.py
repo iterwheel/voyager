@@ -20,6 +20,12 @@ from voyager.bots.clearance.constants import CLEARANCE_BOT_LOGIN, logins_equival
 
 _log = logging.getLogger(__name__)
 
+# Agent slug used only for the bridge's repository-allowlist gate (server.py
+# checks this before calling route_countdown_trigger — CHG-1838 major finding
+# 2). No route dict ever carries this value; the route never reaches
+# _filter_routes_by_repository itself since it always returns [].
+COUNTDOWN_AGENT_SLUG = "iterwheel-countdown"
+
 DEFAULT_TRIGGER_PATH = Path.home() / ".voyager" / "countdown-resolve-loop.trigger"
 
 # Reuse close_reason's heading renderer (D2) instead of duplicating the
@@ -42,8 +48,10 @@ def touch_trigger_file(path: Path | None = None) -> bool:
     target = path or trigger_path()
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
+        # exist_ok=True already bumps mtime to now on an existing file — a
+        # separate os.utime call is redundant and, worse, a delete-between-
+        # calls race that can log a false failure.
         target.touch(exist_ok=True)
-        os.utime(target, None)
     except OSError:
         _log.warning("countdown_trigger_touch_failed: path=%s", target, exc_info=True)
         return False
@@ -72,6 +80,11 @@ def route_countdown_trigger(event: str, payload: dict[str, Any]) -> list[dict[st
     Clearance whose body contains the RESOLVED status heading (D1). Every
     other case is a no-op. Always returns an empty list — the file touch is
     the entire side effect; no writeback route is dispatched.
+
+    At-least-once (D7): GitHub may redeliver the same webhook (identical
+    delivery ID); this route has no delivery-ID dedup, so a redelivery
+    re-touches an already-consumed trigger and costs at most one extra
+    scheduler scan. Deliberately not deduped — see D7.
     """
     if _is_clearance_resolved_reply(event, payload):
         touch_trigger_file()
