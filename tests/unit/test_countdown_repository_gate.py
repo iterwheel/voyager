@@ -1,4 +1,4 @@
-"""Repository-allowlist gate for the Countdown trigger route (CHG-1838 major finding 2).
+"""Repository-allowlist gate for the Countdown trigger route (CHG-1841 major finding 2).
 
 route_countdown_trigger performs its side effect (touching the trigger file)
 during route collection and always returns [], so it can never be gated by

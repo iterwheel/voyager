@@ -1,6 +1,6 @@
 """Countdown bot — event-driven trigger from Clearance resolved verdicts.
 
-CHG-1838: Clearance posts a per-thread RESOLVED verdict reply on the PR the
+CHG-1841: Clearance posts a per-thread RESOLVED verdict reply on the PR the
 moment a review thread becomes gate-approvable. This route recognizes that
 reply and touches a machine-local trigger file so the Countdown adaptive
 scheduler (deploy/wukong/countdown-resolve-loop-adaptive.sh) can wake early
@@ -21,7 +21,7 @@ from voyager.bots.clearance.constants import CLEARANCE_BOT_LOGIN, logins_equival
 _log = logging.getLogger(__name__)
 
 # Agent slug used only for the bridge's repository-allowlist gate (server.py
-# checks this before calling route_countdown_trigger — CHG-1838 major finding
+# checks this before calling route_countdown_trigger — CHG-1841 major finding
 # 2). No route dict ever carries this value; the route never reaches
 # _filter_routes_by_repository itself since it always returns [].
 COUNTDOWN_AGENT_SLUG = "iterwheel-countdown"

@@ -1,4 +1,4 @@
-"""Tests for voyager.bots.countdown.routing (CHG-1838).
+"""Tests for voyager.bots.countdown.routing (CHG-1841).
 
 Event-driven trigger: a Clearance RESOLVED-verdict reply on a review thread
 should touch a machine-local trigger file so the Countdown adaptive scheduler

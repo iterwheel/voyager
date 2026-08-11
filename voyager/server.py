@@ -805,7 +805,7 @@ async def github_webhook(
         # route_countdown_trigger performs its side effect (touching the
         # trigger file) during collection and always returns [], so it can
         # never pass through _filter_routes_by_repository below — gate it
-        # here with the same repository-allowlist predicate instead (CHG-1838
+        # here with the same repository-allowlist predicate instead (CHG-1841
         # major finding 2).
         *(
             route_countdown_trigger(x_github_event, payload)

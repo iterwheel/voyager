@@ -8,7 +8,7 @@
 # otherwise keep the fast lane (and one DeepSeek gate call per candidate per
 # run) open forever.
 #
-# Event-driven fast path (CHG-1838): every sleep is sliced into <=30s steps
+# Event-driven fast path (CHG-1841): every sleep is sliced into <=30s steps
 # so the loop can wake early when the bridge's Countdown trigger route
 # touches the trigger file (a Clearance RESOLVED-verdict reply). The trigger
 # is consumed (deleted) immediately before each `vyg` invocation so one
@@ -47,7 +47,7 @@ trigger_path() {
 }
 
 # consume_trigger — delete the trigger file so one arrival yields at most one
-# extra scan (CHG-1838 D4). Called immediately before every `vyg` invocation.
+# extra scan (CHG-1841 D4). Called immediately before every `vyg` invocation.
 consume_trigger() {
   rm -f "$(trigger_path)" 2>/dev/null
 }
