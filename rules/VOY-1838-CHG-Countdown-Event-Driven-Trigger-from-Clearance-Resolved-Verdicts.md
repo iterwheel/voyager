@@ -97,6 +97,7 @@ to daemon on the same machine.
 | D4 | Scheduler consumes the trigger by deleting the file before invoking `vyg`; triggers arriving mid-scan (newer mtime) survive to start one follow-up scan. | Consume-before-run is the debounce; mid-scan arrivals must not be lost because the scan snapshot predates them. |
 | D5 | A trigger-fired run participates in streak accounting exactly like a timer-fired run. | Keeps the cost bound (streak cap) intact; no second accounting regime. |
 | D6 | Fail open on trigger-file I/O errors in the bridge route (log, return non-fatal). | The fallback lane already guarantees eventual resolution; a trigger failure must never fail webhook handling for other bots. |
+| D7 | No delivery-ID dedup for the trigger touch; GitHub's at-least-once redelivery semantics apply as-is. | A redelivered webhook re-touches an already-consumed trigger, costing at most one extra bounded scan (same blast radius as D6's forged-comment case) — not worth a dedup store for that ceiling. |
 
 ## Event Matrix
 
@@ -143,3 +144,4 @@ to daemon on the same machine.
 | Date | Change | By |
 |------|--------|----|
 | 2026-08-12 | Initial proposal — event-driven Countdown trigger from Clearance resolved verdicts | Claude Code |
+| 2026-08-12 | Codex review fix round: `trigger_newer_than` uses `>=` (BSD `stat` is second-resolution — major 1); `server.py` gates `route_countdown_trigger` behind `_repository_allowed_for_agent` so a non-allowlisted repository cannot wake Countdown (major 2); added D7 (at-least-once redelivery, no dedup); parameterized Event Matrix row 2 test over both non-resolved headings; added a zsh subprocess harness for the scheduler's trigger helpers; documented `COUNTDOWN_TRIGGER_PATH` cross-reference in `bridge.env.example`; removed a redundant `os.utime` call in `touch_trigger_file` | Claude Code |

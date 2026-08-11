@@ -12,11 +12,13 @@ import logging
 import os
 from typing import Any
 
+import pytest
+
+from voyager.bots.clearance.close_reason import _status_heading
 from voyager.bots.countdown import route_countdown_trigger
 from voyager.bots.countdown.routing import touch_trigger_file
 
-RESOLVED_HEADING = "✅ **Clearance: resolved**"
-STILL_OPEN_HEADING = "👀 **Clearance: still open**"
+RESOLVED_HEADING = _status_heading("RESOLVED")
 CLEARANCE_BOT_LOGIN = "iterwheel-clearance[bot]"
 
 
@@ -48,13 +50,16 @@ class TestRouteCountdownTrigger:
         assert routes == []
         assert trigger.exists()
 
-    def test_clearance_non_resolved_heading_no_touch(self, tmp_path, monkeypatch) -> None:
+    @pytest.mark.parametrize(
+        "verdict", ["OPEN", "NEEDS_HUMAN_JUDGMENT"], ids=["still-open", "needs-human-judgment"]
+    )
+    def test_clearance_non_resolved_heading_no_touch(self, tmp_path, monkeypatch, verdict) -> None:
         trigger = tmp_path / "countdown-resolve-loop.trigger"
         monkeypatch.setenv("COUNTDOWN_TRIGGER_PATH", str(trigger))
 
         routes = route_countdown_trigger(
             "pull_request_review_comment",
-            _resolved_comment_payload(body=STILL_OPEN_HEADING),
+            _resolved_comment_payload(body=_status_heading(verdict)),
         )
 
         assert routes == []
