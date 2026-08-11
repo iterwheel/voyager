@@ -36,7 +36,7 @@ ENV_FILE="/Users/frank/.voyager/countdown-resolve-loop.env"
 REPOS_FILE="/Users/frank/.voyager/countdown-resolve-loop.repos"
 VYG="/Users/frank/.voyager/.venv/bin/vyg"
 DEFAULT_TRIGGER_PATH="/Users/frank/.voyager/countdown-resolve-loop.trigger"
-SLEEP_SLICE=30
+SLEEP_SLICE="${SLEEP_SLICE:-30}"
 
 fast_streak=0
 
@@ -62,7 +62,11 @@ trigger_newer_than() {
   trigger_file="$(trigger_path)"
   [[ -f "$trigger_file" ]] || return 1
   mtime=$(stat -f %m "$trigger_file" 2>/dev/null) || return 1
-  (( mtime > since ))
+  # >= not >: BSD `stat -f %m` is second-resolution, so a trigger touched in
+  # the same second as run_start has mtime == since. Consume-before-run
+  # already deletes any pre-existing marker, so equality here can only mean
+  # a fresh touch, never a stale leftover re-firing.
+  (( mtime >= since ))
 }
 
 # sliced_sleep <total_seconds> <run_start_epoch> — sleep in <=SLEEP_SLICE
