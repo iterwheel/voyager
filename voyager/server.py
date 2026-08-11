@@ -24,6 +24,7 @@ from voyager.bots.blueprint import route_blueprint_event
 from voyager.bots.changelog import route_changelog_event
 from voyager.bots.cleanup import route_pr_merge_cleanup
 from voyager.bots.clearance import route_clearance_event
+from voyager.bots.countdown import COUNTDOWN_AGENT_SLUG, route_countdown_trigger
 from voyager.bots.review_fix import route_review_fix_event
 from voyager.bots.stack import route_stack_event
 from voyager.build_info import BUILD_COMMIT, VERSION
@@ -801,6 +802,16 @@ async def github_webhook(
         *route_assembly_event(x_github_event, payload, cfg=cfg),
         *route_review_fix_event(x_github_event, payload, cfg=cfg),
         *route_pr_merge_cleanup(x_github_event, payload),
+        # route_countdown_trigger performs its side effect (touching the
+        # trigger file) during collection and always returns [], so it can
+        # never pass through _filter_routes_by_repository below — gate it
+        # here with the same repository-allowlist predicate instead (CHG-1838
+        # major finding 2).
+        *(
+            route_countdown_trigger(x_github_event, payload)
+            if _repository_allowed_for_agent(repository, COUNTDOWN_AGENT_SLUG, cfg)
+            else []
+        ),
     ]
     routes, denied_routes = _filter_routes_by_repository(candidate_routes, repository, cfg)
     if denied_routes:
