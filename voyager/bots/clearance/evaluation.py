@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
+
+from voyager.core.codex_review_watch import _is_clean_summary
 
 from .constants import (
     ALL_CLEARANCE_LABELS,
@@ -12,8 +14,11 @@ from .constants import (
     CLEARANCE_PENDING_LABEL,
     CLEARANCE_READY_FOR_APPROVAL_LABEL,
     CLEARANCE_READY_LABEL,
+    CODEX_REVIEW_RESULT_PREFIX,
     configured_review_request_users,
+    is_codex_login,
 )
+from .pipeline import _is_clean_current_codex_issue_comment
 
 
 class ReviewStateView(TypedDict):
@@ -100,6 +105,181 @@ def latest_decisive_reviews_by_author(
             continue
         latest[author] = review
     return latest
+
+
+def codex_reviewed_current_head(snapshot: dict[str, Any]) -> bool:
+    """True when Codex has reviewed the PR's current head.
+
+    Operator-reported defect (order_system_django PR #71): Clearance requested
+    human approval 9 seconds after PR creation because "zero Codex review
+    threads" was treated as "review clear." Codex hadn't reviewed anything
+    yet. This predicate is head-anchored evidence that Codex actually has —
+    a review or comment for a since-superseded head does not count.
+
+    Any ONE of the following is sufficient:
+      (a) a non-dismissed Codex PR review (``reviews``) submitted against the
+          current head commit — head-anchored via the review's own
+          ``commit_id``;
+      (b) a Codex clean-verdict PR comment (``issue_comments``) starting with
+          the same ``Codex Review:`` prefix as ``CODEX_REVIEW_RESULT_PREFIX``
+          (constants.py). Two dialects, both observed in production:
+            (b1) the comment carries a ``Reviewed commit:`` footer — it
+                 counts only when that footer's value prefix-matches the
+                 current head (head-anchored). Reuses the exact parsing
+                 precedent in
+                 ``voyager.core.codex_review_watch._is_clean_summary``. A
+                 footer naming a DIFFERENT head is explicit evidence the
+                 comment is stale and is rejected outright — it does NOT
+                 fall through to (b2) even if freshly timestamped;
+            (b2) the comment has NO ``Reviewed commit:`` footer at all — it
+                 counts when its ``created_at`` is later than
+                 ``snapshot["head_updated_at"]`` (time-anchored, same
+                 mechanism as (c) below). Reuses
+                 ``pipeline.py``'s own ``_is_clean_current_codex_issue_comment``
+                 verbatim rather than re-implementing a third clean-verdict
+                 parser — that function already accepts this exact
+                 footer-less dialect for the SWM per-thread pipeline's own
+                 clean-signal detection, so the gate and the pipeline now
+                 agree on what counts as "Codex said this head is clean."
+      (c) a Codex ``+1`` reaction on the PR body (``reactions``) — Codex's
+          third clean-verdict signal alongside (b), mirrored from
+          ``codex_review_watch._detect_signal``'s "thumbs" branch. A
+          reaction carries no commit id, so it is TIME-anchored instead: it
+          only counts when its ``created_at`` is later than
+          ``snapshot["head_updated_at"]``, the best-available "current head
+          arrived on this PR" timestamp (see
+          ``GitHubAppClient.pull_request_head_updated_at`` — already used by
+          ``pipeline.py`` for the identical problem, judging whether a Codex
+          issue-comment clean signal predates the current head). FAIL
+          CLOSED: a missing/empty ``head_updated_at`` means (c) — and (b2) —
+          never fire, regardless of how many ``+1`` reactions or footer-less
+          clean comments exist.
+
+    Deliberately NOT evidence: review-thread existence/resolution
+    (``review_threads``). Round-2 review finding: thread state cannot be
+    reliably head-anchored. A thread resolved on an old head, followed by a
+    push with no new Codex activity, satisfies "resolved" for the *new* head
+    with zero Codex review of it — resolution proves the finding was
+    addressed as of *some* head, not the current one. Worse, GitHub can
+    re-anchor an old, untouched review comment to carry the *new* commit id
+    (a known trap — see VOY-1832 / TRN-1209: ``created_at``, not
+    ``commit_id``, is the only reliable comment-freshness key), so even a
+    commit-id check on threads is not trustworthy. Whenever Codex reviews and
+    leaves inline findings it necessarily also submits a PR review (author
+    ``chatgpt-codex-connector``, state ``COMMENTED``, with its own
+    ``commit_id``) — so predicate (a) already covers "Codex reviewed this
+    head and left findings" without trusting thread state at all.
+    """
+    pull_request = snapshot["pull_request"]
+    head_sha = ((pull_request.get("head") or {}).get("sha")) or ""
+    if not head_sha:
+        return False
+
+    for review in snapshot.get("reviews") or []:
+        login = (review.get("user") or {}).get("login")
+        if (
+            is_codex_login(login)
+            and str(review.get("state") or "").upper() != "DISMISSED"
+            and review.get("commit_id") == head_sha
+        ):
+            return True
+
+    # head_updated_at is time-anchored evidence for (b2) and (c) — GitHub
+    # emits ISO-8601 UTC ('Z'-suffixed) timestamps throughout, which are
+    # lexicographically comparable as plain strings (same convention
+    # pipeline.py already uses for its own current-head-freshness checks).
+    head_updated_at = str(snapshot.get("head_updated_at") or "")
+
+    for comment in snapshot.get("issue_comments") or []:
+        login = (comment.get("user") or {}).get("login")
+        body = str(comment.get("body") or "")
+        if not (is_codex_login(login) and body.startswith(CODEX_REVIEW_RESULT_PREFIX)):
+            continue
+        if "reviewed commit:" in body.lower():
+            # (b1): an explicit footer is authoritative — either it matches
+            # the current head, or the comment is stale. Never fall through
+            # to the time-anchored (b2) check for a footer that names a
+            # different head.
+            if _is_clean_summary(body, head_sha):
+                return True
+            continue
+        # (b2): no footer at all — reuse pipeline.py's own time-anchored
+        # footer-less clean-comment predicate verbatim.
+        if _is_clean_current_codex_issue_comment(comment, current_head_updated_at=head_updated_at):
+            return True
+
+    if head_updated_at:
+        for reaction in snapshot.get("reactions") or []:
+            login = (reaction.get("user") or {}).get("login")
+            created_at = str(reaction.get("created_at") or "")
+            if (
+                is_codex_login(login)
+                and reaction.get("content") == "+1"
+                and created_at > head_updated_at
+            ):
+                return True
+
+    return False
+
+
+_CODEX_GATED_STATUSES = frozenset({"clearance_ready_for_approval", "clearance_ready"})
+
+
+def enforce_codex_review_gate(
+    evaluation: ClearanceEvaluation, snapshot: dict[str, Any]
+) -> ClearanceEvaluation:
+    """Demote ``clearance_ready_for_approval`` (Stage 3) or ``clearance_ready``
+    (Stage 4) back to ``clearance_pending`` when Codex has not reviewed the
+    PR's current head (see ``codex_reviewed_current_head``).
+
+    Stage 4 needs the same gate as Stage 3: an operator approving before
+    Codex has reviewed the current head must not let the PR reach
+    ``clearance_ready`` either — a merge loop gating on stage>=3 would
+    otherwise auto-merge a head Codex never saw. This is a plain widening of
+    the same check, not a new one: both stages mean "the codex-review
+    precondition plus something else (a pending human approval, or an
+    already-present one) is satisfied," so both need the precondition to
+    actually hold.
+
+    Applied as the last step of both ``evaluate_clearance_snapshot`` (so the
+    plain GitHub-review-state path is gated for both stages) and
+    ``enrich_clearance_route`` (so the SWM overlay's own, separate Stage 3
+    *and* Stage 4 promotions — which fire from ``automation["status"] in
+    {"ready", "ready_with_low_priority"}`` and can reach either stage without
+    going back through ``evaluate_clearance_snapshot``'s branch chain — are
+    gated too). No-op for every other status (``clearance_pending``,
+    ``clearance_blocked``).
+    """
+    if evaluation["status"] not in _CODEX_GATED_STATUSES:
+        return evaluation
+    if codex_reviewed_current_head(snapshot):
+        return evaluation
+
+    updated: dict[str, Any] = dict(evaluation)
+    confidence = dict(updated["confidence"])
+    # Drop the "awaiting configured reviewer" reason: it implies Clearance is
+    # one step from requesting a human review, which is no longer true once
+    # this gate demotes back to pending — Codex hasn't reviewed yet, so no
+    # human review request has been (or will be) made.
+    kept_reasons = [
+        reason
+        for reason in confidence["reasons"]
+        if not str(reason).startswith("Awaiting approval from configured reviewer(s):")
+    ]
+    confidence["reasons"] = [
+        *kept_reasons,
+        "Waiting for Codex review of the current head before requesting operator approval.",
+    ]
+    updated["status"] = "clearance_pending"
+    updated["conclusion"] = "neutral"
+    updated["summary"] = "Clearance is not ready yet."
+    updated["confidence"] = confidence
+    updated["labels"] = {
+        "add": [CLEARANCE_PENDING_LABEL],
+        "remove": [item for item in ALL_CLEARANCE_LABELS if item != CLEARANCE_PENDING_LABEL],
+    }
+    updated["reactions"] = {"add": ["eyes"], "remove": ["+1", "rocket"]}
+    return cast(ClearanceEvaluation, updated)
 
 
 def evaluate_clearance_snapshot(snapshot: dict[str, Any]) -> ClearanceEvaluation:
@@ -246,4 +426,4 @@ def evaluate_clearance_snapshot(snapshot: dict[str, Any]) -> ClearanceEvaluation
             else "Clearance is not ready yet."
         ),
     }
-    return result
+    return enforce_codex_review_gate(result, snapshot)

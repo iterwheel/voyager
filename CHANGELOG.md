@@ -8,10 +8,323 @@ release note for the explicit migration path.
 
 ## [Unreleased]
 
-### Changed — Dependency maintenance ([#208](https://github.com/iterwheel/voyager/pull/208))
+### Added
 
-- Allowed FastAPI 0.138.x by widening the supported FastAPI dependency range
-  while keeping the lower bound at 0.136.
+- Merge loop writes a SECOND, local-only, full-fidelity audit file
+  (`~/.voyager/merge-loop.audit.full.jsonl`, mode `600`) alongside the
+  existing redacted `merge-loop.audit.jsonl`. Every repo's decision and
+  merge-intent record gets the raw `pr`, `reason`, `head`, and
+  `review_decision` — no redaction — for local forensics ("which PR did the
+  loop touch at HH:MM?"). The redacted file and its fail-closed
+  write-ahead contract are unchanged and remain the only one safe to
+  share/paste; the full file's write is best-effort and never blocks a
+  merge ([#307](https://github.com/iterwheel/voyager/pull/307)).
+
+### Changed — Clearance Stage 3 AND Stage 4 require Codex-reviewed-current-head evidence (BEHAVIOR CHANGE)
+
+- **Clearance no longer requests the operator's review, nor reports the PR
+  merge-ready, before Codex has reviewed the current PR head.**
+  Operator-reported defect (`order_system_django` #71): Clearance requested
+  human approval 9 seconds after PR creation because "zero Codex review
+  threads" was treated as "review clear" — Codex hadn't reviewed anything
+  yet. Both `clearance_ready_for_approval` (Stage 3, gating the review
+  request) and `clearance_ready` (Stage 4, "ready for Countdown"/merge —
+  reachable directly when an approval is already present, e.g. the operator
+  approves before Codex reviews) now additionally require at least one of:
+  (a) a non-dismissed Codex PR review submitted against the current head
+  commit; (b) a Codex clean-verdict PR comment — in either of two dialects:
+  (b1) one carrying a `Reviewed commit:` footer that prefix-matches the
+  current head (head-anchored), or (b2) one with NO footer at all, accepted
+  when its `created_at` is later than the current head's arrival timestamp
+  (time-anchored, same mechanism as (c) below — reuses `pipeline.py`'s own
+  `_is_clean_current_codex_issue_comment` verbatim, since the SWM
+  per-thread pipeline already treats this footer-less dialect as clean and
+  the gate needed to agree with it rather than re-implement a third parser).
+  A footer naming a *different* head is rejected outright and never falls
+  through to the time-anchored check, however freshly timestamped — an
+  explicit wrong-head footer is stronger evidence than a timestamp. Absent
+  all current-head evidence, status stays `clearance_pending` with a
+  "waiting for Codex review of the current head"
+  reason, no review request is made, and (new) the PR is not reported
+  merge-ready either — closing the path where an operator approving early
+  let a stage>=3-gated merge loop auto-merge a head Codex never saw. Also
+  (c) a Codex `+1` reaction on the PR body posted after the current head
+  arrived — mirroring the "thumbs" clean signal
+  `voyager/core/codex_review_watch.py` already treats as clean, and the same
+  signal the `reaction` webhook already routes Clearance for. A reaction
+  carries no commit id, so it's anchored by TIME instead of head SHA: it
+  only counts when its `created_at` is later than the current head's
+  arrival timestamp (`GitHubAppClient.pull_request_head_updated_at` — the
+  same GraphQL timestamp `pipeline.py` already uses for the identical
+  staleness problem on Codex clean-verdict issue comments). Fails closed:
+  no arrival timestamp available means the reaction never counts, no matter
+  how recent. (A fourth candidate evidence type — Codex review-thread
+  existence/resolution — was considered and rejected: thread state cannot
+  be reliably head-anchored, since a thread resolved on an old head still
+  reads "resolved" after a push with zero new Codex activity, and GitHub
+  can re-anchor an old, untouched comment to carry the *new* commit id;
+  whenever Codex leaves inline findings it also submits a PR review, so (a)
+  already covers that case without trusting thread state.) New pure
+  predicate `codex_reviewed_current_head` and gate
+  `enforce_codex_review_gate` (covering both stages) in
+  `voyager/bots/clearance/evaluation.py`, applied both by
+  `evaluate_clearance_snapshot` and — because the SWM overlay can
+  independently promote to either stage from `automation["status"] in
+  {"ready", "ready_with_low_priority"}` without going back through the
+  classifier's own branch chain — again by `enrich_clearance_route` after
+  the overlay runs. The snapshot passed to `evaluate_clearance_snapshot`
+  gained `issue_comments`, `reactions`, and `head_updated_at` keys. All
+  three of these evidence-feeding fetches (`reactions`/`head_updated_at`
+  for (c), `issue_comments` for (b)) are individually wrapped so a
+  GraphQL/REST failure on any one degrades to "that evidence type is
+  unavailable" instead of aborting the whole route before evaluation runs;
+  the other evidence types still gate/pass normally — e.g. a head-anchored
+  Codex review (a) reaches Stage 3 even if the comments or reactions fetch
+  failed. `GitHubAppClient.issue_reactions` is now paginated (same
+  page/`per_page=100` loop shape as `issue_comments`) — previously a Codex
+  `+1` posted after 100 other PR-body reactions accumulated was invisible,
+  leaving a thumbs-only-clean PR stuck pending forever
+  ([#308](https://github.com/iterwheel/voyager/pull/308)).
+
+## [0.11.0] — 2026-08-09
+
+### Changed — Merge-loop approval gate (BREAKING for zero-touch flows)
+
+- **BREAKING:** The merge loop no longer merges unapproved PRs. It now gates
+  on GraphQL `reviewDecision == "APPROVED"`, re-verified both at snapshot
+  time (`PrSnapshot.review_decision`) and again immediately before the merge
+  mutation (apply-time recheck, alongside the existing base-retarget guard).
+  This reverses the v0.9.0 zero-touch design: every target repo's ruleset
+  must now require at least one approving review
+  (`required_approving_review_count: 1`), and the loop only completes a
+  merge the operator has actually approved — "once I approve, it merges
+  itself." A repo with no required-review ruleset configured returns a null
+  `reviewDecision` and is deliberately unmergeable by the loop until that
+  ruleset is set. New skip reasons: `not_approved` (snapshot time),
+  `approval_revoked_at_apply` (approve-then-revoke race)
+  ([#304](https://github.com/iterwheel/voyager/pull/304)).
+
+## [0.10.0] — 2026-08-08
+
+### Added — Merge-loop operator-configurable author allowlist
+
+- Added `VOYAGER_MERGE_EXTRA_AUTHORS`, an operator-local extension of the
+  merge-loop's author gate mirroring `VOYAGER_MERGE_EXTRA_REPOS`: built-in
+  agent author plus env-listed GitHub logins (GraphQL login form, e.g.
+  `dependabot`), fail-closed parsing, lowercase-normalized matching, resolved
+  once per run. With the variable unset, behavior is identical to v0.9.0
+  ([#301](https://github.com/iterwheel/voyager/pull/301)).
+
+### Operator notes
+
+- To auto-merge dependabot dependency bumps on an allowlisted repo, set
+  `VOYAGER_MERGE_EXTRA_AUTHORS=dependabot` in `~/.voyager/merge-loop.env`
+  (GraphQL login form — not `app/dependabot` or `dependabot[bot]`; malformed
+  entries fail closed). No other config, dependency, or migration changes;
+  leaving the variable unset keeps v0.9.0 behavior exactly.
+
+## [0.9.0] — 2026-08-08
+
+### Added — Countdown merge loop
+
+- Added `vyg countdown merge-loop`, an autonomous rebase-merge loop for
+  agent-authored PRs. A PR is merged only when every deterministic condition
+  holds on the current head: author is the fixed agent identity, the base
+  branch is in the allowed set (`main`), the base has not advanced past the
+  head's checks, CI is fully green, zero unresolved review threads, and the
+  clearance readiness marker (verified Bot-actor authorship) reports Stage 3
+  for that exact head SHA. Any miss fails closed to a skip with an audit
+  reason; there is no human per-PR gate and no LLM gate. The live path
+  re-verifies base branch, base freshness, and audit writability immediately
+  before the single `mergePullRequest` (REBASE + `expectedHeadOid`) mutation,
+  merges at most one PR per repo per cycle, and hard-gates on the machine
+  account identity. Reuses the resolve-loop's allowlist ceiling,
+  single-instance lock, per-run attempt cap, and redacted write-ahead audit
+  trail. Includes default-off launchd deployment templates (env/repos files,
+  adaptive wrapper, plist) and the VOY-1840 deployment SOP (VOY-1839)
+  ([#298](https://github.com/iterwheel/voyager/pull/298)).
+
+### Operator notes
+
+- The merge loop ships default-off (`MERGE_LOOP_ENABLED=false`); installing
+  the LaunchAgent performs no live merges. New env surface:
+  `MERGE_LOOP_ENABLED`, `MERGE_MAX_MERGES`, `MERGE_FAST_INTERVAL`,
+  `MERGE_SLOW_INTERVAL`, `MERGE_FAST_STREAK_MAX`, `VOYAGER_MERGE_EXTRA_REPOS`.
+- Going live on a target repo REQUIRES the VOY-1840 Rollout Gate, including
+  the ruleset changes with `strict_required_status_checks_policy: true`
+  ("require branches up to date") — the loop's apply-time base re-reads
+  narrow but cannot eliminate the base-advance race (`mergePullRequest` has
+  no `expectedBaseOid`); the server-side strict check is the mandatory
+  backstop.
+- No model, dependency, or migration changes. The resolve loop is untouched.
+
+## [0.8.2] — 2026-08-02
+
+### Fixed
+
+- Suppressed stale Clearance `OPEN` and `NEEDS_HUMAN_JUDGMENT` thread replies
+  when the existing pre-writeback refresh observes a newer PR-author or Codex
+  comment that was not part of the classified snapshot
+  ([#295](https://github.com/iterwheel/voyager/pull/295)).
+
+### Operator notes
+
+- The change is limited to Clearance verdict-writeback freshness. It introduces
+  no model, dependency, configuration, environment-variable, or migration
+  changes.
+- Deploy v0.8.2 and restart long-running Voyager processes to activate the fix.
+  Existing contradictory comments are not removed automatically.
+- `RESOLVED` and Stage 1.5 behavior are unchanged. The guard narrows the
+  snapshot-to-write race window, but the fresh-read and GitHub reply-create
+  operations remain non-transactional.
+
+## [0.8.1] — 2026-08-02
+
+### Fixed
+
+- Prevented duplicate Clearance review-thread verdict replies when one submitted
+  review fans out into a review event plus root review-comment events. Root
+  comments now defer to the canonical submitted-review trigger, while complete
+  Clearance automation runs are serialized per repository and pull request;
+  unrelated pull requests remain concurrent
+  ([#293](https://github.com/iterwheel/voyager/pull/293)).
+
+### Operator notes
+
+- The change is limited to Clearance webhook routing and in-process automation
+  serialization. It introduces no configuration, environment-variable, model,
+  or migration changes.
+- Deploy v0.8.1 and restart long-running Voyager processes to activate the fix.
+  Existing duplicate comments are not removed and may be cleaned up manually.
+- Simultaneous Clearance automation across multiple event loops or operating
+  system processes remains out of scope; serialization applies within one event
+  loop and process.
+
+## [0.8.0] — 2026-08-02
+
+### Added — Governed Countdown review-thread resolution
+
+- Added `vyg countdown resolve-conversation`, a resolve-only command that uses
+  the fixed `iterwheel-countdown-bot` machine account without changing the
+  operator's active `gh` identity. Repository allow-listing, a viewer-login
+  identity check, a single allowed GraphQL mutation, and identifier redaction
+  fail closed before any review thread is resolved. `--dry-run` and redacted
+  JSON output are available for attended preflight
+  ([#222](https://github.com/iterwheel/voyager/pull/222),
+  [#242](https://github.com/iterwheel/voyager/pull/242)).
+- Added `vyg countdown resolve-loop` for bounded multi-repository resolution.
+  The loop applies a deterministic candidate filter before a veto-only DeepSeek
+  gate, re-checks thread freshness, respects dry-run and maximum-resolution
+  limits, prevents concurrent runs with a file lock, and writes a redacted audit
+  trail. Gate errors, malformed output, stale evidence, and identity failures all
+  skip resolution ([#224](https://github.com/iterwheel/voyager/pull/224)).
+- Added default-off Wukong launchd artifacts and an adaptive scheduler for the
+  resolve loop. Candidate-bearing runs use a bounded fast-poll streak; idle or
+  failed runs back off to the slow interval. The wrapper re-loads its private
+  environment on every iteration and fails closed when that file is unavailable
+  or malformed. Runtime defaults are `COUNTDOWN_RESOLVE_LOOP_ENABLED=false`,
+  `COUNTDOWN_MAX_RESOLVES=20`, `COUNTDOWN_FAST_INTERVAL=300`,
+  `COUNTDOWN_SLOW_INTERVAL=3600`, and `COUNTDOWN_FAST_STREAK_MAX=6`
+  ([#243](https://github.com/iterwheel/voyager/pull/243),
+  [#280](https://github.com/iterwheel/voyager/pull/280)).
+- Added `VOYAGER_RESOLVE_EXTRA_REPOS` for operator-local allow-list extension
+  through comma- or whitespace-separated `owner/repo` values without checking
+  private repository names into the repository. Invalid entries abort instead
+  of being silently ignored. Keep the private environment file
+  access-controlled: public loop summaries retain repository names while
+  redacting PR/thread identifiers and reasons
+  ([#273](https://github.com/iterwheel/voyager/pull/273)).
+
+### Added — Codex review operations
+
+- Replaced the shell-based Codex review watcher with a tested Python watcher
+  that retries unacknowledged `@codex review` triggers, paginates GitHub results,
+  and rejects review signals that predate the current trigger. Its stable exit
+  codes are `0` for clean, `2` for findings, and `1` for error or timeout
+  ([#244](https://github.com/iterwheel/voyager/pull/244)).
+
+### Removed — Legacy Countdown credential tooling
+
+- **Breaking:** removed the v0.7.x `review-thread-diagnostic`,
+  `user-device-code`, and `user-refresh-check` CLI paths together with the
+  GitHub App user-refresh-token machinery. They are superseded by the fixed
+  machine-account `resolve-conversation` and `resolve-loop` commands
+  ([#223](https://github.com/iterwheel/voyager/pull/223)).
+- Operators upgrading from v0.7.3 must provision the
+  `iterwheel-countdown-bot` credential in the local `gh` credential store. The
+  resolver obtains it with `gh auth token --hostname github.com --user
+  iterwheel-countdown-bot`; tokens are never accepted through CLI flags or
+  printed in public output. Remove stale `[countdown.dedicated_pat_fallback]`
+  configuration and retire obsolete PAT/OAuth material after confirming no
+  other consumer still needs it.
+
+### Changed — Dependency maintenance
+
+- Allowed FastAPI releases through 0.138.2 by widening the supported dependency
+  range from
+  `>=0.136,<0.137.2` to `>=0.136,<0.138.3`
+  ([#208](https://github.com/iterwheel/voyager/pull/208),
+  [#245](https://github.com/iterwheel/voyager/pull/245)).
+
+### Security and hardening
+
+- Countdown scrubs ambient `GH_TOKEN` and `GITHUB_TOKEN` overrides, verifies the
+  authenticated machine-account viewer even during dry-run, blocks
+  cross-repository thread targeting, and refuses missing or ambiguous targets
+  ([#222](https://github.com/iterwheel/voyager/pull/222)).
+- The multi-repository loop frames review content as untrusted data, fails closed
+  on truncated evidence or invalid LLM output, writes audit intent before
+  mutation, rechecks comment freshness immediately before resolution, and counts
+  failed approved attempts toward its safety cap
+  ([#224](https://github.com/iterwheel/voyager/pull/224)).
+- The adaptive scheduler clears stale environment values when reload fails and
+  validates interval values to prevent busy loops and log storms
+  ([#280](https://github.com/iterwheel/voyager/pull/280)).
+
+### Operator notes
+
+- Both new Countdown commands perform live mutations unless `--dry-run` is
+  supplied explicitly. In particular, `resolve-conversation --pr` resolves all
+  mechanically eligible threads and does not use the resolve loop's DeepSeek
+  semantic gate; always run an attended dry-run first.
+- The scheduled Countdown loop remains disabled until
+  `COUNTDOWN_RESOLVE_LOOP_ENABLED=true` is set after the VOY-1835 dry-run and
+  identity preflight. It also requires `VOYAGER_DEEPSEEK_API_KEY`; deploying the
+  bridge alone does not opt an operator into automatic resolution. The optional
+  `VOYAGER_DEEPSEEK_MODEL` defaults to `deepseek-v4-pro` for this new Countdown
+  gate; the release does not change the existing Clearance profile selection.
+- A repository added through `VOYAGER_RESOLVE_EXTRA_REPOS` must also appear in
+  the resolve loop's `--repos` file. Review authors and bounded comment bodies
+  are sent to DeepSeek, so private-repository rollout requires explicit privacy
+  approval. Countdown audit JSONL and launchd logs currently have no automatic
+  rotation.
+- The checked-in scheduled-loop deployment templates are Wukong/macOS-specific
+  (`launchd`, zsh, and `/Users/frank` paths); other hosts need an adapted
+  service definition.
+- This release requires no state or database migration. The release PR does not
+  change Voyager's Clearance investigator model or default profile.
+
+### Known limitations
+
+- Clearance can still misclassify some negated follow-up phrases as RESOLVED,
+  and `/clearance` does not yet apply an equivalent privileged-actor gate. Do
+  not expose live Clearance writeback to untrusted contributors until
+  [#249](https://github.com/iterwheel/voyager/issues/249) and
+  [#253](https://github.com/iterwheel/voyager/issues/253) are resolved.
+- Untrusted PR content can influence LLM-derived Clearance verdicts and
+  review-fix contract structure. Keep those mutation paths limited to trusted
+  repositories and actors pending
+  [#254](https://github.com/iterwheel/voyager/issues/254).
+- `/assembly` currently ignores unknown flags; use the exact `--dry-run`
+  spelling and keep actor/repository allow-lists narrow until
+  [#260](https://github.com/iterwheel/voyager/issues/260) is resolved.
+- The Codex review watcher can miss a verdict that lands between its first
+  trigger and retry cutoff, resulting in a false timeout
+  ([#264](https://github.com/iterwheel/voyager/issues/264)).
+- The release-readiness helper can accept a malformed historical CHANGELOG in
+  one missing-heading case. The v0.8.0 release therefore also uses the release
+  workflow's independent exact-heading and version-pin checks
+  ([#269](https://github.com/iterwheel/voyager/issues/269)).
 
 ## [0.7.3] — 2026-06-23
 
@@ -763,7 +1076,13 @@ auth, FastAPI webhook bridge, DeepSeek LLM adapter, rocket-factory
 pipeline state machine, SWM-1101 per-thread verdict pipeline. See
 `b2e4ca1` and prior history.
 
-[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.7.3...HEAD
+[Unreleased]: https://github.com/iterwheel/voyager/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/iterwheel/voyager/compare/v0.10.0...v0.11.0
+[0.10.0]: https://github.com/iterwheel/voyager/compare/v0.9.0...v0.10.0
+[0.9.0]: https://github.com/iterwheel/voyager/compare/v0.8.2...v0.9.0
+[0.8.2]: https://github.com/iterwheel/voyager/compare/v0.8.1...v0.8.2
+[0.8.1]: https://github.com/iterwheel/voyager/compare/v0.8.0...v0.8.1
+[0.8.0]: https://github.com/iterwheel/voyager/compare/v0.7.3...v0.8.0
 [0.7.3]: https://github.com/iterwheel/voyager/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/iterwheel/voyager/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/iterwheel/voyager/compare/v0.7.0...v0.7.1

@@ -2,6 +2,7 @@
   "action": "created",
   "comment": {
     "body": "Inline finding.",
+    "in_reply_to_id": null,
     "user": {"login": "reviewer"}
   },
   "pull_request": {

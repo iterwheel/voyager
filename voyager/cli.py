@@ -221,6 +221,80 @@ def resolve_loop(
         raise typer.Exit(code=1)
 
 
+@countdown_app.command("merge-loop")
+def merge_loop(
+    repos: str = typer.Option(..., "--repos", help="Path to an OWNER/REPO-per-line file."),
+    max_merges: int = typer.Option(3, "--max-merges", help="Cap on merges per run."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Evaluate; issue no mutation."),
+    as_json: bool = typer.Option(False, "--json", help="Emit the redacted JSON summary."),
+) -> None:
+    """Rebase-merge fully-green agent PRs across allowlisted repos.
+
+    Deterministic predicate only (VOY-1839): agent author, non-draft, CI
+    rollup SUCCESS, zero unresolved threads, head-anchored clearance
+    readiness >= Stage 3. Identity is fixed to iterwheel-countdown-bot.
+    """
+    from pathlib import Path
+
+    from voyager.core.countdown_loop import (
+        AlreadyRunningError,
+        load_repo_list,
+        single_instance_lock,
+    )
+    from voyager.core.merge_loop import (
+        DEFAULT_MERGE_LOCK_PATH,
+        make_merge_gql,
+        make_merge_read_gql,
+        run_merge_loop,
+    )
+    from voyager.core.resolve_conversation import (
+        ResolveConversationError,
+        make_github_gql,
+        read_machine_token,
+    )
+
+    try:
+        requested = load_repo_list(Path(repos))
+        token = read_machine_token()
+        read_gql = make_merge_read_gql(token)
+        merge_gql = make_merge_gql(token)
+        # The merge-loop's own clients are operation-whitelisted and refuse the
+        # viewer query, so identity is asserted through the same broader,
+        # allowlisted client run_resolve_loop already uses for this (mirrors
+        # prior art exactly rather than widening the merge clients' whitelist).
+        identity_gql = make_github_gql(token)
+        with single_instance_lock(DEFAULT_MERGE_LOCK_PATH):
+            summary = run_merge_loop(
+                requested,
+                read_gql=read_gql,
+                merge_gql=merge_gql,
+                identity_gql=identity_gql,
+                max_merges=max_merges,
+                dry_run=dry_run,
+            )
+    except AlreadyRunningError as exc:
+        typer.echo(f"ERROR: {exc}")
+        raise typer.Exit(code=1) from exc
+    except (ResolveConversationError, OSError, ValueError, RuntimeError) as exc:
+        typer.echo(f"ERROR: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    public = summary.to_public_dict()
+    if as_json:
+        typer.echo(json.dumps(public))
+    else:
+        typer.echo(f"repos_scanned: {len(public['repos_scanned'])}")
+        typer.echo(f"merged:        {public['merged']}")
+        typer.echo(f"would_merge:   {public['would_merge']}")
+        typer.echo(f"capped:        {public['capped']}")
+        typer.echo(f"dry_run:       {public['dry_run']}")
+        typer.echo(f"errors:        {len(public['errors'])}")
+    if summary.systemic_failure:
+        # stderr, so --json stdout stays pure JSON exactly when it matters most.
+        typer.echo("ERROR: systemic failure — no repo could be enumerated", err=True)
+        raise typer.Exit(code=1)
+
+
 def main() -> None:
     """Entry point for the ``vyg`` console script."""
     app()

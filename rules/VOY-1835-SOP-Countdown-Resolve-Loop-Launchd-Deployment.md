@@ -1,10 +1,10 @@
 # SOP-1835: Countdown Resolve Loop Launchd Deployment
 
 **Applies to:** VOY project
-**Last updated:** 2026-07-04
-**Last reviewed:** 2026-06-28
+**Last updated:** 2026-08-12
+**Last reviewed:** 2026-08-12
 **Status:** Active
-**Related:** VOY-1814, VOY-1820, VOY-1831, VOY-1832, issue #229, issue #226
+**Related:** VOY-1814, VOY-1820, VOY-1831, VOY-1832, VOY-1841, issue #229, issue #226
 
 ---
 
@@ -51,7 +51,7 @@ is backed by the loop's JSONL audit trail.
 | Path | Purpose |
 |------|---------|
 | `deploy/launchd/com.iterwheel.voyager.countdown-resolve-loop.plist` | Repo-safe launchd template. `KeepAlive` daemon supervising the adaptive wrapper (issue #279). |
-| `deploy/wukong/countdown-resolve-loop-adaptive.sh` | Adaptive scheduler wrapper: runs the loop, then sleeps `COUNTDOWN_FAST_INTERVAL` (default 300 s) while runs see candidate threads or `COUNTDOWN_SLOW_INTERVAL` (default 3600 s) when idle, with a `COUNTDOWN_FAST_STREAK_MAX` (default 6) consecutive-fast cap bounding LLM-gate cost. Copy it locally before use. |
+| `deploy/wukong/countdown-resolve-loop-adaptive.sh` | Adaptive scheduler wrapper: runs the loop, then sleeps `COUNTDOWN_FAST_INTERVAL` (default 300 s) while runs see candidate threads or `COUNTDOWN_SLOW_INTERVAL` (default 3600 s) when idle, with a `COUNTDOWN_FAST_STREAK_MAX` (default 6) consecutive-fast cap bounding LLM-gate cost. Since CHG-1841 every sleep is sliced (≤30 s) so a bridge-touched trigger file wakes the loop early; the trigger is consumed before each run. Copy it locally before use. |
 | `deploy/wukong/countdown-resolve-loop.env.example` | Non-secret env-file template. Copy it locally before use. |
 | `deploy/wukong/countdown-resolve-loop.repos.example` | Non-secret repo allowlist template. Copy it locally before use. |
 | `scripts/build_wheel.sh` | Builds the deployable Voyager wheel with build commit metadata. |
@@ -74,6 +74,7 @@ These files are machine-local and must not be committed:
 | `/Users/frank/.voyager/countdown-resolve-loop.repos` | OWNER/REPO allowlist consumed by `vyg countdown resolve-loop --repos`. | `600` |
 | `/Users/frank/.voyager/countdown-resolve-loop.audit.jsonl` | Redacted append-only resolve-loop audit trail written by `countdown_loop.py`. | file `600`, parent directory `700` preferred |
 | `/Users/frank/.voyager/countdown-resolve-loop.lock` | Single-instance lock file created by the loop. | parent directory `700` preferred |
+| `/Users/frank/.voyager/countdown-resolve-loop.trigger` | Transient event-trigger marker (CHG-1841): touched by the bridge's Countdown route on a Clearance RESOLVED verdict reply, consumed (deleted) by the wrapper before each run. Carries no data; absent most of the time; safe to delete at any point (polling lanes are unaffected). Path override: `COUNTDOWN_TRIGGER_PATH` — if set, it must be identical in this env file and in `bridge.env`, or the bridge and wrapper silently split into producer/consumer of different files. | created with default perms; parent directory `700` preferred |
 | `/Users/frank/Library/LaunchAgents/com.iterwheel.voyager.countdown-resolve-loop.plist` | Installed copy of the launchd plist. | `644` |
 | `/Users/frank/Library/Logs/voyager/` | launchd stdout/stderr logs. | directory `755` |
 
@@ -237,6 +238,24 @@ a daemon. The wrapper owns the cadence: `COUNTDOWN_SLOW_INTERVAL` (default
 `COUNTDOWN_FAST_STREAK_MAX` (default 6) consecutive fast rechecks. The loop's
 own flock prevents overlapping executions, including against manual runs.
 
+**Event-driven trigger (CHG-1841).** The wrapper additionally wakes early —
+within one ≤30 s sleep slice — when the trigger file's mtime is newer than the
+current run's start. The producer is the bridge's Countdown webhook route,
+which fires on a Clearance RESOLVED verdict reply. This path only works when
+the **bridge** deployment allow-lists the Countdown agent:
+
+```
+BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_COUNTDOWN=<owner/repo,...>
+```
+
+in the machine-local `bridge.env` (see `deploy/wukong/bridge.env.example`).
+Without that entry the server gate default-denies in production
+(`DRY_RUN=false`) and Clearance RESOLVED replies never touch the trigger —
+the wrapper still functions on its polling lanes, so the omission is silent.
+Keep the entry in sync with the Clearance allow-list (the trigger only fires
+where Clearance posts verdicts) and expand it via staged rollout, matching the
+repos allowlist discipline above. Current scope: canary, `iterwheel/voyager`.
+
 ### 8. Operate the Scheduled Job
 
 Stop:
@@ -307,6 +326,13 @@ Before declaring the scheduled deployment complete, record:
 - `/Users/frank/.voyager/countdown-resolve-loop.audit.jsonl` is present and inspectable.
 - `launchctl print gui/$(id -u)/com.iterwheel.voyager.countdown-resolve-loop` shows the job.
 - `tail` of `countdown-resolve-loop.err.log` shows no startup loop or credential error.
+- Trigger wake (CHG-1841): while the daemon is sleeping,
+  `touch /Users/frank/.voyager/countdown-resolve-loop.trigger`; within ~30 s
+  `countdown-resolve-loop.out.log` shows `adaptive: trigger detected; ending
+  sleep early`, a new run starts, and the trigger file is gone (consumed).
+  If the bridge is also being deployed, verify end-to-end instead: a Clearance
+  RESOLVED reply on an allow-listed repository updates the trigger file's
+  mtime.
 
 ## Pitfalls
 
@@ -320,6 +346,13 @@ Before declaring the scheduled deployment complete, record:
   PR text.
 - Do not bypass `scripts/build_wheel.sh`; direct `uv build` can miss build commit
   metadata.
+- The CHG-1841 trigger path fails silently when
+  `BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_COUNTDOWN` is missing from the live
+  `bridge.env` — polling masks the gap, so verify the trigger wake explicitly
+  after any bridge redeploy.
+- If `COUNTDOWN_TRIGGER_PATH` is overridden on one side only (bridge vs
+  wrapper env), the two silently use different files; leave both unset unless
+  a non-default path is genuinely required, and then set both.
 
 ---
 
@@ -327,5 +360,6 @@ Before declaring the scheduled deployment complete, record:
 
 | Date | Change | By |
 |------|--------|----|
+| 2026-08-12 | CHG-1841 (deferred Surface 6): documented the event-driven trigger — trigger-file row in §2, sliced-sleep note in §1, bridge allow-list requirement (`BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_COUNTDOWN`) and trigger semantics in §7, trigger-wake check in Verification, silent-failure and split-path pitfalls. | Claude Code |
 | 2026-07-04 | Issue #279: switched the launchd job to a KeepAlive daemon running the adaptive wrapper (`deploy/wukong/countdown-resolve-loop-adaptive.sh`) — fast rechecks (default 300 s, capped at 6 consecutive) while runs see candidate threads, slow cadence (default 3600 s) when idle; wrapper install step, private-file row, operate/rollback notes updated. | Claude Code |
 | 2026-06-28 | Initial Countdown resolve-loop launchd deployment SOP for issue #229 | Codex |

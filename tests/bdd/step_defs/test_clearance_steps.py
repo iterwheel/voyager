@@ -160,6 +160,16 @@ def _dismissed(*, login: str = "reviewer") -> dict:
     }
 
 
+def _codex_review(*, commit_id: str = "abc1234") -> dict:
+    """A Codex PR review on the given head — satisfies the codex-review gate."""
+    return {
+        "state": "COMMENTED",
+        "commit_id": commit_id,
+        "submitted_at": "2026-05-10T09:30:00Z",
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+    }
+
+
 def _unresolved_thread() -> dict:
     return {"isResolved": False}
 
@@ -182,7 +192,11 @@ def _outdated_unresolved_thread() -> dict:
     "a clearance snapshot with an approved review on the current head", target_fixture="snapshot"
 )
 def snapshot_approved_current_head() -> dict:
-    return {"pull_request": _open_pr(), "reviews": [_approval()], "review_threads": []}
+    return {
+        "pull_request": _open_pr(),
+        "reviews": [_approval(), _codex_review()],
+        "review_threads": [],
+    }
 
 
 @given("a clearance snapshot for a draft PR with an approval", target_fixture="snapshot")
@@ -238,7 +252,7 @@ def snapshot_unresolved_thread() -> dict:
 def snapshot_only_outdated_unresolved_thread() -> dict:
     return {
         "pull_request": _open_pr(),
-        "reviews": [_approval()],
+        "reviews": [_approval(), _codex_review()],
         "review_threads": [_outdated_unresolved_thread()],
     }
 
@@ -258,6 +272,7 @@ def snapshot_reapproved_after_changes_requested() -> dict:
                 "submitted_at": "2026-05-10T11:00:00Z",
                 "user": {"login": "reviewer"},
             },
+            _codex_review(),
         ],
         "review_threads": [],
     }
@@ -765,7 +780,7 @@ def snapshot_configured_approver_approved(monkeypatch) -> dict:
     reset_review_request_users_cache()
     return {
         "pull_request": _open_pr(),
-        "reviews": [_approval(login="configured-approver")],
+        "reviews": [_approval(login="configured-approver"), _codex_review()],
         "review_threads": [],
     }
 

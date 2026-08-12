@@ -1,0 +1,14 @@
+{
+  "action": "created",
+  "comment": {
+    "body": "Clearance reply comment.",
+    "in_reply_to_id": 100001,
+    "user": {"login": "iterwheel-clearance[bot]"}
+  },
+  "pull_request": {
+    "number": 125,
+    "html_url": "https://github.test/pull/125",
+    "base": {"ref": "main"},
+    "head": {"sha": "abc1234"}
+  }
+}

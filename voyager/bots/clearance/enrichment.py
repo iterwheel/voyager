@@ -9,7 +9,11 @@ from typing import Any
 import httpx
 
 from voyager.core.github_app import GitHubAppClient
-from voyager.core.writeback import dry_run_enabled, format_writeback_failure_warning
+from voyager.core.writeback import (
+    _safe_exception_fields,
+    dry_run_enabled,
+    format_writeback_failure_warning,
+)
 
 from .constants import (
     CHECKBOX_ACTION_LABELS,
@@ -22,7 +26,7 @@ from .constants import (
     CLEARANCE_READY_LABEL,
     configured_review_request_users,
 )
-from .evaluation import ClearanceEvaluation, evaluate_clearance_snapshot
+from .evaluation import ClearanceEvaluation, enforce_codex_review_gate, evaluate_clearance_snapshot
 from .overlay import apply_swm_overlay
 
 _log = logging.getLogger(__name__)
@@ -667,15 +671,90 @@ async def enrich_clearance_route(
 ) -> dict[str, Any]:
     pr_number = int(route["validation"]["pr_number"])
     pull_request = await client.pull_request(CLEARANCE_AGENT_SLUG, repository, pr_number)
+
+    # The three fetches below (reactions, head_updated_at, issue_comments)
+    # each feed exactly ONE codex_reviewed_current_head evidence type — (c),
+    # (c), and (b) respectively — never the core review/thread data that
+    # evaluate_clearance_snapshot's own blocking/approval logic needs. Each
+    # is individually wrapped: a GraphQL/REST hiccup on any one of them must
+    # not abort the whole route (no labels/readiness comment at all) when a
+    # *different* evidence type already has the PR covered — e.g. a
+    # head-anchored Codex review (type a) reaching Stage 3 even though
+    # issue_comments failed. codex_reviewed_current_head already treats an
+    # empty/falsy value for any of these as "that evidence type is
+    # unavailable" and fails closed on it alone, so "fetch failed" and "PR
+    # genuinely has none of this evidence" produce the same, already-correct
+    # downstream behavior. Same try/except/_safe_exception_fields/
+    # _log.warning convention as the equivalent optional fetches in
+    # pipeline.py.
+    try:
+        reactions = await client.issue_reactions(CLEARANCE_AGENT_SLUG, repository, pr_number)
+    except Exception as exc:
+        safe = _safe_exception_fields(exc)
+        _log.warning(
+            "issue_reactions fetch failed for %s#%s (codex thumbs-reaction signal disabled): "
+            "class=%s status=%s",
+            repository,
+            pr_number,
+            safe["error_class"],
+            safe["status"],
+        )
+        reactions = []
+
+    try:
+        head_updated_at = await client.pull_request_head_updated_at(
+            CLEARANCE_AGENT_SLUG, repository, pr_number
+        )
+    except Exception as exc:
+        safe = _safe_exception_fields(exc)
+        _log.warning(
+            "head update timestamp fetch failed for %s#%s (codex thumbs-reaction signal "
+            "disabled): class=%s status=%s",
+            repository,
+            pr_number,
+            safe["error_class"],
+            safe["status"],
+        )
+        head_updated_at = None
+
+    # issue_comments feeds ONLY the codex clean-verdict-comment gate evidence
+    # (type (b)) — codex_reviewed_current_head treats an empty list the same
+    # as "no clean-verdict comment found," which is already a normal, correct
+    # outcome. A fetch failure here must not abort the route either: types
+    # (a)/(c) still gate/pass normally. Same convention as the two fetches
+    # above. Codex round 6 P2.
+    try:
+        issue_comments = await client.issue_comments(CLEARANCE_AGENT_SLUG, repository, pr_number)
+    except Exception as exc:
+        safe = _safe_exception_fields(exc)
+        _log.warning(
+            "issue_comments fetch failed for %s#%s (codex clean-verdict-comment signal "
+            "disabled): class=%s status=%s",
+            repository,
+            pr_number,
+            safe["error_class"],
+            safe["status"],
+        )
+        issue_comments = []
+
     snapshot = {
         "pull_request": pull_request,
         "reviews": await client.pull_request_reviews(CLEARANCE_AGENT_SLUG, repository, pr_number),
         "review_threads": await client.pull_request_review_threads(
             CLEARANCE_AGENT_SLUG, repository, pr_number
         ),
+        "issue_comments": issue_comments,
+        "reactions": reactions,
+        "head_updated_at": head_updated_at,
     }
     evaluation = evaluate_clearance_snapshot(snapshot)
     evaluation = apply_swm_overlay(evaluation, automation)
+    # The SWM overlay can independently promote to clearance_ready_for_approval
+    # (from automation["status"] in {"ready", "ready_with_low_priority"}) without
+    # going back through evaluate_clearance_snapshot's own gate above — re-apply
+    # it here so every route to Stage 3 requires Codex-reviewed-current-head
+    # evidence. See enforce_codex_review_gate / codex_reviewed_current_head.
+    evaluation = enforce_codex_review_gate(evaluation, snapshot)
 
     review_request: dict[str, Any] | None = None
     if evaluation["status"] == "clearance_ready_for_approval":

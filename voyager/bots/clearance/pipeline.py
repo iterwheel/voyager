@@ -18,12 +18,14 @@ delivery processed by ``dispatch_route_writeback``.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
+from weakref import WeakValueDictionary
 
 import httpx
 
@@ -48,6 +50,7 @@ from voyager.bots.clearance.constants import (
     CLEARANCE_BOT_LOGIN,
     CODEX_REVIEW_RESULT_PREFIX,
     is_codex_login,
+    logins_equivalent,
 )
 from voyager.bots.clearance.diff_excerpt import extract_anchor_excerpt
 from voyager.bots.clearance.investigator import (
@@ -74,11 +77,26 @@ from voyager.bots.clearance.models import (
 from voyager.bots.clearance.severity import evaluate as evaluate_severity
 from voyager.bots.clearance.severity_input import extract_severity_and_kind
 from voyager.bots.clearance.state import StateStore
+from voyager.bots.countdown.routing import COUNTDOWN_AGENT_SLUG, touch_trigger_file
 from voyager.core.github_app import GitHubAppClient, GitHubGraphQLError
+from voyager.core.repository_gate import _repository_allowed_for_agent
 from voyager.core.review_identity import extract_known_limitation_rule_id
 from voyager.core.writeback import _safe_exception_fields, build_writeback_failure, dry_run_enabled
 
 _log = logging.getLogger(__name__)
+
+_clearance_automation_locks: WeakValueDictionary[
+    tuple[asyncio.AbstractEventLoop, str, int], asyncio.Lock
+] = WeakValueDictionary()
+
+
+def _get_automation_lock(repository: str, pr_number: int) -> asyncio.Lock:
+    key = (asyncio.get_running_loop(), repository, pr_number)
+    lock = _clearance_automation_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _clearance_automation_locks[key] = lock
+    return lock
 
 
 _AUTHORIZED_RESOLVER_APP_BY_PR_AUTHOR = {
@@ -230,6 +248,36 @@ def _comment_database_id(comment: dict[str, Any]) -> int:
         return int(raw)
     except (TypeError, ValueError):
         return 0
+
+
+def _new_thread_decision_evidence_comment_id(
+    fresh_threads: list[dict[str, Any]],
+    *,
+    thread_id: str,
+    observed_comment_ids: list[int] | None,
+    pr_author_login: str | None,
+) -> int | None:
+    """Return the lowest unobserved PR-author or Codex comment database ID."""
+    if observed_comment_ids is None:
+        return None
+
+    observed_ids = set(observed_comment_ids)
+    for item in fresh_threads:
+        if item.get("id") != thread_id:
+            continue
+        new_relevant_ids: list[int] = []
+        for comment in _comment_nodes(item):
+            comment_id = _comment_database_id(comment)
+            login = (comment.get("author") or {}).get("login")
+            if (
+                comment_id > 0
+                and comment_id not in observed_ids
+                and not _is_clearance_comment(comment)
+                and (is_codex_login(login) or logins_equivalent(login, pr_author_login))
+            ):
+                new_relevant_ids.append(comment_id)
+        return min(new_relevant_ids, default=None)
+    return None
 
 
 def _latest_manual_close_relevant_state(
@@ -887,6 +935,12 @@ async def _process_thread(
     if comment_id is None:
         return None
 
+    comments_nodes = _comment_nodes(thread_dict)
+    observed_thread_comment_ids = [
+        database_id
+        for comment in comments_nodes
+        if (database_id := _comment_database_id(comment)) > 0
+    ]
     state = classify_thread(thread_dict)
     reply = latest_author_reply(thread_dict, author_login=pr_author_login)
     followup = latest_codex_followup(thread_dict)
@@ -900,7 +954,6 @@ async def _process_thread(
     author_reply_body = (reply or {}).get("body")
 
     # Extract codex severity + finding_kind from review body
-    comments_nodes = (thread_dict.get("comments") or {}).get("nodes") or []
     codex_sev, finding_kind = extract_severity_and_kind(comments_nodes)
 
     # Evaluate severity demotion using the per-webhook branch_protected_state
@@ -1027,6 +1080,7 @@ async def _process_thread(
                     )
                 ],
                 evidence=Evidence(
+                    observed_thread_comment_ids=observed_thread_comment_ids,
                     thread_state=state,
                     codex_followed_up=False,
                 ),
@@ -1273,6 +1327,7 @@ async def _process_thread(
             VerdictHistoryEntry(ts=now, verdict=decision.verdict, reason=decision.reason)
         ],
         evidence=Evidence(
+            observed_thread_comment_ids=observed_thread_comment_ids,
             thread_state=state,
             author_reply_id=(reply or {}).get("databaseId"),
             author_reply_substantive=decision.substantive,
@@ -1392,6 +1447,7 @@ async def _maybe_post_thread_verdict_comments(
     head_sha: str,
     dry_run: bool,
     model: str | None = None,
+    pr_author_login: str | None = None,
 ) -> list[dict[str, Any]]:
     """Post per-head verdict comments for unresolved non-RESOLVED threads.
 
@@ -1437,6 +1493,41 @@ async def _maybe_post_thread_verdict_comments(
                     "skip_reason": skip_reason,
                 }
             )
+            continue
+
+        fresh_threads = verdict_reply_dedupe_cache.get("fresh_threads")
+        new_comment_id = (
+            _new_thread_decision_evidence_comment_id(
+                fresh_threads,
+                thread_id=thread.id,
+                observed_comment_ids=snap.evidence.observed_thread_comment_ids,
+                pr_author_login=pr_author_login,
+            )
+            if isinstance(fresh_threads, list)
+            else None
+        )
+        if new_comment_id is not None:
+            stale_result = {
+                **base_result,
+                "skipped": True,
+                "skip_reason": "new thread decision evidence after snapshot",
+                "new_comment_id": new_comment_id,
+            }
+            _log.info(
+                "stale_thread_evidence_skip: %s",
+                json.dumps(
+                    {
+                        "event": "stale_thread_evidence_skip",
+                        "repo": repository,
+                        "pr": pr,
+                        "thread_id": thread.id,
+                        "head_sha": head_sha,
+                        "verdict": thread.verdict.value,
+                        "new_comment_id": new_comment_id,
+                    }
+                ),
+            )
+            actions.append(stale_result)
             continue
 
         if dry_run:
@@ -1486,6 +1577,28 @@ async def _maybe_post_thread_verdict_comments(
     return actions
 
 
+def _maybe_touch_countdown_trigger(repository: str, cfg: Any | None) -> None:
+    """Touch the Countdown trigger file in-process after a RESOLVED verdict post (CHG-1842).
+
+    GitHub suppresses webhook delivery of a GitHub App's own comments, so the
+    CHG-1841 webhook route never fires on repositories where Clearance is the
+    only app delivering review-comment events. This in-process touch removes
+    that delivery dependency: the pipeline that just posted the RESOLVED
+    verdict comment performs the touch itself, gated by the same
+    repository-allowlist predicate the webhook route uses (D3).
+
+    Fail-open: any exception here is logged and swallowed — a trigger touch
+    failure must never affect the writeback result that already succeeded.
+    """
+    try:
+        if _repository_allowed_for_agent(repository, COUNTDOWN_AGENT_SLUG, cfg):
+            touch_trigger_file()
+    except Exception:
+        _log.warning(
+            "countdown_trigger_touch_failed_from_pipeline: repo=%s", repository, exc_info=True
+        )
+
+
 async def _maybe_sync_stage_15(
     *,
     client: GitHubAppClient,
@@ -1499,6 +1612,7 @@ async def _maybe_sync_stage_15(
     head_repo: str | None = None,
     is_fork_pr: bool = False,
     pr_author_login: str | None = None,
+    cfg: Any | None = None,
 ) -> list[Stage15Action]:
     """Stage 1.5 — resolve GitHub threads whose verdict is RESOLVED but isResolved=false.
 
@@ -1679,6 +1793,7 @@ async def _maybe_sync_stage_15(
                             "posted": True,
                             "url": (reply or {}).get("html_url"),
                         }
+                        _maybe_touch_countdown_trigger(repository, cfg)
                     except (httpx.HTTPError, RuntimeError) as exc:
                         safe = _safe_exception_fields(exc)
                         fallback_reply_result = {
@@ -1741,6 +1856,7 @@ async def _maybe_sync_stage_15(
                             "posted": True,
                             "url": (reply or {}).get("html_url"),
                         }
+                        _maybe_touch_countdown_trigger(repository, cfg)
                     except (httpx.HTTPError, RuntimeError) as exc:
                         safe = _safe_exception_fields(exc)
                         reply_result = {
@@ -1913,6 +2029,7 @@ async def _maybe_sync_stage_15(
                     "posted": True,
                     "url": (reply or {}).get("html_url"),
                 }
+                _maybe_touch_countdown_trigger(repository, cfg)
             except (httpx.HTTPError, RuntimeError) as exc:
                 safe = _safe_exception_fields(exc)
                 close_reply_result = {
@@ -2009,6 +2126,35 @@ async def compute_clearance_automation(
     known_limitation_store: KnownLimitationStore | None = None,
     default_profile_name: str | None = None,
     expected_sha: str | None = None,
+    cfg: Any | None = None,
+) -> dict[str, Any]:
+    """Serialize and run Clearance automation for one repository and PR."""
+    pr_number = int(route["validation"]["pr_number"])
+    async with _get_automation_lock(repository, pr_number):
+        return await _compute_clearance_automation_unlocked(
+            client,
+            route,
+            repository=repository,
+            store=store,
+            investigator=investigator,
+            known_limitation_store=known_limitation_store,
+            default_profile_name=default_profile_name,
+            expected_sha=expected_sha,
+            cfg=cfg,
+        )
+
+
+async def _compute_clearance_automation_unlocked(
+    client: GitHubAppClient,
+    route: dict[str, Any],
+    *,
+    repository: str,
+    store: StateStore,
+    investigator: ThreadInvestigator | None = None,
+    known_limitation_store: KnownLimitationStore | None = None,
+    default_profile_name: str | None = None,
+    expected_sha: str | None = None,
+    cfg: Any | None = None,
 ) -> dict[str, Any]:
     """Run the SWM-1101 per-thread verdict pipeline for one webhook event.
 
@@ -2262,6 +2408,7 @@ async def compute_clearance_automation(
         pr=pr_number,
         head_sha=head_sha,
         dry_run=dry_run,
+        pr_author_login=pr_author_login,
     )
 
     sync_actions = await _maybe_sync_stage_15(
@@ -2276,6 +2423,7 @@ async def compute_clearance_automation(
         head_repo=head_repo,
         is_fork_pr=is_fork_pr,
         pr_author_login=pr_author_login,
+        cfg=cfg,
     )
 
     investigator_fired = any(t.llm_verdict for t in threads)

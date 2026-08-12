@@ -199,6 +199,15 @@ Feature: GitHub App authentication — JWT and installation token machinery
     Then issue_comments returned 130 items
     And the comments endpoint was called 2 times
 
+  Scenario: issue_reactions fetches all pages when GitHub returns >100 reactions
+    Given the app has repository "test-org/my-repo" mapped to installation_id "55544433"
+    And GitHub returns a valid installation token response
+    And GitHub returns 2 pages of issue reactions with a codex +1 on page 2
+    When issue_reactions is called for "test-org/my-repo" issue 42
+    Then issue_reactions returned 105 items
+    And the reactions include a codex +1 reaction
+    And the reactions endpoint was called 2 times
+
   # ---------------------------------------------------------------------------
   # pull_request_diff (Wave 7B-3)
   # ---------------------------------------------------------------------------
