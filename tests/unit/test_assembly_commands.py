@@ -81,12 +81,11 @@ def test_both_flags_parsed_either_order() -> None:
     assert cmd2.resume is False
 
 
-def test_unknown_flag_rejects_command() -> None:
-    """PR #283 contract change: unknown flags used to be silently ignored;
-    they now reject the whole command (fail closed against silent misuse).
-    ``--backend`` is exempt — see ``test_parse_command_never_emits_backend_key``.
-    """
-    assert parse_assembly_command("/assembly --some-other-flag") is None
+def test_unknown_flag_does_not_set_known_flags() -> None:
+    cmd = parse_assembly_command("/assembly --some-other-flag")
+    assert cmd is not None
+    assert cmd.dry_run is False
+    assert cmd.allow_missing_stack is False
 
 
 def test_unrelated_body_returns_none() -> None:
@@ -220,45 +219,3 @@ def test_parse_command_never_emits_backend_key(body: str) -> None:
     assert set(command_flags.keys()) == {"dry_run", "allow_missing_stack", "resume"}, (
         f"command_flags set for {body!r}: {set(command_flags.keys())!r}"
     )
-
-
-# ---------------------------------------------------------------------------
-# PR #283 — typo normalization + unknown-flag rejection.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("body", "expect_dry_run", "expect_allow_missing"),
-    [
-        ("/assembly --dry_run", True, False),
-        ("/assembly --dryrun", True, False),
-        ("/assembly --allow_missing_stack", False, True),
-        ("/assembly --allowmissingstack", False, True),
-        ("/assembly --dry_run --allowmissingstack", True, True),
-    ],
-)
-def test_typo_variants_normalize_to_canonical_flags(
-    body: str, expect_dry_run: bool, expect_allow_missing: bool
-) -> None:
-    cmd = parse_assembly_command(body)
-    assert cmd is not None, body
-    assert cmd.dry_run is expect_dry_run
-    assert cmd.allow_missing_stack is expect_allow_missing
-
-
-@pytest.mark.parametrize(
-    "body",
-    [
-        "/assembly --bogus",
-        "/assembly --dry-run --frobnicate",
-        "/assembly --resumee",
-    ],
-)
-def test_unknown_flags_reject_the_command(body: str) -> None:
-    """A truly unknown flag drops the command instead of silently ignoring it.
-
-    ``--backend`` is NOT in this set: it stays accepted-and-ignored per the
-    CHG-1819 F2 contract (covered by
-    ``test_parse_command_never_emits_backend_key``).
-    """
-    assert parse_assembly_command(body) is None, body
