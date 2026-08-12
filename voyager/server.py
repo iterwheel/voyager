@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 from collections import deque
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
@@ -28,6 +27,7 @@ from voyager.bots.countdown import COUNTDOWN_AGENT_SLUG, route_countdown_trigger
 from voyager.bots.review_fix import route_review_fix_event
 from voyager.bots.stack import route_stack_event
 from voyager.build_info import BUILD_COMMIT, VERSION
+from voyager.core.repository_gate import _repository_allowed_for_agent
 from voyager.core.security import match_signature
 from voyager.core.writeback import dry_run_enabled
 
@@ -521,56 +521,6 @@ def configured_webhook_secrets() -> dict[str, str]:
     if repository_secret:
         secrets["repository-webhook"] = repository_secret
     return secrets
-
-
-def _allowed_repositories_env_key(agent_slug: str) -> str:
-    normalized = re.sub(r"[^A-Za-z0-9]+", "_", agent_slug).strip("_").upper()
-    return f"BRIDGE_ALLOWED_REPOSITORIES_{normalized}"
-
-
-def _parse_allowed_repositories(value: str | None) -> set[str]:
-    if not value:
-        return set()
-    return {item.strip().lower() for item in re.split(r"[\s,]+", value) if item.strip()}
-
-
-def _repository_pattern_matches(pattern: str, repository: str) -> bool:
-    if pattern == "*":
-        return True
-    if pattern.endswith("/*"):
-        owner = pattern[:-2]
-        repo_owner, separator, repo_name = repository.partition("/")
-        return repo_owner == owner and separator == "/" and bool(repo_name) and "/" not in repo_name
-    return pattern == repository
-
-
-def _repository_allowed_for_agent(
-    repository: str | None,
-    agent_slug: str,
-    cfg: Any | None = None,
-) -> bool:
-    """Return whether a route may run for this repository and agent.
-
-    Production defaults to deny when no allow-list is configured. Dry-run keeps
-    the historical permissive behavior so local routing tests and exploratory
-    dry-runs do not need allow-list env setup.
-    """
-    specific_key = _allowed_repositories_env_key(agent_slug)
-    if specific_key in os.environ:
-        allowed = _parse_allowed_repositories(os.environ.get(specific_key))
-    elif "BRIDGE_ALLOWED_REPOSITORIES" in os.environ:
-        allowed = _parse_allowed_repositories(os.environ.get("BRIDGE_ALLOWED_REPOSITORIES"))
-    else:
-        bridge = getattr(cfg, "bridge", None)
-        allowed = set(
-            (getattr(bridge, "allowed_repositories", {}) or {}).get(agent_slug.lower(), ())
-        )
-    if not allowed:
-        return dry_run_enabled(cfg)
-    if not repository:
-        return False
-    normalized_repo = repository.strip().lower()
-    return any(_repository_pattern_matches(pattern, normalized_repo) for pattern in allowed)
 
 
 def _filter_routes_by_repository(
