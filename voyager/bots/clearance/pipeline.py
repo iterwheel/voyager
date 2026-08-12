@@ -77,7 +77,9 @@ from voyager.bots.clearance.models import (
 from voyager.bots.clearance.severity import evaluate as evaluate_severity
 from voyager.bots.clearance.severity_input import extract_severity_and_kind
 from voyager.bots.clearance.state import StateStore
+from voyager.bots.countdown.routing import COUNTDOWN_AGENT_SLUG, touch_trigger_file
 from voyager.core.github_app import GitHubAppClient, GitHubGraphQLError
+from voyager.core.repository_gate import _repository_allowed_for_agent
 from voyager.core.review_identity import extract_known_limitation_rule_id
 from voyager.core.writeback import _safe_exception_fields, build_writeback_failure, dry_run_enabled
 
@@ -1575,6 +1577,28 @@ async def _maybe_post_thread_verdict_comments(
     return actions
 
 
+def _maybe_touch_countdown_trigger(repository: str, cfg: Any | None) -> None:
+    """Touch the Countdown trigger file in-process after a RESOLVED verdict post (CHG-1842).
+
+    GitHub suppresses webhook delivery of a GitHub App's own comments, so the
+    CHG-1841 webhook route never fires on repositories where Clearance is the
+    only app delivering review-comment events. This in-process touch removes
+    that delivery dependency: the pipeline that just posted the RESOLVED
+    verdict comment performs the touch itself, gated by the same
+    repository-allowlist predicate the webhook route uses (D3).
+
+    Fail-open: any exception here is logged and swallowed — a trigger touch
+    failure must never affect the writeback result that already succeeded.
+    """
+    try:
+        if _repository_allowed_for_agent(repository, COUNTDOWN_AGENT_SLUG, cfg):
+            touch_trigger_file()
+    except Exception:
+        _log.warning(
+            "countdown_trigger_touch_failed_from_pipeline: repo=%s", repository, exc_info=True
+        )
+
+
 async def _maybe_sync_stage_15(
     *,
     client: GitHubAppClient,
@@ -1588,6 +1612,7 @@ async def _maybe_sync_stage_15(
     head_repo: str | None = None,
     is_fork_pr: bool = False,
     pr_author_login: str | None = None,
+    cfg: Any | None = None,
 ) -> list[Stage15Action]:
     """Stage 1.5 — resolve GitHub threads whose verdict is RESOLVED but isResolved=false.
 
@@ -1768,6 +1793,7 @@ async def _maybe_sync_stage_15(
                             "posted": True,
                             "url": (reply or {}).get("html_url"),
                         }
+                        _maybe_touch_countdown_trigger(repository, cfg)
                     except (httpx.HTTPError, RuntimeError) as exc:
                         safe = _safe_exception_fields(exc)
                         fallback_reply_result = {
@@ -1830,6 +1856,7 @@ async def _maybe_sync_stage_15(
                             "posted": True,
                             "url": (reply or {}).get("html_url"),
                         }
+                        _maybe_touch_countdown_trigger(repository, cfg)
                     except (httpx.HTTPError, RuntimeError) as exc:
                         safe = _safe_exception_fields(exc)
                         reply_result = {
@@ -2002,6 +2029,7 @@ async def _maybe_sync_stage_15(
                     "posted": True,
                     "url": (reply or {}).get("html_url"),
                 }
+                _maybe_touch_countdown_trigger(repository, cfg)
             except (httpx.HTTPError, RuntimeError) as exc:
                 safe = _safe_exception_fields(exc)
                 close_reply_result = {
@@ -2098,6 +2126,7 @@ async def compute_clearance_automation(
     known_limitation_store: KnownLimitationStore | None = None,
     default_profile_name: str | None = None,
     expected_sha: str | None = None,
+    cfg: Any | None = None,
 ) -> dict[str, Any]:
     """Serialize and run Clearance automation for one repository and PR."""
     pr_number = int(route["validation"]["pr_number"])
@@ -2111,6 +2140,7 @@ async def compute_clearance_automation(
             known_limitation_store=known_limitation_store,
             default_profile_name=default_profile_name,
             expected_sha=expected_sha,
+            cfg=cfg,
         )
 
 
@@ -2124,6 +2154,7 @@ async def _compute_clearance_automation_unlocked(
     known_limitation_store: KnownLimitationStore | None = None,
     default_profile_name: str | None = None,
     expected_sha: str | None = None,
+    cfg: Any | None = None,
 ) -> dict[str, Any]:
     """Run the SWM-1101 per-thread verdict pipeline for one webhook event.
 
@@ -2392,6 +2423,7 @@ async def _compute_clearance_automation_unlocked(
         head_repo=head_repo,
         is_fork_pr=is_fork_pr,
         pr_author_login=pr_author_login,
+        cfg=cfg,
     )
 
     investigator_fired = any(t.llm_verdict for t in threads)

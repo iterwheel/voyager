@@ -224,7 +224,7 @@ def test_extract_pr_number_from_check_suite() -> None:
 
 
 def test_allowed_repositories_env_key_normalizes_agent_slug() -> None:
-    from voyager.server import _allowed_repositories_env_key
+    from voyager.core.repository_gate import _allowed_repositories_env_key
 
     assert (
         _allowed_repositories_env_key("iterwheel-clearance")
@@ -237,7 +237,7 @@ def test_allowed_repositories_env_key_normalizes_agent_slug() -> None:
 
 
 def test_parse_allowed_repositories_ignores_empty_segments() -> None:
-    from voyager.server import _parse_allowed_repositories
+    from voyager.core.repository_gate import _parse_allowed_repositories
 
     assert _parse_allowed_repositories(None) == set()
     assert _parse_allowed_repositories("   ") == set()
