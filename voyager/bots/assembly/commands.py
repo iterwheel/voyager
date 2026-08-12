@@ -45,54 +45,6 @@ class AssemblyCommand:
     resume: bool
 
 
-# Canonical flag names (without leading --)
-_KNOWN_FLAGS: frozenset[str] = frozenset(
-    {
-        "dry-run",
-        "allow-missing-stack",
-        "resume",
-    }
-)
-
-# Accepted-and-ignored flags: recognized so the command still parses, but never
-# surfaced on AssemblyCommand. ``--backend`` selection is env-only
-# (ASSEMBLY_EXECUTION_BACKEND) per VOY-1817 D3 / CHG-1819 F2; its value token
-# (no ``--`` prefix) is already skipped by the flag filter.
-_IGNORED_FLAGS: frozenset[str] = frozenset(
-    {
-        "backend",
-    }
-)
-
-# Mapping of normalized flag names back to their canonical form.
-# This handles common typo patterns: underscores, missing hyphens.
-_FLAG_ALIASES: dict[str, str] = {
-    "dry-run": "dry-run",
-    "dry_run": "dry-run",  # underscore typo
-    "dryrun": "dry-run",  # missing hyphen
-    "allow-missing-stack": "allow-missing-stack",
-    "allow_missing_stack": "allow-missing-stack",  # underscore typo
-    "allowmissingstack": "allow-missing-stack",  # missing hyphens
-    "resume": "resume",
-}
-
-
-def _normalize_flag(flag: str) -> str:
-    """Normalize a flag token for matching.
-
-    Handles common typo patterns:
-    - ``--dry_run`` → ``--dry-run`` (underscore → hyphen)
-    - ``--dryrun`` → ``--dry-run`` (missing hyphen)
-    - ``--allow_missing_stack`` → ``--allow-missing-stack``
-    - ``--allowmissingstack`` → ``--allow-missing-stack``
-    """
-    raw = flag.lstrip("-")
-    # Collapse runs of hyphens and trim leading/trailing hyphens
-    normalized = re.sub(r"-+", "-", raw.replace("_", "-")).strip("-")
-    # Look up canonical form via aliases
-    return _FLAG_ALIASES.get(normalized, normalized)
-
-
 def parse_assembly_command(body: str | None) -> AssemblyCommand | None:
     """Return the parsed Assembly command, or ``None`` if no command matches.
 
@@ -102,8 +54,6 @@ def parse_assembly_command(body: str | None) -> AssemblyCommand | None:
     - ``--dry-run``, ``--allow-missing-stack``, and ``--resume`` flags are
       recognised in any order following the command.
     - Case-insensitive matching: ``/Assembly --Dry-Run`` is accepted.
-    - Typo variants (``--dry_run``, ``--dryrun``,
-      ``--allow_missing_stack``) are accepted and treated as the canonical flag.
     - Only the *first* matching line wins.  Additional commands in the same
       body are ignored.
     """
@@ -116,24 +66,10 @@ def parse_assembly_command(body: str | None) -> AssemblyCommand | None:
     if command not in ASSEMBLY_COMMANDS:  # defensive — re cannot mis-fire
         return None
     rest = (match.group("rest") or "").lower()
-    raw_flags = [token for token in rest.split() if token.startswith("--")]
-
-    # Normalize each flag, rejecting truly unknown ones
-    normalized_flags: set[str] = set()
-    for f in raw_flags:
-        norm = _normalize_flag(f)
-        if norm in _IGNORED_FLAGS:
-            # Accepted-and-ignored (e.g. --backend): keep the command routable
-            # per the CHG-1819 F2 contract, surface nothing.
-            continue
-        if norm not in _KNOWN_FLAGS:
-            # Unknown flag — reject the entire command to prevent silent misuse
-            return None
-        normalized_flags.add(norm)
-
+    flags = {token for token in rest.split() if token.startswith("--")}
     return AssemblyCommand(
         command=command,
-        dry_run="dry-run" in normalized_flags,
-        allow_missing_stack="allow-missing-stack" in normalized_flags,
-        resume="resume" in normalized_flags,
+        dry_run="--dry-run" in flags,
+        allow_missing_stack="--allow-missing-stack" in flags,
+        resume="--resume" in flags,
     )
