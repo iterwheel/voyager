@@ -46,21 +46,33 @@ class AssemblyCommand:
 
 
 # Canonical flag names (without leading --)
-_KNOWN_FLAGS: frozenset[str] = frozenset({
-    "dry-run",
-    "allow-missing-stack",
-    "resume",
-})
+_KNOWN_FLAGS: frozenset[str] = frozenset(
+    {
+        "dry-run",
+        "allow-missing-stack",
+        "resume",
+    }
+)
+
+# Accepted-and-ignored flags: recognized so the command still parses, but never
+# surfaced on AssemblyCommand. ``--backend`` selection is env-only
+# (ASSEMBLY_EXECUTION_BACKEND) per VOY-1817 D3 / CHG-1819 F2; its value token
+# (no ``--`` prefix) is already skipped by the flag filter.
+_IGNORED_FLAGS: frozenset[str] = frozenset(
+    {
+        "backend",
+    }
+)
 
 # Mapping of normalized flag names back to their canonical form.
 # This handles common typo patterns: underscores, missing hyphens.
 _FLAG_ALIASES: dict[str, str] = {
     "dry-run": "dry-run",
-    "dry_run": "dry-run",      # underscore typo
-    "dryrun": "dry-run",       # missing hyphen
+    "dry_run": "dry-run",  # underscore typo
+    "dryrun": "dry-run",  # missing hyphen
     "allow-missing-stack": "allow-missing-stack",
     "allow_missing_stack": "allow-missing-stack",  # underscore typo
-    "allowmissingstack": "allow-missing-stack",     # missing hyphens
+    "allowmissingstack": "allow-missing-stack",  # missing hyphens
     "resume": "resume",
 }
 
@@ -110,6 +122,10 @@ def parse_assembly_command(body: str | None) -> AssemblyCommand | None:
     normalized_flags: set[str] = set()
     for f in raw_flags:
         norm = _normalize_flag(f)
+        if norm in _IGNORED_FLAGS:
+            # Accepted-and-ignored (e.g. --backend): keep the command routable
+            # per the CHG-1819 F2 contract, surface nothing.
+            continue
         if norm not in _KNOWN_FLAGS:
             # Unknown flag — reject the entire command to prevent silent misuse
             return None
