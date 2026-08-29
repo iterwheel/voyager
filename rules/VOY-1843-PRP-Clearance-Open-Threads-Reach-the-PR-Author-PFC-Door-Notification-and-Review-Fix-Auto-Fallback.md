@@ -214,6 +214,21 @@ confirmation on the single Voyager→PFC edge, not a PFC→Voyager claim callbac
 One delivered notification is sent per PR/head batch; later due threads may be
 appended only by a separately deduped notification.
 
+The same-ID path has a hard PFC prerequisite: queue admission, the paste
+side-effect guard, and the terminal outcome for each `transport_send_id` are
+stored durably across dashboard-process restarts for at least 24 hours from the
+first POST. A repeated POST inside that retention window must return or recover
+the existing attempt and MUST NOT paste the message again. Voyager records
+`first_posted_at` and may same-ID re-POST only while the attempt age is less than
+the verified PFC retention. The queued POST acknowledgement MUST advertise
+`idempotency_retention_seconds`; Voyager compares it with
+`required_send_id_retention_seconds` before accepting the attempt as
+`notify_queued`. If the field is missing or too small, or the bridge resumes at
+or beyond that boundary, record
+`notify_delivery_unknown`, alert the operator, and never re-POST or arm
+fallback. Notification enablement fails closed until this cross-system
+idempotency contract is fixture-tested and confirmed in rollout preflight.
+
 ### 3. Claim contract without a second edge
 
 `M=20` minutes starts when PFC confirms terminal delivery. The PR is claimed if,
@@ -290,8 +305,9 @@ Persist a local 0600 JSONL/SQLite-equivalent ledger under
 - `notify_intent`, per-attempt `notify_queued`, `notify_attempt_uncertain`, and
   `notify_same_id_repost` and `notify_attempt_failed`, plus terminal
   `notify_delivery_unknown`, `notify_failed`, or `notified` (including
-  application notification ID, transport attempt ID, terminal receipt time,
-  and the locally derived claim deadline);
+  application notification ID, transport attempt ID, first-POST time,
+  idempotency-retention boundary, terminal receipt time, and the locally
+  derived claim deadline);
 - `claimed` with the non-sensitive claim class;
 - `fallback_intent`, `fallback_refused`, `fallback_started`, and
   `fallback_finished`, each keyed to the notification-time expected head; and
@@ -316,6 +332,7 @@ All new behavior is default-off and env-over-TOML per VOY-1814.
 | `config.toml` | `receipt_timeout_seconds` | `90`; must exceed the normal 60-second PFC idle-gate ceiling |
 | `config.toml` | `max_same_id_reposts` | `3`; exhaustion becomes delivery-unknown and never mints a new ID |
 | `config.toml` | `max_delivery_attempts` | `3`; counts terminally failed transport attempts, not ambiguous same-ID retries |
+| `config.toml` | `required_send_id_retention_seconds` | `86400`; enablement fails closed if PFC cannot guarantee it |
 | `config.toml` | `auto_review_fix` | `false` independently of notification enablement |
 | `config.toml` | `allowed_repositories` | empty; exact `owner/name` entries only |
 | `config.toml` | `audit_dir` | `~/.voyager/state/clearance-author-wakeup` |
@@ -343,9 +360,10 @@ TOML or the audit. Runtime files retain VOY-1814 permissions:
 
 1. **Implement and verify offline.** Add unit/BDD coverage for eligibility age,
    continuous-state reset, per-head batching, stable dedupe, door failures,
-   claim evidence, same-head apply-time rechecks, finding-ID scope, and every
-   review-fix refusal gate. Run only the touched test files and touched-file
-   lint locally; CI runs the complete suite.
+   PFC send-ID retention across process restart, claim evidence, same-head
+   apply-time rechecks, finding-ID scope, and every review-fix refusal gate. Run
+   only the touched test files and touched-file lint locally; CI runs the
+   complete suite.
 2. **Ship default-off.** Merge an approved CHG/implementation, build the wheel
    from a clean release checkout, install it into a versioned production venv,
    and atomically swap `~/.voyager/.venv` with the VOY-1814 `ln -s` +
@@ -358,7 +376,9 @@ TOML or the audit. Runtime files retain VOY-1814 permissions:
    `iterwheel/voyager-sandbox`, leave `auto_review_fix=false`, create one
    controlled state-A thread, and temporarily shorten N for the attended test.
    Prove exactly one PFC message contains the repo/PR/head/thread tuple, repeated
-   reconciles dedupe, and the unresolved thread still makes merge-loop report
+   reconciles dedupe, and a controlled PFC process restart between paste and
+   receipt observation preserves the terminal result and produces no duplicate
+   paste. Confirm the unresolved thread still makes merge-loop report
    `threads_unresolved`.
 5. **Dry-run fallback canary.** Keep the sandbox scope, enable auto-fallback
    with global/route dry-run still true, shorten M for the attended test, and
@@ -406,6 +426,14 @@ TOML or the audit. Runtime files retain VOY-1814 permissions:
 - [ ] Every exhausted ambiguous observation window performs a same-ID re-POST;
   bounded exhaustion records delivery-unknown, alerts, and never arms fallback
   or allocates a duplicate-risk transport ID.
+- [ ] A PFC process restart after paste but before Voyager reads the receipt
+  preserves the send-ID outcome; the same-ID re-POST returns the existing
+  attempt and produces no second paste.
+- [ ] A queued acknowledgement missing
+  `idempotency_retention_seconds >= 86400` fails enablement closed before any
+  same-ID retry is trusted.
+- [ ] At or beyond the verified 24-hour retention boundary, Voyager never
+  re-POSTs the expired ID; it records delivery-unknown and keeps fallback off.
 - [ ] Eligibility and claim detection key replies on the PR-author login;
   maintainer and bot replies neither move author-keyed state A to C nor claim
   the PR.
@@ -452,3 +480,4 @@ default-off configuration and an implementation CHG.
 | 2026-08-30 | Addressed PR #318 Codex review round 3: define terminal receipt polling and pin review-fix to notification head    | Codex |
 | 2026-08-30 | Addressed PR #318 Codex review round 4: separate delivery-attempt IDs and allow invocation-owned head advancement  | Codex |
 | 2026-08-30 | Addressed PR #318 Codex review round 5: derive receipt URL from door origin and require bounded same-ID re-POST    | Codex |
+| 2026-08-30 | Addressed PR #318 Codex review round 6: require durable send-ID retention across PFC restart                       | Codex |
