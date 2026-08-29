@@ -168,31 +168,39 @@ routes the work. Repository, PR, head, and thread identifiers are deliberately
 included because the loopback door is machine-local and the recipient needs an
 unambiguous task. They must not be copied into the public redacted audit.
 
-The bridge records a stable notification ID before the POST and supplies that
-same 32-hex value through the door's optional transport `send_id`; the required
-application payload remains `citizen` plus `message` as shown above. A 2xx
-`ok=true, queued=true` response records `notify_queued` but does **not** start M.
+The bridge records one stable application `notification_id` before the first
+POST and keeps it inside every retry's message. Each transport attempt gets a
+distinct 32-hex `transport_send_id` supplied through the door's optional
+`send_id`; the ledger maps every attempt back to the stable notification ID.
+The required application payload remains `citizen` plus `message` as shown
+above. A 2xx `ok=true, queued=true` response records `notify_queued` but does
+**not** start M.
 Voyager reads the corresponding terminal send result through the same PFC
 integration boundary by polling
-`GET http://localhost:8420/api/agent-send-result/{send_id}` with the stable
-transport ID from the POST. The correlated receipt contract is:
+`GET http://localhost:8420/api/agent-send-result/{transport_send_id}` with that
+attempt's transport ID. The correlated receipt contract is:
 
 - `{"found":false}` or an outcome without a boolean `ok` is pending;
 - `{"found":true,"outcome":{"ok":true,...}}` is terminal delivery success; and
 - `{"found":true,"outcome":{"ok":false,...}}` is terminal delivery failure.
 
-Poll every two seconds for at most 90 seconds. Only terminal `ok=true` records
-`notified`, records the terminal-receipt time, and starts the claim window.
+Poll every two seconds for at most 90 seconds per observation window. Only
+terminal `ok=true` records `notified`, records the terminal-receipt time, and
+starts the claim window. A connection error, lost POST response, `found=false`,
+or non-terminal outcome is ambiguous: keep polling or idempotently re-POST with
+the **same** transport ID, and never mint a second attempt that could duplicate
+a late delivery. A terminal `ok=false` closes that attempt; after bounded
+backoff, a retry mints a **new** transport ID while keeping the same application
+notification ID. After three terminally failed attempts, record `notify_failed`
+and leave auto-fallback disarmed.
 Voyager then computes
 `claim_deadline = terminal_receipt_at + M` in its own durable ledger. The
 already-sent message carries N and M, never this delivery-derived deadline.
-Connection errors, timeouts, non-2xx responses, malformed/false
-acknowledgements, missing terminal receipts, or terminal delivery failures record
-`notify_failed`, retry with the same idempotency key and bounded backoff, and
-MUST NOT arm auto-fallback. This receipt read is transport confirmation on the
-single Voyager→PFC edge, not a PFC→Voyager claim callback. One delivered
-notification is sent per PR/head batch; later due threads may be appended only
-by a separately deduped notification.
+Malformed responses record an audited ambiguous attempt and follow the same-ID
+path. None of these states arms auto-fallback. This receipt read is transport
+confirmation on the single Voyager→PFC edge, not a PFC→Voyager claim callback.
+One delivered notification is sent per PR/head batch; later due threads may be
+appended only by a separately deduped notification.
 
 ### 3. Claim contract without a second edge
 
@@ -230,8 +238,15 @@ invocation contract with `source=clearance_author_wakeup`, an explicit
 once and reject with an audited `review_fix_notification_head_mismatch` before
 thread collection or adapter work unless the fetched head exactly equals this
 supplied notification-time SHA. Seed the loop context and every later
-`_ensure_expected_head_current` check from the supplied SHA; never replace it
-with a newly observed head. This closes the race where an author push lands
+`_ensure_expected_head_current` check from the supplied SHA. After an adapter
+successfully creates and pushes a fix commit, the context may advance its
+expected head only to the commit SHA returned by that successful adapter result
+from this invocation. Immediately before adapter execution, confirm the live
+head still equals the prior expected SHA. After the adapter reports success,
+confirm the returned commit is the live PR head and descends from that prior
+expected SHA, then advance the context to it. An independently fetched or
+externally pushed head can never advance the guard. This both permits sequential
+fixes for multiple finding IDs and closes the race where an author push lands
 after the reconciler's deadline re-read but before review-fix fetches the PR.
 
 The manual `/review-fix` and `/pr-review-fix` behavior remains unchanged. The
@@ -260,8 +275,10 @@ Persist a local 0600 JSONL/SQLite-equivalent ledger under
 `~/.voyager/state/clearance-author-wakeup/` with records for:
 
 - `state_a_observed`, `state_a_cleared`, and `state_a_superseded`;
-- `notify_intent`, `notify_failed`, and `notified` (including terminal receipt
-  time and the locally derived claim deadline);
+- `notify_intent`, per-attempt `notify_queued`, `notify_attempt_uncertain`, and
+  `notify_attempt_failed`, plus terminal `notify_failed` or `notified`
+  (including application notification ID, transport attempt ID, terminal
+  receipt time, and the locally derived claim deadline);
 - `claimed` with the non-sensitive claim class;
 - `fallback_intent`, `fallback_refused`, `fallback_started`, and
   `fallback_finished`, each keyed to the notification-time expected head; and
@@ -284,6 +301,7 @@ All new behavior is default-off and env-over-TOML per VOY-1814.
 | `config.toml` | `fallback_after_minutes` (M) | `20`; positive integer measured after terminal delivery |
 | `config.toml` | `receipt_poll_interval_seconds` | `2`; positive integer |
 | `config.toml` | `receipt_timeout_seconds` | `90`; must exceed the normal 60-second PFC idle-gate ceiling |
+| `config.toml` | `max_delivery_attempts` | `3`; counts terminally failed transport attempts, not ambiguous same-ID retries |
 | `config.toml` | `auto_review_fix` | `false` independently of notification enablement |
 | `config.toml` | `allowed_repositories` | empty; exact `owner/name` entries only |
 | `config.toml` | `audit_dir` | `~/.voyager/state/clearance-author-wakeup` |
@@ -362,9 +380,12 @@ TOML or the audit. Runtime files retain VOY-1814 permissions:
   and no delivery-derived deadline.
 - [ ] Door failure or ambiguous acknowledgement retries safely and cannot arm
   auto-fallback.
-- [ ] Terminal receipt polling uses the stable POST `send_id`; pending, terminal
-  success, terminal failure, malformed response, and timeout each produce the
-  specified state transition.
+- [ ] A stable application notification ID spans all retries; each terminally
+  failed delivery gets a new transport `send_id`, while ambiguous POST/receipt
+  outcomes reuse the current transport ID and cannot duplicate a late delivery.
+- [ ] Terminal receipt polling correlates by the attempt transport ID; pending,
+  terminal success, terminal failure, malformed response, and timeout each
+  produce the specified state transition.
 - [ ] Eligibility and claim detection key replies on the PR-author login;
   maintainer and bot replies neither move author-keyed state A to C nor claim
   the PR.
@@ -376,6 +397,10 @@ TOML or the audit. Runtime files retain VOY-1814 permissions:
 - [ ] An author push after the deadline re-read but before dispatcher entry
   fails the notification-time `expected_head_sha` guard before thread fetch,
   adapter work, or any GitHub mutation.
+- [ ] Multiple finding IDs may advance the expected head only through commit
+  SHAs returned by successful adapter results from this invocation, verified as
+  the live head and a descendant of the prior expected SHA; an external head can
+  neither enter nor advance the sequence.
 - [ ] Missing L3 envelope, repo allowlist, kill switch, dry-run, head mismatch,
   or verification failure refuses/rolls back exactly as the existing governed
   review-fix path does.
@@ -405,3 +430,4 @@ default-off configuration and an implementation CHG.
 | 2026-08-30 | Addressed PR #318 Codex review: author-login-keyed wake-up eligibility and terminal-receipt-derived local deadline | Codex |
 | 2026-08-30 | Addressed PR #318 Codex review round 2: distinguish queue admission from terminal delivery                         | Codex |
 | 2026-08-30 | Addressed PR #318 Codex review round 3: define terminal receipt polling and pin review-fix to notification head    | Codex |
+| 2026-08-30 | Addressed PR #318 Codex review round 4: separate delivery-attempt IDs and allow invocation-owned head advancement  | Codex |
