@@ -82,8 +82,8 @@ must not turn an `OPEN` verdict into a resolve or merge authorization.
 - Define durable notification, claim, retry, dedupe, and audit semantics that
   survive a bridge restart.
 - Invoke the existing governed review-fix machinery internally when the
-  notification was delivered but no author claim appears before the fallback
-  deadline.
+  downstream author delivery was confirmed but no author claim appears before
+  the fallback deadline.
 - Roll out behind default-off, repository-scoped notification and auto-fix
   switches according to VOY-1814.
 
@@ -186,19 +186,28 @@ Configuration validates that `pfc_door_url` is loopback-only, has no userinfo,
 query, or fragment, and has the exact path `/api/agent-send`. The receipt URL
 reuses its scheme and authority and replaces only that path; an overridden port
 therefore cannot split POST and receipt polling across PFC instances. The
-correlated receipt contract is:
+correlated receipt contract covers the whole PFC routing operation, not just
+paste into the `pfc` citizen:
 
 - `{"found":false}` or an outcome without a boolean `ok` is pending;
-- `{"found":true,"outcome":{"ok":true,...}}` is terminal delivery success; and
-- `{"found":true,"outcome":{"ok":false,...}}` is terminal delivery failure.
+- `{"found":true,"outcome":{"stage":"pfc_received",...}}` means the message
+  reached `pfc` but author routing is still pending;
+- `{"found":true,"outcome":{"stage":"author_delivered","ok":true,
+  "notification_id":"...","recipient_citizen":"..."}}` is terminal success
+  only after PFC resolves the graph owner and the downstream citizen door
+  accepts the task; and
+- `{"found":true,"outcome":{"stage":"routing_failed","ok":false,...}}` is
+  terminal failure.
 
 Poll every two seconds for at most 90 seconds per observation window. Only
-terminal `ok=true` records `notified`, records the terminal-receipt time, and
-starts the claim window. A connection error, lost POST response, `found=false`,
-or non-terminal outcome is ambiguous. At the end of each observation window,
-Voyager MUST idempotently re-POST the same body with the **same** transport ID,
-then restart polling; polling without this re-POST is not conforming. Never mint
-a second attempt that could duplicate a late delivery. After three same-ID
+`stage=author_delivered`, `ok=true`, and the matching application notification
+ID records `notified`, records the author-delivery receipt time, and starts the
+claim window. `stage=pfc_received` remains pending and can never start M. A
+connection error, lost POST response, `found=false`, or other non-terminal
+outcome is ambiguous. At the end of each observation window, Voyager MUST
+idempotently re-POST the same body with the **same** transport ID, then restart
+polling; polling without this re-POST is not conforming. Never mint a second
+attempt that could duplicate a late delivery. After three same-ID
 re-POST windows without a terminal result, record `notify_delivery_unknown`,
 stop automatic retries, alert the operator, and leave auto-fallback disarmed. A
 terminal `ok=false` instead closes that attempt; after bounded backoff, a retry
@@ -206,34 +215,36 @@ mints a **new** transport ID while keeping the same application notification
 ID. After three terminally failed attempts, record `notify_failed` and leave
 auto-fallback disarmed.
 Voyager then computes
-`claim_deadline = terminal_receipt_at + M` in its own durable ledger. The
+`claim_deadline = author_delivery_receipt_at + M` in its own durable ledger. The
 already-sent message carries N and M, never this delivery-derived deadline.
 Malformed responses record an audited ambiguous attempt and follow the same-ID
 path. None of these states arms auto-fallback. This receipt read is transport
 confirmation on the single Voyager→PFC edge, not a PFC→Voyager claim callback.
-One delivered notification is sent per PR/head batch; later due threads may be
-appended only by a separately deduped notification.
+One author-delivered notification is sent per PR/head batch; later due threads
+may be appended only by a separately deduped notification.
 
 The same-ID path has a hard PFC prerequisite: queue admission, the paste
 side-effect guard, and the terminal outcome for each `transport_send_id` are
 stored durably across dashboard-process restarts for at least 24 hours from the
 first POST. A repeated POST inside that retention window must return or recover
 the existing attempt and MUST NOT paste the message again. Voyager records
-`first_posted_at` and may same-ID re-POST only while the attempt age is less than
-the verified PFC retention. The queued POST acknowledgement MUST advertise
+`first_posted_at`, derives `retained_until`, and may same-ID re-POST only when
+`retained_until - now` is at least the configured 300-second safety margin. The
+queued POST acknowledgement MUST advertise
 `idempotency_retention_seconds`; Voyager compares it with
 `required_send_id_retention_seconds` before accepting the attempt as
 `notify_queued`. If the field is missing or too small, or the bridge resumes at
-or beyond that boundary, record
-`notify_delivery_unknown`, alert the operator, and never re-POST or arm
-fallback. Notification enablement fails closed until this cross-system
-idempotency contract is fixture-tested and confirmed in rollout preflight.
+or inside the safety-margin boundary, record `notify_delivery_unknown`, alert
+the operator, and never re-POST or arm fallback. Notification enablement fails
+closed until this cross-system idempotency contract is fixture-tested and
+confirmed in rollout preflight.
 
 ### 3. Claim contract without a second edge
 
-`M=20` minutes starts when PFC confirms terminal delivery. The PR is claimed if,
-after that timestamp and before Voyager's locally recorded deadline, a current
-GitHub read observes any of the following:
+`M=20` minutes starts only when PFC reports terminal `author_delivered` for the
+matching notification. The PR is claimed if, after that timestamp and before
+Voyager's locally recorded deadline, a current GitHub read observes any of the
+following:
 
 - a PR-author reply on any listed review thread, even if the reply is not yet
   substantive enough for Clearance to resolve it;
@@ -243,12 +254,13 @@ GitHub read observes any of the following:
 
 These are durable, author-visible facts already available to Clearance. PFC's
 `ok=true, queued=true` HTTP acceptance is queue admission only; the later
-terminal send-result `ok=true` confirms delivery, but still does not claim the
-PR. A reply by a maintainer or another bot is not a PR-author claim. A new head
-supersedes the old record; if the new head later has qualifying state-A threads,
-it starts a fresh N window. No PFC→Voyager **claim** callback or citizen-name
-database is introduced. The correlated terminal-result GET above is required
-transport receipt polling on the existing Voyager→PFC edge, not a claim signal.
+`stage=author_delivered`, `ok=true` result confirms delivery to the authoring
+citizen, but still does not claim the PR. A reply by a maintainer or another bot
+is not a PR-author claim. A new head supersedes the old record; if the new head
+later has qualifying state-A threads, it starts a fresh N window. No
+PFC→Voyager **claim** callback or citizen-name database is introduced. The
+correlated terminal-result GET above is required transport receipt polling on
+the existing Voyager→PFC edge, not a claim signal.
 
 ### 4. Governed review-fix fallback
 
@@ -306,8 +318,8 @@ Persist a local 0600 JSONL/SQLite-equivalent ledger under
   `notify_same_id_repost` and `notify_attempt_failed`, plus terminal
   `notify_delivery_unknown`, `notify_failed`, or `notified` (including
   application notification ID, transport attempt ID, first-POST time,
-  idempotency-retention boundary, terminal receipt time, and the locally
-  derived claim deadline);
+  idempotency-retention boundary, downstream recipient citizen,
+  author-delivery receipt time, and the locally derived claim deadline);
 - `claimed` with the non-sensitive claim class;
 - `fallback_intent`, `fallback_refused`, `fallback_started`, and
   `fallback_finished`, each keyed to the notification-time expected head; and
@@ -327,9 +339,10 @@ All new behavior is default-off and env-over-TOML per VOY-1814.
 | `config.toml` | `[clearance.author_wakeup] enabled` | `false` |
 | `config.toml` | `pfc_door_url` | `http://localhost:8420/api/agent-send`; loopback-only URL validation |
 | `config.toml` | `notify_after_minutes` (N) | `10`; positive integer |
-| `config.toml` | `fallback_after_minutes` (M) | `20`; positive integer measured after terminal delivery |
+| `config.toml` | `fallback_after_minutes` (M) | `20`; positive integer measured after terminal author delivery |
 | `config.toml` | `receipt_poll_interval_seconds` | `2`; positive integer |
 | `config.toml` | `receipt_timeout_seconds` | `90`; must exceed the normal 60-second PFC idle-gate ceiling |
+| `config.toml` | `receipt_repost_safety_margin_seconds` | `300`; same-ID re-POST requires at least this much retention remaining |
 | `config.toml` | `max_same_id_reposts` | `3`; exhaustion becomes delivery-unknown and never mints a new ID |
 | `config.toml` | `max_delivery_attempts` | `3`; counts terminally failed transport attempts, not ambiguous same-ID retries |
 | `config.toml` | `required_send_id_retention_seconds` | `86400`; enablement fails closed if PFC cannot guarantee it |
@@ -360,10 +373,10 @@ TOML or the audit. Runtime files retain VOY-1814 permissions:
 
 1. **Implement and verify offline.** Add unit/BDD coverage for eligibility age,
    continuous-state reset, per-head batching, stable dedupe, door failures,
-   PFC send-ID retention across process restart, claim evidence, same-head
-   apply-time rechecks, finding-ID scope, and every review-fix refusal gate. Run
-   only the touched test files and touched-file lint locally; CI runs the
-   complete suite.
+   PFC send-ID retention across process restart, delayed downstream author
+   routing, retention-margin expiry, claim evidence, same-head apply-time
+   rechecks, finding-ID scope, and every review-fix refusal gate. Run only the
+   touched test files and touched-file lint locally; CI runs the complete suite.
 2. **Ship default-off.** Merge an approved CHG/implementation, build the wheel
    from a clean release checkout, install it into a versioned production venv,
    and atomically swap `~/.voyager/.venv` with the VOY-1814 `ln -s` +
@@ -378,8 +391,9 @@ TOML or the audit. Runtime files retain VOY-1814 permissions:
    Prove exactly one PFC message contains the repo/PR/head/thread tuple, repeated
    reconciles dedupe, and a controlled PFC process restart between paste and
    receipt observation preserves the terminal result and produces no duplicate
-   paste. Confirm the unresolved thread still makes merge-loop report
-   `threads_unresolved`.
+   paste. Delay the downstream graph route and prove `pfc_received` does not
+   start M; only `author_delivered` does. Confirm the unresolved thread still
+   makes merge-loop report `threads_unresolved`.
 5. **Dry-run fallback canary.** Keep the sandbox scope, enable auto-fallback
    with global/route dry-run still true, shorten M for the attended test, and
    verify the review-fix audit reports the exact finding IDs with zero GitHub
@@ -387,10 +401,10 @@ TOML or the audit. Runtime files retain VOY-1814 permissions:
 6. **Single live canary.** Confirm the Assembly App installation and explicit
    Clearance + review-fix allowlists, set the review-fix envelope to one round
    and one fix for the canary, verify the kill switch, then enable one repository
-   and one naturally occurring PR. Inspect PFC delivery, the local full audit,
-   bridge logs, the verification result, the new head, and subsequent Clearance
-   state. Keep `frankyxhl/alfred` as the first non-sandbox scope; do not expand
-   until this evidence is recorded.
+   and one naturally occurring PR. Inspect downstream author delivery, the local
+   full audit, bridge logs, the verification result, the new head, and subsequent
+   Clearance state. Keep `frankyxhl/alfred` as the first non-sandbox scope; do
+   not expand until this evidence is recorded.
 7. **Expand deliberately.** Restore the approved bounded envelope only after the
    live canary; add repositories one at a time to the app-specific allowlists.
    Verify `launchctl print`, local/public `/healthz`, and post-restart error logs
@@ -423,6 +437,9 @@ TOML or the audit. Runtime files retain VOY-1814 permissions:
 - [ ] Terminal receipt polling correlates by the attempt transport ID; pending,
   terminal success, terminal failure, malformed response, and timeout each
   produce the specified state transition.
+- [ ] `stage=pfc_received` never starts M; only a matching
+  `stage=author_delivered`, `ok=true` receipt from the downstream citizen route
+  starts the claim window.
 - [ ] Every exhausted ambiguous observation window performs a same-ID re-POST;
   bounded exhaustion records delivery-unknown, alerts, and never arms fallback
   or allocates a duplicate-risk transport ID.
@@ -432,14 +449,15 @@ TOML or the audit. Runtime files retain VOY-1814 permissions:
 - [ ] A queued acknowledgement missing
   `idempotency_retention_seconds >= 86400` fails enablement closed before any
   same-ID retry is trusted.
-- [ ] At or beyond the verified 24-hour retention boundary, Voyager never
-  re-POSTs the expired ID; it records delivery-unknown and keeps fallback off.
+- [ ] At or inside the configured safety margin before the verified 24-hour
+  retention boundary, Voyager never re-POSTs the ID; it records
+  delivery-unknown and keeps fallback off.
 - [ ] Eligibility and claim detection key replies on the PR-author login;
   maintainer and bot replies neither move author-keyed state A to C nor claim
   the PR.
 - [ ] PR-author reply, new head, thread resolution, or PR close before M records
   a claim/supersession and prevents fallback.
-- [ ] At the locally computed terminal-delivery-plus-M deadline, the fallback
+- [ ] At the locally computed author-delivery-plus-M deadline, the fallback
   re-reads the same head/state and scopes review-fix to the notified thread IDs
   only.
 - [ ] An author push after the deadline re-read but before dispatcher entry
@@ -464,9 +482,9 @@ TOML or the audit. Runtime files retain VOY-1814 permissions:
 ## Open Questions
 
 None for this proposal. The initial values are normative defaults:
-`N=10` minutes to notify and `M=20` additional minutes after terminal PFC
-delivery before auto-fallback. Repository rollout remains separately gated by
-default-off configuration and an implementation CHG.
+`N=10` minutes to notify and `M=20` additional minutes after terminal downstream
+author delivery before auto-fallback. Repository rollout remains separately
+gated by default-off configuration and an implementation CHG.
 
 ---
 
@@ -481,3 +499,4 @@ default-off configuration and an implementation CHG.
 | 2026-08-30 | Addressed PR #318 Codex review round 4: separate delivery-attempt IDs and allow invocation-owned head advancement  | Codex |
 | 2026-08-30 | Addressed PR #318 Codex review round 5: derive receipt URL from door origin and require bounded same-ID re-POST    | Codex |
 | 2026-08-30 | Addressed PR #318 Codex review round 6: require durable send-ID retention across PFC restart                       | Codex |
+| 2026-08-30 | Addressed PR #318 Codex review round 7: start M on downstream author delivery and add retention safety margin      | Codex |
