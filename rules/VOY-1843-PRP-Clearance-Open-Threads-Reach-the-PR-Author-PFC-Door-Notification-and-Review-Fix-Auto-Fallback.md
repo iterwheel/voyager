@@ -176,9 +176,17 @@ The required application payload remains `citizen` plus `message` as shown
 above. A 2xx `ok=true, queued=true` response records `notify_queued` but does
 **not** start M.
 Voyager reads the corresponding terminal send result through the same PFC
-integration boundary by polling
-`GET http://localhost:8420/api/agent-send-result/{transport_send_id}` with that
-attempt's transport ID. The correlated receipt contract is:
+integration boundary by polling the same configured PFC origin:
+
+```
+GET {pfc_door_url scheme+authority}/api/agent-send-result/{transport_send_id}
+```
+
+Configuration validates that `pfc_door_url` is loopback-only, has no userinfo,
+query, or fragment, and has the exact path `/api/agent-send`. The receipt URL
+reuses its scheme and authority and replaces only that path; an overridden port
+therefore cannot split POST and receipt polling across PFC instances. The
+correlated receipt contract is:
 
 - `{"found":false}` or an outcome without a boolean `ok` is pending;
 - `{"found":true,"outcome":{"ok":true,...}}` is terminal delivery success; and
@@ -187,12 +195,16 @@ attempt's transport ID. The correlated receipt contract is:
 Poll every two seconds for at most 90 seconds per observation window. Only
 terminal `ok=true` records `notified`, records the terminal-receipt time, and
 starts the claim window. A connection error, lost POST response, `found=false`,
-or non-terminal outcome is ambiguous: keep polling or idempotently re-POST with
-the **same** transport ID, and never mint a second attempt that could duplicate
-a late delivery. A terminal `ok=false` closes that attempt; after bounded
-backoff, a retry mints a **new** transport ID while keeping the same application
-notification ID. After three terminally failed attempts, record `notify_failed`
-and leave auto-fallback disarmed.
+or non-terminal outcome is ambiguous. At the end of each observation window,
+Voyager MUST idempotently re-POST the same body with the **same** transport ID,
+then restart polling; polling without this re-POST is not conforming. Never mint
+a second attempt that could duplicate a late delivery. After three same-ID
+re-POST windows without a terminal result, record `notify_delivery_unknown`,
+stop automatic retries, alert the operator, and leave auto-fallback disarmed. A
+terminal `ok=false` instead closes that attempt; after bounded backoff, a retry
+mints a **new** transport ID while keeping the same application notification
+ID. After three terminally failed attempts, record `notify_failed` and leave
+auto-fallback disarmed.
 Voyager then computes
 `claim_deadline = terminal_receipt_at + M` in its own durable ledger. The
 already-sent message carries N and M, never this delivery-derived deadline.
@@ -276,9 +288,10 @@ Persist a local 0600 JSONL/SQLite-equivalent ledger under
 
 - `state_a_observed`, `state_a_cleared`, and `state_a_superseded`;
 - `notify_intent`, per-attempt `notify_queued`, `notify_attempt_uncertain`, and
-  `notify_attempt_failed`, plus terminal `notify_failed` or `notified`
-  (including application notification ID, transport attempt ID, terminal
-  receipt time, and the locally derived claim deadline);
+  `notify_same_id_repost` and `notify_attempt_failed`, plus terminal
+  `notify_delivery_unknown`, `notify_failed`, or `notified` (including
+  application notification ID, transport attempt ID, terminal receipt time,
+  and the locally derived claim deadline);
 - `claimed` with the non-sensitive claim class;
 - `fallback_intent`, `fallback_refused`, `fallback_started`, and
   `fallback_finished`, each keyed to the notification-time expected head; and
@@ -301,6 +314,7 @@ All new behavior is default-off and env-over-TOML per VOY-1814.
 | `config.toml` | `fallback_after_minutes` (M) | `20`; positive integer measured after terminal delivery |
 | `config.toml` | `receipt_poll_interval_seconds` | `2`; positive integer |
 | `config.toml` | `receipt_timeout_seconds` | `90`; must exceed the normal 60-second PFC idle-gate ceiling |
+| `config.toml` | `max_same_id_reposts` | `3`; exhaustion becomes delivery-unknown and never mints a new ID |
 | `config.toml` | `max_delivery_attempts` | `3`; counts terminally failed transport attempts, not ambiguous same-ID retries |
 | `config.toml` | `auto_review_fix` | `false` independently of notification enablement |
 | `config.toml` | `allowed_repositories` | empty; exact `owner/name` entries only |
@@ -383,9 +397,15 @@ TOML or the audit. Runtime files retain VOY-1814 permissions:
 - [ ] A stable application notification ID spans all retries; each terminally
   failed delivery gets a new transport `send_id`, while ambiguous POST/receipt
   outcomes reuse the current transport ID and cannot duplicate a late delivery.
+- [ ] Overriding the loopback port in `pfc_door_url` derives the receipt GET on
+  the same scheme and authority; invalid path/query/fragment/userinfo fails
+  configuration closed.
 - [ ] Terminal receipt polling correlates by the attempt transport ID; pending,
   terminal success, terminal failure, malformed response, and timeout each
   produce the specified state transition.
+- [ ] Every exhausted ambiguous observation window performs a same-ID re-POST;
+  bounded exhaustion records delivery-unknown, alerts, and never arms fallback
+  or allocates a duplicate-risk transport ID.
 - [ ] Eligibility and claim detection key replies on the PR-author login;
   maintainer and bot replies neither move author-keyed state A to C nor claim
   the PR.
@@ -431,3 +451,4 @@ default-off configuration and an implementation CHG.
 | 2026-08-30 | Addressed PR #318 Codex review round 2: distinguish queue admission from terminal delivery                         | Codex |
 | 2026-08-30 | Addressed PR #318 Codex review round 3: define terminal receipt polling and pin review-fix to notification head    | Codex |
 | 2026-08-30 | Addressed PR #318 Codex review round 4: separate delivery-attempt IDs and allow invocation-owned head advancement  | Codex |
+| 2026-08-30 | Addressed PR #318 Codex review round 5: derive receipt URL from door origin and require bounded same-ID re-POST    | Codex |
