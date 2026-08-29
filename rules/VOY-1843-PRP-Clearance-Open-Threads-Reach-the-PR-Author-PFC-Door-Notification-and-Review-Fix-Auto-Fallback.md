@@ -198,10 +198,12 @@ GitHub read observes any of the following:
 - the PR is closed or merged.
 
 These are durable, author-visible facts already available to Clearance. PFC's
-HTTP acceptance is delivery, not a claim. A reply by a maintainer or another bot
-is not a PR-author claim. A new head supersedes the old record; if the new head
-later has qualifying state-A threads, it starts a fresh N window. No PFC→Voyager
-callback, polling endpoint, or citizen-name database is introduced.
+`ok=true, queued=true` HTTP acceptance is queue admission only; the later
+terminal send-result `ok=true` confirms delivery, but still does not claim the
+PR. A reply by a maintainer or another bot is not a PR-author claim. A new head
+supersedes the old record; if the new head later has qualifying state-A threads,
+it starts a fresh N window. No PFC→Voyager callback, polling endpoint, or
+citizen-name database is introduced.
 
 ### 4. Governed review-fix fallback
 
@@ -375,3 +377,4 @@ default-off configuration and an implementation CHG.
 |------------|--------------------------------------------------------------------------------------------------------------------|-------|
 | 2026-08-30 | Initial proposed design from the `frankyxhl/alfred#330` unattended state-A incident; no implementation             | Codex |
 | 2026-08-30 | Addressed PR #318 Codex review: author-login-keyed wake-up eligibility and terminal-receipt-derived local deadline | Codex |
+| 2026-08-30 | Addressed PR #318 Codex review round 2: distinguish queue admission from terminal delivery                         | Codex |
