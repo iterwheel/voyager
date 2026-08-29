@@ -13,14 +13,14 @@
 ## What Is It?
 
 A bridge-owned, durable author-wakeup reconciler for Codex review threads that
-remain in Clearance state A: fresh, unresolved, and with no PR-author reply. Ten
-minutes after first observing that state, Voyager sends one PR-level notification
-through the local PFC dashboard door so the delegation graph can route the work
-back to the citizen that opened the PR. If no GitHub-observable claim appears
-within a further twenty minutes, Voyager invokes the existing governed
-`review_fix` loop internally for only the notified thread IDs. This proposal adds
-one external integration edge — Voyager to PFC — and does not weaken Countdown's
-resolution or merge gates.
+remain in author-keyed Clearance state A: fresh, unresolved, and with no reply
+from the PR-author login. Ten minutes after first observing that state, Voyager
+sends one PR-level notification through the local PFC dashboard door so the
+delegation graph can route the work back to the citizen that opened the PR. If
+no GitHub-observable claim appears within a further twenty minutes, Voyager
+invokes the existing governed `review_fix` loop internally for only the notified
+thread IDs. This proposal adds one external integration edge — Voyager to PFC —
+and does not weaken Countdown's resolution or merge gates.
 
 ---
 
@@ -40,7 +40,12 @@ The current safety behavior is already correct and MUST remain intact:
 
 1. Clearance defines state A as not outdated with no author reply
    (`voyager/bots/clearance/classify.py:1-9`, `:134-140`) and judges the
-   no-response case `OPEN` (`voyager/bots/clearance/judge.py:133-147`).
+   no-response case `OPEN` (`voyager/bots/clearance/judge.py:133-147`). For
+   wake-up eligibility, "author" means the PR author specifically: the
+   reconciler calls
+   `latest_author_reply(thread, author_login=pr_author_login)` rather than
+   relying on `classify_thread()`'s login-agnostic fallback. A maintainer or
+   another bot replying does not move this reconciler's state from A to C.
 2. `countdown_loop.py` is the **resolve-loop**, not the merge-loop. It admits
    only mechanically resolvable threads (`voyager/core/countdown_loop.py:429-469`),
    then records a veto without resolving when the semantic gate returns false
@@ -69,8 +74,9 @@ must not turn an `OPEN` verdict into a resolve or merge authorization.
 
 **In scope (v1):**
 
-- Detect current-head Codex threads that remain Clearance state A, verdict
-  `OPEN`, and GitHub `isResolved=false` for a configurable notification delay.
+- Detect current-head Codex threads that remain author-keyed Clearance state A,
+  verdict `OPEN`, and GitHub `isResolved=false` for a configurable notification
+  delay.
 - Batch all due thread IDs for the same repo, PR, and head into one PFC door
   notification.
 - Define durable notification, claim, retry, dedupe, and audit semantics that
@@ -118,7 +124,9 @@ A thread becomes eligible only when all of these are true on a current re-read:
 
 - the PR is open and the head SHA matches the recorded head;
 - the first comment is a Codex review comment;
-- Clearance classification is state A;
+- the reconciler's author-keyed classification is state A: the thread is not
+  outdated and
+  `latest_author_reply(thread, author_login=pr_author_login) is None`;
 - Clearance verdict is `OPEN`;
 - GitHub reports `isResolved=false`; and
 - the state has remained continuously eligible for `N=10` minutes, measured
@@ -149,9 +157,8 @@ repository: <owner/name>
 pull_request: <number>
 head_sha: <40-hex SHA>
 thread_ids: <comma-separated GitHub review-thread node IDs>
-state: A
-state_a_since: <UTC timestamp>
-claim_deadline: <UTC timestamp, successful notification time + M>
+notify_after_minutes: 10
+fallback_after_minutes: 20
 instruction: route this to the citizen that opened the PR; claim by replying
              as the PR author, resolving a listed thread, or pushing a new head
 ```
@@ -166,8 +173,11 @@ same 32-hex value through the door's optional transport `send_id`; the required
 application payload remains `citizen` plus `message` as shown above. A 2xx
 `ok=true, queued=true` response records `notify_queued` but does **not** start M.
 Voyager reads the corresponding terminal send result through the same PFC
-integration boundary; only terminal `ok=true` records `notified` and starts the
-claim window. Connection errors, timeouts, non-2xx responses, malformed/false
+integration boundary; only terminal `ok=true` records `notified`, records the
+terminal-receipt time, and starts the claim window. Voyager then computes
+`claim_deadline = terminal_receipt_at + M` in its own durable ledger. The
+already-sent message carries N and M, never this delivery-derived deadline.
+Connection errors, timeouts, non-2xx responses, malformed/false
 acknowledgements, missing terminal receipts, or terminal delivery failures record
 `notify_failed`, retry with the same idempotency key and bounded backoff, and
 MUST NOT arm auto-fallback. This receipt read is transport confirmation on the
@@ -178,8 +188,8 @@ by a separately deduped notification.
 ### 3. Claim contract without a second edge
 
 `M=20` minutes starts when PFC confirms terminal delivery. The PR is claimed if,
-after that timestamp and before the deadline, a current GitHub read observes any
-of the following:
+after that timestamp and before Voyager's locally recorded deadline, a current
+GitHub read observes any of the following:
 
 - a PR-author reply on any listed review thread, even if the reply is not yet
   substantive enough for Clearance to resolve it;
@@ -195,10 +205,11 @@ callback, polling endpoint, or citizen-name database is introduced.
 
 ### 4. Governed review-fix fallback
 
-At the claim deadline, the bridge re-reads the PR and every listed thread. It
-invokes review-fix only if all notification-time predicates still hold, the head
-is unchanged, no claim evidence exists, the repo is explicitly allowlisted for
-author wake-up **and** review-fix, and auto-fallback is enabled.
+When Voyager's locally recorded claim deadline expires, the bridge re-reads the
+PR and every listed thread. It invokes review-fix only if all notification-time
+predicates still hold, the head is unchanged, no claim evidence exists, the
+repo is explicitly allowlisted for author wake-up **and** review-fix, and
+auto-fallback is enabled.
 
 Refactor the current manual-command entry point into a reusable internal
 invocation contract with `source=clearance_author_wakeup` and an explicit
@@ -229,7 +240,8 @@ Persist a local 0600 JSONL/SQLite-equivalent ledger under
 `~/.voyager/state/clearance-author-wakeup/` with records for:
 
 - `state_a_observed`, `state_a_cleared`, and `state_a_superseded`;
-- `notify_intent`, `notify_failed`, and `notified`;
+- `notify_intent`, `notify_failed`, and `notified` (including terminal receipt
+  time and the locally derived claim deadline);
 - `claimed` with the non-sensitive claim class;
 - `fallback_intent`, `fallback_refused`, `fallback_started`, and
   `fallback_finished`; and
@@ -249,7 +261,7 @@ All new behavior is default-off and env-over-TOML per VOY-1814.
 | `config.toml` | `[clearance.author_wakeup] enabled` | `false` |
 | `config.toml` | `pfc_door_url` | `http://localhost:8420/api/agent-send`; loopback-only URL validation |
 | `config.toml` | `notify_after_minutes` (N) | `10`; positive integer |
-| `config.toml` | `fallback_after_minutes` (M) | `20`; positive integer measured after successful notification |
+| `config.toml` | `fallback_after_minutes` (M) | `20`; positive integer measured after terminal delivery |
 | `config.toml` | `auto_review_fix` | `false` independently of notification enablement |
 | `config.toml` | `allowed_repositories` | empty; exact `owner/name` entries only |
 | `config.toml` | `audit_dir` | `~/.voyager/state/clearance-author-wakeup` |
@@ -321,16 +333,21 @@ TOML or the audit. Runtime files retain VOY-1814 permissions:
 
 ## Testing and Acceptance Criteria
 
-- [ ] A continuously eligible state-A thread produces no notification before N
-  and exactly one batched PFC notification at/after N.
+- [ ] A continuously eligible author-keyed state-A thread produces no
+  notification before N and exactly one batched PFC notification at/after N.
 - [ ] The PFC message contains repository, PR number, current head SHA, and all
-  due thread node IDs, with no secret material.
+  due thread node IDs, plus N/M and a notification ID, with no secret material
+  and no delivery-derived deadline.
 - [ ] Door failure or ambiguous acknowledgement retries safely and cannot arm
   auto-fallback.
+- [ ] Eligibility and claim detection key replies on the PR-author login;
+  maintainer and bot replies neither move author-keyed state A to C nor claim
+  the PR.
 - [ ] PR-author reply, new head, thread resolution, or PR close before M records
-  a claim/supersession and prevents fallback; unrelated comments do not claim.
-- [ ] At M, the fallback re-reads the same head/state and scopes review-fix to
-  the notified thread IDs only.
+  a claim/supersession and prevents fallback.
+- [ ] At the locally computed terminal-delivery-plus-M deadline, the fallback
+  re-reads the same head/state and scopes review-fix to the notified thread IDs
+  only.
 - [ ] Missing L3 envelope, repo allowlist, kill switch, dry-run, head mismatch,
   or verification failure refuses/rolls back exactly as the existing governed
   review-fix path does.
@@ -346,14 +363,15 @@ TOML or the audit. Runtime files retain VOY-1814 permissions:
 ## Open Questions
 
 None for this proposal. The initial values are normative defaults:
-`N=10` minutes to notify and `M=20` additional minutes after successful PFC
-acceptance before auto-fallback. Repository rollout remains separately gated by
+`N=10` minutes to notify and `M=20` additional minutes after terminal PFC
+delivery before auto-fallback. Repository rollout remains separately gated by
 default-off configuration and an implementation CHG.
 
 ---
 
 ## Change History
 
-| Date       | Change                                                                                                 | By    |
-|------------|--------------------------------------------------------------------------------------------------------|-------|
-| 2026-08-30 | Initial proposed design from the `frankyxhl/alfred#330` unattended state-A incident; no implementation | Codex |
+| Date       | Change                                                                                                             | By    |
+|------------|--------------------------------------------------------------------------------------------------------------------|-------|
+| 2026-08-30 | Initial proposed design from the `frankyxhl/alfred#330` unattended state-A incident; no implementation             | Codex |
+| 2026-08-30 | Addressed PR #318 Codex review: author-login-keyed wake-up eligibility and terminal-receipt-derived local deadline | Codex |
