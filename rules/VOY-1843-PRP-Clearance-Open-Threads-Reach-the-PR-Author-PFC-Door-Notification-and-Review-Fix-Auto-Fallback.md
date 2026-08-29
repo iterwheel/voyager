@@ -173,8 +173,17 @@ same 32-hex value through the door's optional transport `send_id`; the required
 application payload remains `citizen` plus `message` as shown above. A 2xx
 `ok=true, queued=true` response records `notify_queued` but does **not** start M.
 Voyager reads the corresponding terminal send result through the same PFC
-integration boundary; only terminal `ok=true` records `notified`, records the
-terminal-receipt time, and starts the claim window. Voyager then computes
+integration boundary by polling
+`GET http://localhost:8420/api/agent-send-result/{send_id}` with the stable
+transport ID from the POST. The correlated receipt contract is:
+
+- `{"found":false}` or an outcome without a boolean `ok` is pending;
+- `{"found":true,"outcome":{"ok":true,...}}` is terminal delivery success; and
+- `{"found":true,"outcome":{"ok":false,...}}` is terminal delivery failure.
+
+Poll every two seconds for at most 90 seconds. Only terminal `ok=true` records
+`notified`, records the terminal-receipt time, and starts the claim window.
+Voyager then computes
 `claim_deadline = terminal_receipt_at + M` in its own durable ledger. The
 already-sent message carries N and M, never this delivery-derived deadline.
 Connection errors, timeouts, non-2xx responses, malformed/false
@@ -202,8 +211,9 @@ These are durable, author-visible facts already available to Clearance. PFC's
 terminal send-result `ok=true` confirms delivery, but still does not claim the
 PR. A reply by a maintainer or another bot is not a PR-author claim. A new head
 supersedes the old record; if the new head later has qualifying state-A threads,
-it starts a fresh N window. No PFC→Voyager callback, polling endpoint, or
-citizen-name database is introduced.
+it starts a fresh N window. No PFC→Voyager **claim** callback or citizen-name
+database is introduced. The correlated terminal-result GET above is required
+transport receipt polling on the existing Voyager→PFC edge, not a claim signal.
 
 ### 4. Governed review-fix fallback
 
@@ -214,11 +224,19 @@ repo is explicitly allowlisted for author wake-up **and** review-fix, and
 auto-fallback is enabled.
 
 Refactor the current manual-command entry point into a reusable internal
-invocation contract with `source=clearance_author_wakeup` and an explicit
-`finding_ids` allowlist. The manual `/review-fix` and `/pr-review-fix` behavior
-remains unchanged. The internal source does not synthesize a GitHub comment or
-fake a webhook actor. It must pass the same controls already enforced by
-`dispatch_review_fix_writeback`:
+invocation contract with `source=clearance_author_wakeup`, an explicit
+`finding_ids` allowlist, and
+`expected_head_sha=notification.head_sha`. At dispatcher entry, fetch the PR
+once and reject with an audited `review_fix_notification_head_mismatch` before
+thread collection or adapter work unless the fetched head exactly equals this
+supplied notification-time SHA. Seed the loop context and every later
+`_ensure_expected_head_current` check from the supplied SHA; never replace it
+with a newly observed head. This closes the race where an author push lands
+after the reconciler's deadline re-read but before review-fix fetches the PR.
+
+The manual `/review-fix` and `/pr-review-fix` behavior remains unchanged. The
+internal source does not synthesize a GitHub comment or fake a webhook actor. It
+must pass the same controls already enforced by `dispatch_review_fix_writeback`:
 
 - `[review_fix]` is configured at autonomy L3 with a safety envelope;
 - bridge dry-run and per-agent repository allowlists permit the operation;
@@ -246,7 +264,7 @@ Persist a local 0600 JSONL/SQLite-equivalent ledger under
   time and the locally derived claim deadline);
 - `claimed` with the non-sensitive claim class;
 - `fallback_intent`, `fallback_refused`, `fallback_started`, and
-  `fallback_finished`; and
+  `fallback_finished`, each keyed to the notification-time expected head; and
 - the dedupe keys, timestamps, attempt counts, and current head.
 
 The local full-fidelity ledger may contain PR and thread IDs and stays 0600.
@@ -264,6 +282,8 @@ All new behavior is default-off and env-over-TOML per VOY-1814.
 | `config.toml` | `pfc_door_url` | `http://localhost:8420/api/agent-send`; loopback-only URL validation |
 | `config.toml` | `notify_after_minutes` (N) | `10`; positive integer |
 | `config.toml` | `fallback_after_minutes` (M) | `20`; positive integer measured after terminal delivery |
+| `config.toml` | `receipt_poll_interval_seconds` | `2`; positive integer |
+| `config.toml` | `receipt_timeout_seconds` | `90`; must exceed the normal 60-second PFC idle-gate ceiling |
 | `config.toml` | `auto_review_fix` | `false` independently of notification enablement |
 | `config.toml` | `allowed_repositories` | empty; exact `owner/name` entries only |
 | `config.toml` | `audit_dir` | `~/.voyager/state/clearance-author-wakeup` |
@@ -342,6 +362,9 @@ TOML or the audit. Runtime files retain VOY-1814 permissions:
   and no delivery-derived deadline.
 - [ ] Door failure or ambiguous acknowledgement retries safely and cannot arm
   auto-fallback.
+- [ ] Terminal receipt polling uses the stable POST `send_id`; pending, terminal
+  success, terminal failure, malformed response, and timeout each produce the
+  specified state transition.
 - [ ] Eligibility and claim detection key replies on the PR-author login;
   maintainer and bot replies neither move author-keyed state A to C nor claim
   the PR.
@@ -350,6 +373,9 @@ TOML or the audit. Runtime files retain VOY-1814 permissions:
 - [ ] At the locally computed terminal-delivery-plus-M deadline, the fallback
   re-reads the same head/state and scopes review-fix to the notified thread IDs
   only.
+- [ ] An author push after the deadline re-read but before dispatcher entry
+  fails the notification-time `expected_head_sha` guard before thread fetch,
+  adapter work, or any GitHub mutation.
 - [ ] Missing L3 envelope, repo allowlist, kill switch, dry-run, head mismatch,
   or verification failure refuses/rolls back exactly as the existing governed
   review-fix path does.
@@ -378,3 +404,4 @@ default-off configuration and an implementation CHG.
 | 2026-08-30 | Initial proposed design from the `frankyxhl/alfred#330` unattended state-A incident; no implementation             | Codex |
 | 2026-08-30 | Addressed PR #318 Codex review: author-login-keyed wake-up eligibility and terminal-receipt-derived local deadline | Codex |
 | 2026-08-30 | Addressed PR #318 Codex review round 2: distinguish queue admission from terminal delivery                         | Codex |
+| 2026-08-30 | Addressed PR #318 Codex review round 3: define terminal receipt polling and pin review-fix to notification head    | Codex |
