@@ -113,6 +113,8 @@ class WakeupLedger:
                     notification_id TEXT,
                     PRIMARY KEY (repository, pull_number, head_sha, thread_id)
                 );
+                CREATE INDEX IF NOT EXISTS idx_observations_active_pull
+                    ON observations (status, repository, pull_number);
                 CREATE TABLE IF NOT EXISTS notifications (
                     notification_id TEXT PRIMARY KEY,
                     data TEXT NOT NULL
@@ -266,6 +268,48 @@ class WakeupLedger:
             for row in rows
         )
 
+    def active_observations(
+        self,
+        repository: str | None = None,
+        pull_number: int | None = None,
+    ) -> tuple[ObservationState, ...]:
+        query = (
+            """
+            SELECT repository, pull_number, head_sha, thread_id,
+                   first_seen, status, notification_id
+            FROM observations
+            WHERE repository=? AND pull_number=? AND status='active'
+            ORDER BY head_sha, thread_id
+            """
+            if repository is not None and pull_number is not None
+            else """
+            SELECT repository, pull_number, head_sha, thread_id,
+                   first_seen, status, notification_id
+            FROM observations
+            WHERE status='active'
+            ORDER BY repository, pull_number, head_sha, thread_id
+            """
+        )
+        params = (
+            (repository, pull_number) if repository is not None and pull_number is not None else ()
+        )
+        with self._connect() as db:
+            rows = db.execute(query, params).fetchall()
+        return tuple(
+            ObservationState(
+                key=ObservationKey(
+                    repository=str(row["repository"]),
+                    pull_number=int(row["pull_number"]),
+                    head_sha=str(row["head_sha"]),
+                    thread_id=str(row["thread_id"]),
+                ),
+                first_seen=datetime.fromisoformat(str(row["first_seen"])),
+                status=str(row["status"]),
+                notification_id=row["notification_id"],
+            )
+            for row in rows
+        )
+
     def assign_notification(
         self,
         keys: Sequence[ObservationKey],
@@ -277,9 +321,53 @@ class WakeupLedger:
                     """
                     UPDATE observations SET status='notified', notification_id=?
                     WHERE repository=? AND pull_number=? AND head_sha=? AND thread_id=?
+                      AND status='active'
                     """,
                     (
                         notification_id,
+                        key.repository,
+                        key.pull_number,
+                        key.head_sha,
+                        key.thread_id,
+                    ),
+                )
+
+    def create_notification_intent(
+        self,
+        notification: NotificationState,
+        keys: Sequence[ObservationKey],
+        *,
+        at: datetime,
+    ) -> None:
+        data = notification.to_dict()
+        encoded = json.dumps(data, separators=(",", ":"), sort_keys=True)
+        with self._connect() as db:
+            db.execute(
+                """
+                INSERT INTO notifications (notification_id, data) VALUES (?, ?)
+                ON CONFLICT(notification_id) DO UPDATE SET data=excluded.data
+                """,
+                (notification.notification_id, encoded),
+            )
+            self._append_event(
+                db,
+                at=at,
+                event="notify_intent",
+                notification_id=notification.notification_id,
+                repository=notification.repository,
+                pull_number=notification.pull_number,
+                head_sha=notification.head_sha,
+                payload=data,
+            )
+            for key in keys:
+                db.execute(
+                    """
+                    UPDATE observations SET status='notified', notification_id=?
+                    WHERE repository=? AND pull_number=? AND head_sha=? AND thread_id=?
+                      AND status='active'
+                    """,
+                    (
+                        notification.notification_id,
                         key.repository,
                         key.pull_number,
                         key.head_sha,
@@ -713,7 +801,7 @@ class AuthorWakeupReconciler:
                 continue
             author_login = ((pull.get("user") or {}).get("login")) or None
             live_by_id = {str(thread.get("id") or ""): thread for thread in live_threads or []}
-            before = {item.key for item in self.ledger.observations() if item.status == "active"}
+            before = {item.key for item in self.ledger.active_observations(repository, pull_number)}
             eligible_keys: set[ObservationKey] = set()
             for persisted in persisted_candidates:
                 live = live_by_id.get(persisted.id)
@@ -760,7 +848,7 @@ class AuthorWakeupReconciler:
     ) -> int:
         cutoff = now - timedelta(minutes=self.config.notify_after_minutes)
         due_groups: dict[tuple[str, int, str], list[ObservationState]] = {}
-        for observation in self.ledger.observations():
+        for observation in self.ledger.active_observations():
             if (
                 observation.status != "active"
                 or observation.notification_id is not None
@@ -786,8 +874,11 @@ class AuthorWakeupReconciler:
                 state="notify_intent",
                 created_at=now,
             )
-            self.ledger.save_notification(notification, event="notify_intent", at=now)
-            self.ledger.assign_notification([item.key for item in observations], notification_id)
+            self.ledger.create_notification_intent(
+                notification,
+                [item.key for item in observations],
+                at=now,
+            )
             await self._post_notification(notification, now)
         return len(due_groups)
 
@@ -806,6 +897,18 @@ class AuthorWakeupReconciler:
             )
             self.ledger.save_notification(revoked, event=revoked.state, at=now)
             return
+        self.ledger.assign_notification(
+            [
+                ObservationKey(
+                    notification.repository,
+                    notification.pull_number,
+                    notification.head_sha,
+                    thread_id,
+                )
+                for thread_id in notification.thread_ids
+            ],
+            notification.notification_id,
+        )
         transport_send_id = transport_send_id or self.send_id_factory()
         message = build_wakeup_message(
             notification_id=notification.notification_id,

@@ -14,6 +14,7 @@ from voyager.bots.clearance.author_wakeup import (
     DoorReceipt,
     NotificationState,
     ObservationKey,
+    ObservationState,
     PfcDoorClient,
     PfcDoorProtocolError,
     WakeupLedger,
@@ -305,7 +306,10 @@ async def test_pfc_client_rejects_non_object_json() -> None:
 
 
 @pytest.mark.asyncio
-async def test_reconciler_waits_for_n_then_batches_and_dedupes(tmp_path: Path) -> None:
+async def test_reconciler_waits_for_n_then_batches_and_dedupes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     now = datetime(2026, 8, 30, 0, 0, tzinfo=UTC)
     repository = "iterwheel/voyager-sandbox"
     head_sha = "b" * 40
@@ -332,6 +336,11 @@ async def test_reconciler_waits_for_n_then_batches_and_dedupes(tmp_path: Path) -
     door.post.return_value = DoorAck("c" * 32, 86400)
     door.receipt.return_value = DoorReceipt(state="pfc_received")
     ledger = WakeupLedger(tmp_path / "wakeup" / "state.db")
+    monkeypatch.setattr(
+        ledger,
+        "observations",
+        lambda: pytest.fail("scan must not materialize full observation history"),
+    )
     reconciler = AuthorWakeupReconciler(
         config=AuthorWakeupConfig(
             enabled=True,
@@ -876,11 +885,20 @@ async def test_post_intent_is_durable_before_door_side_effect(tmp_path: Path) ->
         state="notify_intent",
         created_at=now,
     )
+    key = ObservationKey(
+        notification.repository,
+        notification.pull_number,
+        notification.head_sha,
+        notification.thread_ids[0],
+    )
+    ledger.observe(key, now - timedelta(seconds=1))
     ledger.save_notification(notification, event="notify_intent", at=now)
     durable_states: list[NotificationState] = []
+    durable_observations: list[ObservationState] = []
 
     async def post(**_kwargs: object) -> DoorAck:
         durable_states.extend(ledger.notifications())
+        durable_observations.extend(ledger.observations())
         return DoorAck("c" * 32, 86400)
 
     door = AsyncMock()
@@ -903,6 +921,8 @@ async def test_post_intent_is_durable_before_door_side_effect(tmp_path: Path) ->
     assert durable_states[0].state == "notify_attempt_intent"
     assert durable_states[0].transport_send_id == "c" * 32
     assert durable_states[0].first_posted_at == now
+    assert durable_observations[0].status == "notified"
+    assert durable_observations[0].notification_id == notification.notification_id
 
 
 @pytest.mark.asyncio
