@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import sqlite3
 from collections.abc import Callable, Iterator, Sequence
@@ -730,7 +731,7 @@ class PfcDoorRetentionError(PfcDoorProtocolError):
 @dataclass(frozen=True)
 class DoorAck:
     transport_send_id: str
-    retention_seconds: int
+    retention_seconds: int | float
 
 
 @dataclass(frozen=True)
@@ -777,7 +778,8 @@ class PfcDoorClient:
         retention = payload.get("idempotency_retention_seconds")
         if (
             isinstance(retention, bool)
-            or not isinstance(retention, int)
+            or not isinstance(retention, (int, float))
+            or not math.isfinite(retention)
             or retention < self.required_retention_seconds
         ):
             raise PfcDoorRetentionError(
