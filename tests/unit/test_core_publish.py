@@ -525,6 +525,43 @@ class TestPublishFetchPreparation:
         client.create_issue_comment.assert_not_awaited()
 
     @patch("voyager.core.publish.asyncio.create_subprocess_exec")
+    async def test_fetch_failure_redacts_tokens_from_result_error(
+        self, mock_exec: MagicMock
+    ) -> None:
+        def _side_effect(*args: object, **kwargs: object) -> MagicMock:
+            if len(args) > 1 and str(args[1]) == "fetch":
+                return _mock_subprocess(
+                    returncode=128,
+                    stderr=(
+                        "fatal: https://x-access-token:ghs_test_token_abc123@github.com/"
+                        "iterwheel/voyager.git; fallback=ghp_other_secret; "
+                        "fine=github_pat_SECRET123; dotted=ghs_other.segment.parts"
+                    ),
+                )
+            return _mock_subprocess(returncode=0)
+
+        mock_exec.side_effect = _side_effect
+        client = _mock_client()
+
+        result = await assembly_app_publish(
+            repository="iterwheel/voyager",
+            branch="102-x",
+            base="main",
+            pr_title="x",
+            client=client,
+            cwd="/tmp",
+        )
+
+        assert result.pushed is False
+        assert result.error is not None
+        assert "ghs_test_token_abc123" not in result.error
+        assert "ghp_other_secret" not in result.error
+        assert "github_pat_SECRET123" not in result.error
+        assert "ghs_other.segment.parts" not in result.error
+        assert result.error.count("[redacted]") == 4
+        assert "git fetch failed" in result.error
+
+    @patch("voyager.core.publish.asyncio.create_subprocess_exec")
     async def test_fetch_timeout_stops_before_push(self, mock_exec: MagicMock) -> None:
         timeout_proc = MagicMock()
         timeout_proc.communicate = AsyncMock(side_effect=TimeoutError())
