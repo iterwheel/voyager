@@ -153,88 +153,56 @@ async def dispatch_review_fix_writeback(
         "writeback_failures": [],
     }
 
-    if writeback.get("refusal") is not None:
-        base_result["status"] = "review_fix_refused"
+    async def refuse(reason: str | None = None) -> dict[str, Any]:
+        if reason is not None:
+            result = _refused(base_result, reason)
+        else:
+            base_result["status"] = "review_fix_refused"
+            result = base_result
+        if silent_refusal and repository and pr_number:
+            audit_path = _audit_internal_refusal(
+                cfg=cfg,
+                repository=repository,
+                pr_number=int(pr_number),
+                notification_id=str(invocation.get("notification_id") or "unknown"),
+                expected_head_sha=supplied_expected_head,
+                reason=str((result.get("refusal") or {}).get("reason") or "unknown"),
+            )
+            result["audit_log_path"] = str(audit_path)
+            result["audit_records"] = len(ReviewFixAuditLog(audit_path).read_all())
         return await _maybe_post_refusal_comment(
             client,
             route,
             repository,
-            base_result,
-            silent=silent_refusal,
-        )
-    if not repository:
-        return _refused(base_result, "missing_repository")
-    if not pr_number:
-        return await _refuse_for_dispatch(
-            client,
-            route,
-            repository,
-            base_result,
-            "missing_pr_number",
+            result,
             silent=silent_refusal,
         )
 
+    if writeback.get("refusal") is not None:
+        return await refuse()
+    if not repository:
+        return await refuse("missing_repository")
+    if not pr_number:
+        return await refuse("missing_pr_number")
+
     enablement = _enablement_from_config(cfg)
     if enablement is None:
-        return await _refuse_for_dispatch(
-            client,
-            route,
-            repository,
-            base_result,
-            "missing_review_fix_enablement",
-            silent=silent_refusal,
-        )
+        return await refuse("missing_review_fix_enablement")
     if enablement.autonomy is not Autonomy.L3 or enablement.envelope is None:
-        return await _refuse_for_dispatch(
-            client,
-            route,
-            repository,
-            base_result,
-            "review_fix_requires_l3_envelope",
-            silent=silent_refusal,
-        )
+        return await refuse("review_fix_requires_l3_envelope")
 
     try:
         pull = await client.pull_request(ASSEMBLY_AGENT_SLUG, repository, int(pr_number))
     except Exception:
-        return await _refuse_for_dispatch(
-            client,
-            route,
-            repository,
-            base_result,
-            "pull_request_fetch_failed",
-            silent=silent_refusal,
-        )
+        return await refuse("pull_request_fetch_failed")
 
     guard = _guard_pull_request_target(pull, repository)
     if guard is not None:
-        return await _refuse_for_dispatch(
-            client,
-            route,
-            repository,
-            base_result,
-            guard,
-            silent=silent_refusal,
-        )
+        return await refuse(guard)
 
     if supplied_expected_head and _expected_head_sha(pull) != supplied_expected_head:
         reason = "review_fix_notification_head_mismatch"
-        _audit_internal_refusal(
-            cfg=cfg,
-            repository=repository,
-            pr_number=int(pr_number),
-            notification_id=str(invocation.get("notification_id") or "unknown"),
-            expected_head_sha=supplied_expected_head,
-            reason=reason,
-        )
-        return await _refuse_for_dispatch(
-            client,
-            route,
-            repository,
-            base_result,
-            reason,
-            silent=silent_refusal,
-        )
+        return await refuse(reason)
 
     try:
         threads = await client.pull_request_review_threads(
@@ -243,14 +211,7 @@ async def dispatch_review_fix_writeback(
             pull_number=int(pr_number),
         )
     except Exception:
-        return await _refuse_for_dispatch(
-            client,
-            route,
-            repository,
-            base_result,
-            "review_thread_fetch_failed",
-            silent=silent_refusal,
-        )
+        return await refuse("review_thread_fetch_failed")
 
     audit_log_path = _audit_log_path(cfg, repository, int(pr_number))
     context = _LoopContext(
@@ -752,34 +713,6 @@ def _outcome_dict(outcome: ReviewFixLoopOutcome) -> dict[str, Any]:
     return data
 
 
-async def _refuse_with_comment(
-    client: Any,
-    route: dict[str, Any],
-    repository: str,
-    result: dict[str, Any],
-    reason: str,
-) -> dict[str, Any]:
-    return await _post_refusal_comment(client, route, repository, _refused(result, reason))
-
-
-async def _refuse_for_dispatch(
-    client: Any,
-    route: dict[str, Any],
-    repository: str,
-    result: dict[str, Any],
-    reason: str,
-    *,
-    silent: bool,
-) -> dict[str, Any]:
-    return await _maybe_post_refusal_comment(
-        client,
-        route,
-        repository,
-        _refused(result, reason),
-        silent=silent,
-    )
-
-
 async def _maybe_post_refusal_comment(
     client: Any,
     route: dict[str, Any],
@@ -801,8 +734,9 @@ def _audit_internal_refusal(
     notification_id: str,
     expected_head_sha: str,
     reason: str,
-) -> None:
-    ReviewFixAuditLog(_audit_log_path(cfg, repository, pr_number)).append(
+) -> Path:
+    path = _audit_log_path(cfg, repository, pr_number)
+    ReviewFixAuditLog(path).append(
         ReviewFixAuditRecord(
             round=1,
             ts=datetime.now(UTC),
@@ -813,6 +747,7 @@ def _audit_internal_refusal(
             tests=(reason,),
         )
     )
+    return path
 
 
 async def _post_refusal_comment(

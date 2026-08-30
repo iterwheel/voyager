@@ -338,6 +338,7 @@ def test_internal_dispatch_requires_review_fix_repository_allowlist(
 ) -> None:
     monkeypatch.delenv("DRY_RUN", raising=False)
     client = _FakeReviewFixClient()
+    cfg = _cfg(tmp_path, enablement=_l3(tmp_path), dry_run=False)
 
     result = asyncio.run(
         dispatch_review_fix_for_findings(
@@ -347,7 +348,7 @@ def test_internal_dispatch_requires_review_fix_repository_allowlist(
             expected_head_sha="a" * 40,
             finding_ids=("PRRT_review_fix_1",),
             notification_id="c" * 32,
-            cfg=_cfg(tmp_path, enablement=_l3(tmp_path), dry_run=False),
+            cfg=cfg,
         )
     )
 
@@ -355,6 +356,41 @@ def test_internal_dispatch_requires_review_fix_repository_allowlist(
     assert result["refusal"]["reason"] == "repository_not_allowed"
     assert client.pull_calls == []
     client.upsert_issue_comment.assert_not_awaited()
+    records = ReviewFixAuditLog(result["audit_log_path"]).read_all()
+    assert records[-1].verdict == "refused"
+    assert records[-1].tests == ("repository_not_allowed",)
+
+
+def test_internal_dispatch_audits_missing_enablement_refusal(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("DRY_RUN", raising=False)
+    client = _FakeReviewFixClient()
+    cfg = _cfg(
+        tmp_path,
+        enablement=None,
+        dry_run=False,
+        allowed_repositories={ASSEMBLY_AGENT_SLUG: ("iterwheel/voyager",)},
+    )
+
+    result = asyncio.run(
+        dispatch_review_fix_for_findings(
+            client,
+            repository="iterwheel/voyager",
+            pull_number=187,
+            expected_head_sha="a" * 40,
+            finding_ids=("PRRT_review_fix_1",),
+            notification_id="c" * 32,
+            cfg=cfg,
+        )
+    )
+
+    assert result["status"] == "review_fix_refused"
+    assert result["refusal"]["reason"] == "missing_review_fix_enablement"
+    assert client.pull_calls == []
+    records = ReviewFixAuditLog(result["audit_log_path"]).read_all()
+    assert records[-1].tests == ("missing_review_fix_enablement",)
 
 
 def test_internal_dispatch_requires_explicit_allowlist_even_in_dry_run(

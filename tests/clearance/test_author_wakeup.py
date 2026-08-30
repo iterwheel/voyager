@@ -1873,6 +1873,38 @@ async def test_due_unclaimed_notification_invokes_exact_fallback_once(tmp_path: 
 
 
 @pytest.mark.asyncio
+async def test_fallback_persists_specific_review_fix_refusal_reason(tmp_path: Path) -> None:
+    now = datetime(2026, 8, 30, 1, 0, tzinfo=UTC)
+    github = AsyncMock()
+    github.pull_request.return_value = {
+        "number": 42,
+        "state": "open",
+        "head": {"sha": "b" * 40},
+        "user": {"login": "ryosaeba1985"},
+    }
+    github.pull_request_review_threads.return_value = [_live_thread()]
+    review_fix = AsyncMock(
+        return_value={
+            "status": "review_fix_refused",
+            "refusal": {"reason": "repository_not_allowed"},
+        }
+    )
+    reconciler, ledger, _ = _notified_reconciler(
+        tmp_path,
+        now=now,
+        github=github,
+        auto_review_fix=True,
+        review_fix=review_fix,
+    )
+
+    await reconciler.tick(now=now, scan=False)
+
+    current = ledger.notifications()[0]
+    assert current.state == "fallback_refused"
+    assert current.fallback_status == "repository_not_allowed"
+
+
+@pytest.mark.asyncio
 async def test_restart_resumes_fallback_intent_once(tmp_path: Path) -> None:
     now = datetime(2026, 8, 30, 1, 0, tzinfo=UTC)
     github = AsyncMock()

@@ -1352,7 +1352,11 @@ class AuthorWakeupReconciler:
             return
         result_status = str((result or {}).get("status") or "unknown")
         state = "fallback_refused" if result_status == "review_fix_refused" else "fallback_finished"
-        finished = started.with_updates(state=state, fallback_status=result_status)
+        refusal_reason = str((((result or {}).get("refusal") or {}).get("reason")) or result_status)
+        finished = started.with_updates(
+            state=state,
+            fallback_status=(refusal_reason if state == "fallback_refused" else result_status),
+        )
         self.ledger.save_notification(finished, event=finished.state, at=now)
 
     def _fallback_refusal(
