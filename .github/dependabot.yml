@@ -10,6 +10,9 @@ updates:
         patterns: ["pytest*"]
       lint:
         patterns: ["ruff", "mypy", "bandit*", "pip-audit"]
+    ignore:
+      - dependency-name: "openai"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
