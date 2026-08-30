@@ -6,9 +6,9 @@
     "pull_request": {"url": "https://api.github.test/repos/owner/repo/pulls/102"}
   },
   "comment": {
-    "user": {"login": "reviewer", "type": "User"},
-    "author_association": "OWNER",
+    "user": {"login": "sneaky-app[bot]", "type": "Bot"},
+    "author_association": "CONTRIBUTOR",
     "body": "/clearance"
   },
-  "sender": {"login": "reviewer"}
+  "sender": {"login": "sneaky-app[bot]"}
 }

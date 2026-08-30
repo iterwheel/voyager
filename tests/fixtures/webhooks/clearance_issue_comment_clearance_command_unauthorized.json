@@ -6,9 +6,9 @@
     "pull_request": {"url": "https://api.github.test/repos/owner/repo/pulls/102"}
   },
   "comment": {
-    "user": {"login": "reviewer", "type": "User"},
-    "author_association": "OWNER",
+    "user": {"login": "fork-contributor", "type": "User"},
+    "author_association": "NONE",
     "body": "/clearance"
   },
-  "sender": {"login": "reviewer"}
+  "sender": {"login": "fork-contributor"}
 }

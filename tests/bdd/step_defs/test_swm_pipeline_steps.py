@@ -613,6 +613,13 @@ def given_codex_substantive(ctx, repo: str, pr: int) -> None:
     # cites `parser.py` (file identifier) and is 70+ chars.
     body = "Fixed in `parser.py` by adding the null guard before the dereference call."
     ctx["client"].threads = [_codex_thread(author_reply_body=body)]
+    # Issue #253: a substantive reply alone no longer resolves a thread —
+    # scenarios seeded with this Given model a GENUINE fix, so install the
+    # corroborating investigator (verdict RESOLVED, above the confidence
+    # threshold) plus the diff it needs. Scenarios asserting the
+    # uncorroborated path configure the thread reply without this Given.
+    given_fake_investigator(ctx, "RESOLVED", 0.95, "Fix corroborated in diff")
+    given_stub_diff(ctx, "app.py")
 
 
 @given(
@@ -694,6 +701,9 @@ def given_codex_thread_non_author_reply(ctx, reply_author: str) -> None:
 )
 def given_codex_thread_stale_followup(ctx) -> None:
     ctx["client"].threads = [_codex_thread_ordered(followup_after_reply=False)]
+    # Issue #253: the newer substantive reply needs corroboration to resolve.
+    given_fake_investigator(ctx, "RESOLVED", 0.95, "Fix corroborated in diff")
+    given_stub_diff(ctx, "app.py")
 
 
 @given(

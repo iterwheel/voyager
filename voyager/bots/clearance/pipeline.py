@@ -1162,8 +1162,14 @@ async def _process_thread(
     llm_decision: InvestigationDecision | None = None
     llm_error_str: str | None = None
     llm_model_name: str | None = None
-    investigator_eligible = state == ThreadState.B or (
-        state == ThreadState.A and codex_review_stale
+    investigator_eligible = (
+        state == ThreadState.B
+        or (state == ThreadState.A and codex_review_stale)
+        # Issue #253: substantive state-C author replies are uncorroborated
+        # heuristic hits — the investigator is the corroboration path; without
+        # it (or when it fails) the verdict stays NEEDS_HUMAN_JUDGMENT and the
+        # thread is never auto-resolved on prose alone.
+        or (state == ThreadState.C and decision.substantive is True)
     )
     if (
         investigator is not None

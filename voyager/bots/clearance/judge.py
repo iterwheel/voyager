@@ -133,9 +133,15 @@ def judge(
     if classification == "C":
         substantive = is_substantive_reply(author_reply_body)
         if substantive:
+            # Issue #253: the length/identifier heuristic alone must not
+            # mutate thread state — a fork-PR author can satisfy it with
+            # crafted prose. Route to NEEDS_HUMAN_JUDGMENT; the pipeline sends
+            # substantive state-C threads to the investigator for corroboration
+            # and only a corroborated verdict may resolve.
             return VerdictDecision(
-                Verdict.RESOLVED,
-                "author reply substantive (cites concrete identifier, ≥50 chars) per SWM-1101 step 4-5",
+                Verdict.NEEDS_HUMAN_JUDGMENT,
+                "author reply substantive but uncorroborated; requires investigator "
+                "verdict or head-SHA change (SWM-1101 step 4-5, issue #253)",
                 substantive=True,
             )
         return VerdictDecision(
