@@ -378,6 +378,82 @@ async def test_pi_adapter_executes_omp_in_clone_pushes_branch_and_returns_sha(
 
 
 @pytest.mark.asyncio
+async def test_model_and_verification_subprocesses_receive_only_safe_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    safe_values = {
+        "PATH": "/safe/bin",
+        "HOME": str(tmp_path / "home"),
+        "TMPDIR": str(tmp_path / "tmp"),
+        "LANG": "C.UTF-8",
+    }
+    for name, value in safe_values.items():
+        monkeypatch.setenv(name, value)
+    ambient_secret_names = (
+        "ASSEMBLY_GITHUB_TOKEN",
+        "DEEPSEEK_API_KEY",
+        "GITHUB_WEBHOOK_SECRET_ITERWHEEL_ASSEMBLY",
+        "OPENAI_API_KEY",
+        "VOYAGER_CONFIG_PATH",
+        "VOYAGER_DEEPSEEK_API_KEY",
+    )
+    for name in ambient_secret_names:
+        monkeypatch.setenv(name, f"secret-{name.lower()}")
+
+    recorder = _CommandRecorder(status_porcelain="M voyager/example.py\n")
+    _install_command_fakes(monkeypatch, recorder)
+
+    result = await PiOhMyPiDeepSeekAdapter().execute(_contract(), _context(tmp_path))
+
+    assert result.status == "executed"
+    untrusted_calls = [
+        *recorder.command_calls("omp"),
+        *recorder.command_calls("pytest"),
+        *recorder.command_calls("ruff"),
+        *recorder.command_calls("mypy"),
+    ]
+    assert len(untrusted_calls) == 4
+    allowed_names = {
+        "COLORTERM",
+        "GIT_TERMINAL_PROMPT",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "NO_COLOR",
+        "PATH",
+        "SHELL",
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "TMPDIR",
+        "TZ",
+        "VIRTUAL_ENV",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+    }
+    for call in untrusted_calls:
+        env = call["kwargs"]["env"]
+        assert {name: env[name] for name in safe_values} == safe_values
+        assert set(env) <= allowed_names
+
+    adapter_calls = [
+        call
+        for call in recorder.calls
+        if not any(arg.startswith("assembly-publish-") for arg in call["argv"])
+    ]
+    for call in adapter_calls:
+        env = call["kwargs"].get("env") or {}
+        for name in ambient_secret_names[1:]:
+            assert name not in env
+        assert env.get("ASSEMBLY_GITHUB_TOKEN") != "secret-assembly_github_token"
+
+
+@pytest.mark.asyncio
 async def test_pi_testpilot_blocked_signal_returns_blocked_without_passing_no_changes(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

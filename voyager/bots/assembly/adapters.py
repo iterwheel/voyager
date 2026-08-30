@@ -53,6 +53,27 @@ spotcheck.  New gates should default to ``GateMaturity.L1`` so they
 gradually earn their blocking power.
 """
 _FAILURE_TAIL_LIMIT = 600
+_UNTRUSTED_SUBPROCESS_ENV_KEYS = (
+    "COLORTERM",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "NO_COLOR",
+    "PATH",
+    "SHELL",
+    "SSL_CERT_DIR",
+    "SSL_CERT_FILE",
+    "TEMP",
+    "TERM",
+    "TMP",
+    "TMPDIR",
+    "TZ",
+    "VIRTUAL_ENV",
+    "XDG_CACHE_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+)
 
 
 @dataclass(frozen=True)
@@ -361,7 +382,7 @@ class PiOhMyPiDeepSeekAdapter:
                 omp_argv,
                 cwd=checkout_dir,
                 timeout_seconds=timeout_seconds,
-                env=_omp_env(),
+                env=_untrusted_subprocess_env(),
             )
             details["omp_session_jsonl_path"] = _latest_omp_session_jsonl(checkout_dir)
             if omp.returncode == 0:
@@ -517,7 +538,7 @@ class PiOhMyPiDeepSeekAdapter:
                 contract,
                 checkout_dir,
                 timeout_seconds,
-                git_env,
+                _untrusted_subprocess_env(),
                 secret=token,
             )
             if verification is not None:
@@ -657,16 +678,16 @@ def _write_git_askpass(temp_root: Path) -> Path:
 
 
 def _git_env(*, token: str | None = None, askpass: Path | None = None) -> dict[str, str]:
-    env = dict(os.environ)
-    env["GIT_TERMINAL_PROMPT"] = "0"
+    env = _untrusted_subprocess_env()
     if token and askpass is not None:
         env["GIT_ASKPASS"] = str(askpass)
         env["ASSEMBLY_GITHUB_TOKEN"] = token
     return env
 
 
-def _omp_env() -> dict[str, str]:
-    env = dict(os.environ)
+def _untrusted_subprocess_env() -> dict[str, str]:
+    """Build the minimal ambient env for model and model-written code."""
+    env = {name: os.environ[name] for name in _UNTRUSTED_SUBPROCESS_ENV_KEYS if name in os.environ}
     env["GIT_TERMINAL_PROMPT"] = "0"
     return env
 
