@@ -338,7 +338,9 @@ class PiOhMyPiDeepSeekAdapter:
                     context=context,
                 )
 
-            if _repository_uses_git_lfs(checkout_dir):
+            uses_git_lfs = _repository_uses_git_lfs(checkout_dir)
+            if uses_git_lfs:
+                trusted_lfs_url = _github_lfs_url(repository)
                 lfs_install = await _run_exec(
                     ["git", "lfs", "install", "--local"],
                     cwd=checkout_dir,
@@ -362,7 +364,7 @@ class PiOhMyPiDeepSeekAdapter:
                         context=context,
                     )
                 lfs_pull = await _run_exec(
-                    ["git", "lfs", "pull", "origin"],
+                    ["git", "-c", f"lfs.url={trusted_lfs_url}", "lfs", "pull", "origin"],
                     cwd=checkout_dir,
                     timeout_seconds=timeout_seconds,
                     env=git_auth_env,
@@ -645,6 +647,38 @@ class PiOhMyPiDeepSeekAdapter:
                     context=context,
                 )
 
+            if uses_git_lfs:
+                lfs_push = await _run_exec(
+                    [
+                        "git",
+                        "-c",
+                        f"lfs.url={_github_lfs_url(repository)}",
+                        "lfs",
+                        "push",
+                        "origin",
+                        "HEAD",
+                    ],
+                    cwd=checkout_dir,
+                    timeout_seconds=timeout_seconds,
+                    env=git_auth_env,
+                )
+                if lfs_push.returncode != 0:
+                    return _failed_pi_result(
+                        "Git LFS push failed for Assembly OMP backend.",
+                        token,
+                        details,
+                        failure_diagnostic=_diagnostic_from_process(
+                            phase="git_lfs_push",
+                            command_category="git",
+                            command="git lfs push origin HEAD",
+                            process=lfs_push,
+                            secret=token,
+                        ),
+                        temp_root_path=temp_root_path,
+                        contract=contract,
+                        context=context,
+                    )
+
             publish_result = await publish_branch(
                 repository=repository,
                 branch_name=contract.branch_name,
@@ -717,6 +751,10 @@ def _validate_pi_context(context: AdapterExecutionContext) -> str | None:
 
 def _github_safe_remote(repository: str) -> str:
     return f"https://github.com/{repository}.git"
+
+
+def _github_lfs_url(repository: str) -> str:
+    return f"https://github.com/{repository}.git/info/lfs"
 
 
 def _local_git_config_digest(checkout_dir: Path) -> str | None:

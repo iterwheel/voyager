@@ -582,10 +582,25 @@ async def test_pi_adapter_initializes_local_lfs_before_omp(
     install_call = next(
         call for call in recorder.calls if call["argv"][0:3] == ("git", "lfs", "install")
     )
-    pull_call = next(call for call in recorder.calls if call["argv"][0:3] == ("git", "lfs", "pull"))
+    pull_call = next(
+        call
+        for call in recorder.calls
+        if call["argv"][0] == "git" and call["argv"][3:5] == ("lfs", "pull")
+    )
+    lfs_push_call = next(
+        call
+        for call in recorder.calls
+        if call["argv"][0] == "git" and call["argv"][3:5] == ("lfs", "push")
+    )
     omp_call = recorder.command_calls("omp")[0]
+    branch_push_call = recorder.git_calls("push")[0]
+    trusted_lfs_config = "lfs.url=https://github.com/iterwheel/voyager-sandbox.git/info/lfs"
+    assert trusted_lfs_config in pull_call["argv"]
+    assert trusted_lfs_config in lfs_push_call["argv"]
     assert recorder.calls.index(install_call) < recorder.calls.index(pull_call)
     assert recorder.calls.index(pull_call) < recorder.calls.index(omp_call)
+    assert recorder.calls.index(omp_call) < recorder.calls.index(lfs_push_call)
+    assert recorder.calls.index(lfs_push_call) < recorder.calls.index(branch_push_call)
 
 
 @pytest.mark.asyncio
