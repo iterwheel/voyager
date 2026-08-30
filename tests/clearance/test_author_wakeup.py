@@ -829,6 +829,62 @@ async def test_terminal_checkpoint_distinguishes_semantic_polls_in_same_second(
 
 
 @pytest.mark.asyncio
+async def test_nudge_preserves_canonical_repository_for_state_store_lookup(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 8, 30, 0, 0, tzinfo=UTC)
+    canonical_repository = "IterWheel/Voyager-Sandbox"
+    clearance_store = StateStore(tmp_path / "clearance")
+
+    def append_poll(head_sha: str, at: datetime) -> None:
+        clearance_store.append_poll(
+            PollRecord(
+                ts=at,
+                repo=canonical_repository,
+                pr=42,
+                head_sha=head_sha,
+                status=Status.BLOCKED,
+                threads=[_persisted_thread()],
+            )
+        )
+
+    append_poll("b" * 40, now)
+    github = AsyncMock()
+    github.pull_request.side_effect = [
+        {
+            "number": 42,
+            "state": "open",
+            "head": {"sha": head_sha},
+            "user": {"login": "ryosaeba1985"},
+        }
+        for head_sha in ("b" * 40, "c" * 40)
+    ]
+    github.pull_request_review_threads.return_value = [_live_thread()]
+    ledger = WakeupLedger(tmp_path / "wakeup" / "state.db")
+    reconciler = AuthorWakeupReconciler(
+        config=AuthorWakeupConfig(
+            enabled=True,
+            allowed_repositories=(canonical_repository.lower(),),
+        ),
+        clearance_store=clearance_store,
+        ledger=ledger,
+        github=github,
+        door=AsyncMock(),
+    )
+
+    await reconciler.tick(now=now, scan=True)
+    append_poll("c" * 40, now + timedelta(seconds=1))
+    reconciler.nudge(canonical_repository, 42)
+    await reconciler.tick(now=now + timedelta(seconds=1), scan=True)
+
+    observations = ledger.observations()
+    assert [item.key.head_sha for item in observations] == ["b" * 40, "c" * 40]
+    assert observations[0].status == "superseded"
+    assert observations[1].status == "active"
+    assert observations[1].key.repository == canonical_repository
+
+
+@pytest.mark.asyncio
 async def test_reversible_live_ineligibility_is_rechecked_without_a_new_poll(
     tmp_path: Path,
 ) -> None:
@@ -1309,7 +1365,10 @@ async def test_partial_stale_batch_requeues_eligible_survivors(tmp_path: Path) -
     assert observations["PRRT_one"].status == "active"
     assert observations["PRRT_one"].first_seen == now
     assert observations["PRRT_one"].notification_id is None
-    assert observations["PRRT_two"].status == "notified"
+    assert observations["PRRT_two"].status == "cleared"
+    reactivated = ledger.observe(keys[1], now + timedelta(seconds=1))
+    assert reactivated.status == "active"
+    assert reactivated.first_seen == now + timedelta(seconds=1)
 
 
 @pytest.mark.asyncio

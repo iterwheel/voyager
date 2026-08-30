@@ -430,36 +430,69 @@ class WakeupLedger:
                 head_sha=stale.head_sha,
                 payload=data,
             )
-            for thread_id in surviving_thread_ids:
-                cursor = db.execute(
-                    """
-                    UPDATE observations
-                    SET first_seen=?, status='active', notification_id=NULL
-                    WHERE repository=? AND pull_number=? AND head_sha=? AND thread_id=?
-                      AND notification_id=?
-                    """,
-                    (
-                        at.isoformat(),
-                        stale.repository,
-                        stale.pull_number,
-                        stale.head_sha,
-                        thread_id,
-                        stale.notification_id,
-                    ),
-                )
-                if cursor.rowcount:
-                    self._append_event(
-                        db,
-                        at=at,
-                        event="state_a_observed",
-                        repository=stale.repository,
-                        pull_number=stale.pull_number,
-                        head_sha=stale.head_sha,
-                        payload={
-                            "thread_id": thread_id,
-                            "reactivated_from_notification": stale.notification_id,
-                        },
+            assigned = db.execute(
+                """
+                SELECT thread_id FROM observations
+                WHERE repository=? AND pull_number=? AND head_sha=? AND notification_id=?
+                """,
+                (
+                    stale.repository,
+                    stale.pull_number,
+                    stale.head_sha,
+                    stale.notification_id,
+                ),
+            ).fetchall()
+            survivors = set(surviving_thread_ids)
+            for row in assigned:
+                thread_id = str(row["thread_id"])
+                if thread_id in survivors:
+                    db.execute(
+                        """
+                        UPDATE observations
+                        SET first_seen=?, status='active', notification_id=NULL
+                        WHERE repository=? AND pull_number=? AND head_sha=? AND thread_id=?
+                          AND notification_id=?
+                        """,
+                        (
+                            at.isoformat(),
+                            stale.repository,
+                            stale.pull_number,
+                            stale.head_sha,
+                            thread_id,
+                            stale.notification_id,
+                        ),
                     )
+                    event = "state_a_observed"
+                    payload = {
+                        "thread_id": thread_id,
+                        "reactivated_from_notification": stale.notification_id,
+                    }
+                else:
+                    db.execute(
+                        """
+                        UPDATE observations SET status='cleared'
+                        WHERE repository=? AND pull_number=? AND head_sha=? AND thread_id=?
+                          AND notification_id=?
+                        """,
+                        (
+                            stale.repository,
+                            stale.pull_number,
+                            stale.head_sha,
+                            thread_id,
+                            stale.notification_id,
+                        ),
+                    )
+                    event = "state_a_cleared"
+                    payload = {"thread_id": thread_id}
+                self._append_event(
+                    db,
+                    at=at,
+                    event=event,
+                    repository=stale.repository,
+                    pull_number=stale.pull_number,
+                    head_sha=stale.head_sha,
+                    payload=payload,
+                )
 
     def reconcile_active_observations(
         self,
@@ -785,11 +818,11 @@ class AuthorWakeupReconciler:
         self.clearance_repository_allowed = clearance_repository_allowed
         self._poll_cache: dict[tuple[str, int], PollRecord] = {}
         self._poll_cache_bootstrapped = False
-        self._dirty_scan_targets: set[tuple[str, int]] = set()
+        self._dirty_scan_targets: dict[tuple[str, int], str] = {}
 
     def nudge(self, repository: str, pull_number: int) -> None:
         """Mark one PR's Clearance poll snapshot dirty after webhook writeback."""
-        self._dirty_scan_targets.add((repository.lower(), int(pull_number)))
+        self._dirty_scan_targets[(repository.lower(), int(pull_number))] = repository
 
     async def tick(self, *, now: datetime, scan: bool) -> TickSummary:
         observed = notifications_started = receipts_checked = 0
@@ -839,7 +872,9 @@ class AuthorWakeupReconciler:
         observed_count = 0
         revalidated_keys: set[ObservationKey] = set()
         terminal_targets: set[tuple[str, int]] = set()
-        for (repository, pull_number), poll in latest.items():
+        for (normalized_repository, pull_number), poll in latest.items():
+            repository = poll.repo
+            target = (normalized_repository, pull_number)
             if not self._repository_in_scope(repository):
                 self.ledger.reconcile_active_observations(
                     repository=repository,
@@ -848,7 +883,7 @@ class AuthorWakeupReconciler:
                     eligible_keys=set(),
                     at=now,
                 )
-                terminal_targets.add((repository, pull_number))
+                terminal_targets.add(target)
                 continue
             poll_identity = _poll_identity(poll)
             if self.ledger.terminal_scan_matches(
@@ -857,7 +892,7 @@ class AuthorWakeupReconciler:
                 poll_identity=poll_identity,
                 head_sha=poll.head_sha,
             ):
-                terminal_targets.add((repository, pull_number))
+                terminal_targets.add(target)
                 continue
             persisted_candidates = [
                 thread
@@ -880,7 +915,7 @@ class AuthorWakeupReconciler:
                     reason="no_open_persisted_threads",
                     at=now,
                 )
-                terminal_targets.add((repository, pull_number))
+                terminal_targets.add(target)
                 continue
             try:
                 pull = await self.github.pull_request(CLEARANCE_AGENT_SLUG, repository, pull_number)
@@ -915,7 +950,7 @@ class AuthorWakeupReconciler:
                     ),
                     at=now,
                 )
-                terminal_targets.add((repository, pull_number))
+                terminal_targets.add(target)
                 continue
             author_login = ((pull.get("user") or {}).get("login")) or None
             live_by_id = {str(thread.get("id") or ""): thread for thread in live_threads or []}
@@ -952,10 +987,10 @@ class AuthorWakeupReconciler:
             self._poll_cache_bootstrapped = True
             self._dirty_scan_targets.clear()
             return dict(self._poll_cache)
-        for repository, pull_number in self._dirty_scan_targets:
+        for (normalized_repository, pull_number), repository in self._dirty_scan_targets.items():
             latest_poll = self.clearance_store.latest_poll(repository, pull_number)
             if latest_poll is not None:
-                self._poll_cache[(repository, pull_number)] = latest_poll
+                self._poll_cache[(normalized_repository, pull_number)] = latest_poll
         self._dirty_scan_targets.clear()
         return dict(self._poll_cache)
 
@@ -1336,7 +1371,7 @@ class AuthorWakeupReconciler:
         return None
 
     def _repository_in_scope(self, repository: str) -> bool:
-        if repository not in set(self.config.allowed_repositories):
+        if repository.lower() not in set(self.config.allowed_repositories):
             return False
         if self.clearance_repository_allowed is None:
             return True
@@ -1429,7 +1464,10 @@ def _persisted_predicates_hold(
 ) -> bool:
     latest: PollRecord | None = None
     for poll in clearance_store.read_polls():
-        if poll.repo.lower() == notification.repository and poll.pr == notification.pull_number:
+        if (
+            poll.repo.lower() == notification.repository.lower()
+            and poll.pr == notification.pull_number
+        ):
             latest = poll
     if latest is None or latest.head_sha != notification.head_sha:
         return False
