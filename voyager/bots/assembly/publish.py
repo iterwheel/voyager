@@ -50,7 +50,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from .subprocess_env import scoped_git_env
+from .execution_env import scoped_git_env
 
 _log = logging.getLogger(__name__)
 _COMMIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")

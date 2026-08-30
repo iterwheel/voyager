@@ -40,10 +40,10 @@ from .constants import (
     ASSEMBLY_FAKE_SUBPROCESS_ALLOW_ENV,
     ASSEMBLY_FAKE_SUBPROCESS_OUTPUT_ENV,
 )
+from .execution_env import scoped_git_env, untrusted_subprocess_env
 from .job_contract import AssemblyJobContract
 from .maturity import GateMaturity
 from .publish import publish_branch
-from .subprocess_env import scoped_git_env, untrusted_subprocess_env
 
 _COMMIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 _AC_SPOTCHECK_MATURITY: GateMaturity = GateMaturity.L3

@@ -1,4 +1,4 @@
-"""Scoped subprocess environments for Assembly's untrusted execution boundary."""
+"""Scoped environments for Assembly's untrusted execution boundary."""
 
 from __future__ import annotations
 
