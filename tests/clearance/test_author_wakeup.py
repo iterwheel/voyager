@@ -42,7 +42,12 @@ def _persisted_thread(**overrides: object) -> Thread:
     return Thread.model_validate(data)
 
 
-def _live_thread(*, reply_login: str | None = None, resolved: bool = False) -> dict:
+def _live_thread(
+    *,
+    reply_login: str | None = None,
+    resolved: bool = False,
+    thread_id: str = "PRRT_state_a",
+) -> dict:
     comments = [
         {
             "databaseId": 101,
@@ -61,11 +66,40 @@ def _live_thread(*, reply_login: str | None = None, resolved: bool = False) -> d
             }
         )
     return {
-        "id": "PRRT_state_a",
+        "id": thread_id,
         "isResolved": resolved,
         "isOutdated": False,
         "comments": {"nodes": comments},
     }
+
+
+def _delivery_dependencies(
+    tmp_path: Path,
+    notification: NotificationState,
+    now: datetime,
+) -> tuple[StateStore, AsyncMock]:
+    clearance_store = StateStore(tmp_path / "clearance")
+    clearance_store.append_poll(
+        PollRecord(
+            ts=now - timedelta(minutes=1),
+            repo=notification.repository,
+            pr=notification.pull_number,
+            head_sha=notification.head_sha,
+            status=Status.BLOCKED,
+            threads=[_persisted_thread(id=notification.thread_ids[0])],
+        )
+    )
+    github = AsyncMock()
+    github.pull_request.return_value = {
+        "number": notification.pull_number,
+        "state": "open",
+        "head": {"sha": notification.head_sha},
+        "user": {"login": "ryosaeba1985"},
+    }
+    github.pull_request_review_threads.return_value = [
+        _live_thread(thread_id=notification.thread_ids[0])
+    ]
+    return clearance_store, github
 
 
 def test_author_wakeup_eligibility_keys_replies_to_pr_author() -> None:
@@ -807,11 +841,12 @@ async def test_reconciler_reposts_same_id_after_ambiguous_window(tmp_path: Path)
     door = AsyncMock()
     door.receipt.return_value = DoorReceipt(state="pending")
     door.post.return_value = DoorAck("c" * 32, 86400)
+    clearance_store, github = _delivery_dependencies(tmp_path, notification, now)
     reconciler = AuthorWakeupReconciler(
         config=AuthorWakeupConfig(enabled=True, allowed_repositories=(notification.repository,)),
-        clearance_store=StateStore(tmp_path / "clearance"),
+        clearance_store=clearance_store,
         ledger=ledger,
-        github=AsyncMock(),
+        github=github,
         door=door,
         send_id_factory=lambda: "d" * 32,
     )
@@ -846,11 +881,12 @@ async def test_reconciler_uses_new_id_after_terminal_failure(tmp_path: Path) -> 
     door = AsyncMock()
     door.receipt.return_value = DoorReceipt(state="routing_failed", reason="no author route")
     door.post.return_value = DoorAck("d" * 32, 86400)
+    clearance_store, github = _delivery_dependencies(tmp_path, notification, now)
     reconciler = AuthorWakeupReconciler(
         config=AuthorWakeupConfig(enabled=True, allowed_repositories=(notification.repository,)),
-        clearance_store=StateStore(tmp_path / "clearance"),
+        clearance_store=clearance_store,
         ledger=ledger,
-        github=AsyncMock(),
+        github=github,
         door=door,
         send_id_factory=lambda: "d" * 32,
     )
@@ -904,14 +940,15 @@ async def test_post_intent_is_durable_before_door_side_effect(tmp_path: Path) ->
     door = AsyncMock()
     door.post.side_effect = post
     door.receipt.return_value = DoorReceipt(state="pending")
+    clearance_store, github = _delivery_dependencies(tmp_path, notification, now)
     reconciler = AuthorWakeupReconciler(
         config=AuthorWakeupConfig(
             enabled=True,
             allowed_repositories=(notification.repository,),
         ),
-        clearance_store=StateStore(tmp_path / "clearance"),
+        clearance_store=clearance_store,
         ledger=ledger,
-        github=AsyncMock(),
+        github=github,
         door=door,
         send_id_factory=lambda: "c" * 32,
     )
@@ -945,14 +982,15 @@ async def test_ambiguous_initial_post_reuses_same_transport_id(tmp_path: Path) -
         DoorAck("c" * 32, 86400),
     ]
     door.receipt.return_value = DoorReceipt(state="pending")
+    clearance_store, github = _delivery_dependencies(tmp_path, notification, now)
     reconciler = AuthorWakeupReconciler(
         config=AuthorWakeupConfig(
             enabled=True,
             allowed_repositories=(notification.repository,),
         ),
-        clearance_store=StateStore(tmp_path / "clearance"),
+        clearance_store=clearance_store,
         ledger=ledger,
-        github=AsyncMock(),
+        github=github,
         door=door,
         send_id_factory=lambda: "c" * 32,
     )
@@ -1057,6 +1095,63 @@ async def test_recovery_rechecks_current_repository_scope(
 
     door.post.assert_not_awaited()
     assert ledger.notifications()[0].state == "notify_scope_revoked"
+
+
+@pytest.mark.asyncio
+async def test_recovered_notification_revalidates_live_state_before_post(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 8, 30, 0, 2, tzinfo=UTC)
+    repository = "iterwheel/voyager-sandbox"
+    head_sha = "b" * 40
+    clearance_store = StateStore(tmp_path / "clearance")
+    clearance_store.append_poll(
+        PollRecord(
+            ts=now - timedelta(minutes=1),
+            repo=repository,
+            pr=42,
+            head_sha=head_sha,
+            status=Status.BLOCKED,
+            threads=[_persisted_thread()],
+        )
+    )
+    ledger = WakeupLedger(tmp_path / "state.db")
+    notification = NotificationState(
+        notification_id="a" * 32,
+        repository=repository,
+        pull_number=42,
+        head_sha=head_sha,
+        thread_ids=("PRRT_state_a",),
+        state="notify_intent",
+        created_at=now - timedelta(seconds=1),
+    )
+    ledger.save_notification(notification, event="notify_intent", at=now)
+    github = AsyncMock()
+    github.pull_request.return_value = {
+        "number": 42,
+        "state": "closed",
+        "head": {"sha": head_sha},
+        "user": {"login": "ryosaeba1985"},
+    }
+    github.pull_request_review_threads.return_value = [_live_thread()]
+    door = AsyncMock()
+    reconciler = AuthorWakeupReconciler(
+        config=AuthorWakeupConfig(
+            enabled=True,
+            allowed_repositories=(repository,),
+        ),
+        clearance_store=clearance_store,
+        ledger=ledger,
+        github=github,
+        door=door,
+    )
+
+    await reconciler.tick(now=now, scan=False)
+
+    door.post.assert_not_awaited()
+    current = ledger.notifications()[0]
+    assert current.state == "notify_stale"
+    assert current.terminal_reason == "pull_not_open"
 
 
 @pytest.mark.asyncio
@@ -1304,3 +1399,60 @@ async def test_due_unclaimed_notification_invokes_exact_fallback_once(tmp_path: 
         "fallback_started",
         "fallback_finished",
     ]
+
+
+@pytest.mark.asyncio
+async def test_restart_resumes_fallback_intent_once(tmp_path: Path) -> None:
+    now = datetime(2026, 8, 30, 1, 0, tzinfo=UTC)
+    github = AsyncMock()
+    github.pull_request.return_value = {
+        "number": 42,
+        "state": "open",
+        "head": {"sha": "b" * 40},
+        "user": {"login": "ryosaeba1985"},
+    }
+    github.pull_request_review_threads.return_value = [_live_thread()]
+    review_fix = AsyncMock(return_value={"status": "review_fix_succeeded"})
+    reconciler, ledger, notification = _notified_reconciler(
+        tmp_path,
+        now=now,
+        github=github,
+        auto_review_fix=True,
+        review_fix=review_fix,
+    )
+    ledger.save_notification(
+        notification.with_updates(state="fallback_intent"),
+        event="fallback_intent",
+        at=now,
+    )
+
+    await reconciler.tick(now=now, scan=False)
+
+    review_fix.assert_awaited_once()
+    assert ledger.notifications()[0].state == "fallback_finished"
+
+
+@pytest.mark.asyncio
+async def test_restart_fails_closed_for_ambiguous_fallback_started(tmp_path: Path) -> None:
+    now = datetime(2026, 8, 30, 1, 0, tzinfo=UTC)
+    github = AsyncMock()
+    review_fix = AsyncMock()
+    reconciler, ledger, notification = _notified_reconciler(
+        tmp_path,
+        now=now,
+        github=github,
+        auto_review_fix=True,
+        review_fix=review_fix,
+    )
+    ledger.save_notification(
+        notification.with_updates(state="fallback_started"),
+        event="fallback_started",
+        at=now,
+    )
+
+    await reconciler.tick(now=now, scan=False)
+
+    review_fix.assert_not_awaited()
+    current = ledger.notifications()[0]
+    assert current.state == "fallback_refused"
+    assert current.fallback_status == "restart_after_fallback_started"

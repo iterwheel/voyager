@@ -63,6 +63,7 @@ class NotificationState:
     recipient_citizen: str | None = None
     claim_class: str | None = None
     fallback_status: str | None = None
+    terminal_reason: str | None = None
 
     def with_updates(self, **changes: Any) -> NotificationState:
         return replace(self, **changes)
@@ -712,7 +713,14 @@ class AuthorWakeupReconciler:
             ):
                 await self._post_notification(notification, now)
         for notification in self.ledger.notifications():
-            if notification.state != "notified":
+            if notification.state == "fallback_started":
+                refused = notification.with_updates(
+                    state="fallback_refused",
+                    fallback_status="restart_after_fallback_started",
+                )
+                self.ledger.save_notification(refused, event=refused.state, at=now)
+                continue
+            if notification.state not in {"notified", "fallback_intent"}:
                 continue
             await self._check_claim_or_fallback(notification, now)
         return TickSummary(
@@ -879,7 +887,7 @@ class AuthorWakeupReconciler:
                 [item.key for item in observations],
                 at=now,
             )
-            await self._post_notification(notification, now)
+            await self._post_notification(notification, now, live_revalidated=True)
         return len(due_groups)
 
     async def _post_notification(
@@ -889,6 +897,7 @@ class AuthorWakeupReconciler:
         *,
         transport_send_id: str | None = None,
         same_id_repost: bool = False,
+        live_revalidated: bool = False,
     ) -> None:
         if not self._repository_in_scope(notification.repository):
             revoked = notification.with_updates(
@@ -897,6 +906,18 @@ class AuthorWakeupReconciler:
             )
             self.ledger.save_notification(revoked, event=revoked.state, at=now)
             return
+        if not live_revalidated:
+            eligible, reason = await self._delivery_revalidation(notification)
+            if eligible is None:
+                return
+            if not eligible:
+                stale = notification.with_updates(
+                    state="notify_stale",
+                    next_delivery_attempt_at=None,
+                    terminal_reason=reason,
+                )
+                self.ledger.save_notification(stale, event=stale.state, at=now)
+                return
         self.ledger.assign_notification(
             [
                 ObservationKey(
@@ -964,6 +985,53 @@ class AuthorWakeupReconciler:
         )
         event = "notify_same_id_repost" if same_id_repost else queued.state
         self.ledger.save_notification(queued, event=event, at=now)
+
+    async def _delivery_revalidation(
+        self,
+        notification: NotificationState,
+    ) -> tuple[bool | None, str]:
+        try:
+            pull = await self.github.pull_request(
+                CLEARANCE_AGENT_SLUG,
+                notification.repository,
+                notification.pull_number,
+            )
+            live_threads = await self.github.pull_request_review_threads(
+                CLEARANCE_AGENT_SLUG,
+                notification.repository,
+                notification.pull_number,
+            )
+            latest = self.clearance_store.latest_poll(
+                notification.repository,
+                notification.pull_number,
+            )
+        except Exception:
+            return None, "revalidation_unavailable"
+        if str(pull.get("state") or "").lower() != "open":
+            return False, "pull_not_open"
+        if str((pull.get("head") or {}).get("sha") or "") != notification.head_sha:
+            return False, "head_superseded"
+        if latest is None or latest.head_sha != notification.head_sha:
+            return False, "clearance_predicates_changed"
+        author_login = (pull.get("user") or {}).get("login")
+        if not isinstance(author_login, str) or not author_login.strip():
+            return False, "missing_pr_author_login"
+        persisted_by_id = {thread.id: thread for thread in latest.threads}
+        live_by_id = {str(thread.get("id") or ""): thread for thread in live_threads or []}
+        for thread_id in notification.thread_ids:
+            persisted = persisted_by_id.get(thread_id)
+            live = live_by_id.get(thread_id)
+            if (
+                persisted is None
+                or live is None
+                or not is_author_wakeup_eligible(
+                    persisted,
+                    live,
+                    pr_author_login=author_login,
+                )
+            ):
+                return False, "listed_thread_not_eligible"
+        return True, "eligible"
 
     async def _check_receipt(self, notification: NotificationState, now: datetime) -> None:
         if not notification.transport_send_id:

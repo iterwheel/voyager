@@ -178,13 +178,14 @@ this state machine.
 | 2026-08-30 | Created implementation CHG from merged VOY-1843 and owner start instruction | In progress; no production code written yet |
 | 2026-08-30 | Plan self-review against merged VOY-1843 and current config/server/review-fix seams | PASS — all PRP config, receipt, claim, fallback, rollout, and rollback surfaces mapped; PFC receipt dependency fails closed |
 | 2026-08-30 | Sequential RED/GREEN cycles for config, durable reconciler/receipt state machine, claim/fallback, internal review-fix guard, and bridge schedule | PASS — each behavior observed failing before its production change; no split worker configured |
-| 2026-08-30 | Focused touched-surface pytest | PASS — 100 passed |
+| 2026-08-30 | Focused touched-surface pytest | PASS — 103 passed |
 | 2026-08-30 | Touched-file Ruff, mypy, and Bandit | PASS — Ruff clean/format clean; mypy 6 source files clean; Bandit no findings |
 | 2026-08-30 | PR #319 Codex review: revalidate every due observation in the current successful scan and restart N after a cleared key becomes eligible again | PASS — allowlist removal clears state, read failure cannot page, and same-head reactivation resets `first_seen` |
 | 2026-08-30 | PR #319 current-head Codex review: gate every recovered/retried POST on current scope and stop interval rescans of terminal history | PASS — scope revocation is terminal before PFC; durable poll checkpoints plus webhook-targeted cache refresh bound steady-state scans to active/new PRs |
 | 2026-08-30 | PR #319 review round 3: intersect wake-up with the explicit Clearance bridge gate, keep reversible live ineligibility in the candidate set, and target check-suite nudges per route | PASS — dynamic gate removal clears/disarms, same-poll reopen is re-read, and each route refreshes its own PR |
 | 2026-08-30 | PR #319 review round 4: distinguish same-second terminal and OPEN poll records | PASS — checkpoint identity is a stable SHA-256 of the complete `PollRecord`, not its second-level timestamp |
 | 2026-08-30 | PR #319 review round 5: atomically persist notification intent with observation assignments and avoid full-history observation scans | PASS — recovery repairs assignments before PFC; indexed active-only queries drive current-PR validation and due selection |
+| 2026-08-30 | PR #319 review round 6: live-revalidate every recovered/retried delivery and reconcile durable fallback in-progress states | PASS — read ambiguity waits, stale facts terminate before PFC, intent resumes once, and ambiguous started work fails closed without reinvocation |
 
 ---
 
