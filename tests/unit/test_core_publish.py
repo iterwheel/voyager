@@ -534,7 +534,8 @@ class TestPublishFetchPreparation:
                     returncode=128,
                     stderr=(
                         "fatal: https://x-access-token:ghs_test_token_abc123@github.com/"
-                        "iterwheel/voyager.git; fallback=ghp_other_secret"
+                        "iterwheel/voyager.git; fallback=ghp_other_secret; "
+                        "fine=github_pat_SECRET123; dotted=ghs_other.segment.parts"
                     ),
                 )
             return _mock_subprocess(returncode=0)
@@ -555,7 +556,9 @@ class TestPublishFetchPreparation:
         assert result.error is not None
         assert "ghs_test_token_abc123" not in result.error
         assert "ghp_other_secret" not in result.error
-        assert result.error.count("[redacted]") == 2
+        assert "github_pat_SECRET123" not in result.error
+        assert "ghs_other.segment.parts" not in result.error
+        assert result.error.count("[redacted]") == 4
         assert "git fetch failed" in result.error
 
     @patch("voyager.core.publish.asyncio.create_subprocess_exec")

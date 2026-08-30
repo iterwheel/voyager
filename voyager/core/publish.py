@@ -60,15 +60,14 @@ import asyncio
 import contextlib
 import logging
 import os
-import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-_log = logging.getLogger(__name__)
+from voyager.core.redaction import sanitize_public_text
 
-_GITHUB_TOKEN_RE = re.compile(r"gh[opsru]_[A-Za-z0-9_]+")
+_log = logging.getLogger(__name__)
 
 CODEX_REVIEW_TRIGGER_BODY = "@codex review"
 """Verbatim trigger body posted on the PR after each push."""
@@ -100,9 +99,9 @@ class PublishResult:
 
 
 def _sanitize(value: str, token: str) -> str:
-    """Replace *token* and any ``gh*_`` pattern with ``[redacted]``."""
+    """Replace *token*, credentials, and canonical secret shapes."""
     sanitized = value.replace(token, "[redacted]") if token else value
-    return _GITHUB_TOKEN_RE.sub("[redacted]", sanitized)
+    return sanitize_public_text(sanitized)
 
 
 def _write_git_askpass(temp_dir: Path) -> Path:
