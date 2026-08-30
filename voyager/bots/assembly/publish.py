@@ -332,6 +332,29 @@ async def publish_branch(
                 phase="git_publish_remote_add",
                 command="git remote add",
             )
+
+        # Give Git LFS a local ref in the trusted repository. A raw object ID
+        # selects Git objects for normal push but does not establish the local
+        # ref that Git LFS expects while enumerating media for upload.
+        source_ref = "refs/heads/assembly-source"
+        rc_ref, stdout_ref, stderr_ref, ref_timed_out = await _run_git_push(
+            ["git", "update-ref", source_ref, resolved_source_sha],
+            cwd=temp_dir,
+            timeout_seconds=timeout_seconds,
+            env=metadata_env,
+        )
+        if rc_ref != 0:
+            return PublishResult(
+                success=False,
+                message=f"Failed to pin trusted source ref: {stderr_ref.strip()}",
+                returncode=rc_ref,
+                stdout=stdout_ref,
+                stderr=stderr_ref,
+                timed_out=ref_timed_out,
+                phase="git_publish_source_ref",
+                command="git update-ref",
+            )
+
         # ---- Step 2: fetch target branch for lease baseline ----
         # Fetch the branch into the named remote's tracking ref so that
         # --force-with-lease has a baseline to check.  On first push the
@@ -386,6 +409,7 @@ async def publish_branch(
         # ---- Step 3: upload LFS objects from the pinned source commit ----
         if push_lfs:
             trusted_lfs_url = f"{remote_url}/info/lfs"
+            checkout_lfs_storage = object_dir.parent / "lfs"
             rc_lfs, stdout_lfs, stderr_lfs, lfs_timed_out = await _run_git_push(
                 [
                     "git",
@@ -393,10 +417,12 @@ async def publish_branch(
                     f"lfs.url={trusted_lfs_url}",
                     "-c",
                     f"lfs.pushurl={trusted_lfs_url}",
+                    "-c",
+                    f"lfs.storage={checkout_lfs_storage}",
                     "lfs",
                     "push",
                     remote_name,
-                    resolved_source_sha,
+                    source_ref,
                 ],
                 cwd=temp_dir,
                 timeout_seconds=timeout_seconds,

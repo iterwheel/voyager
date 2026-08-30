@@ -551,10 +551,21 @@ class TestPublishBranch:
             assert env["GIT_ALTERNATE_OBJECT_DIRECTORIES"] == str(tmp_path / ".git" / "objects")
         push_call = next(call for call in recorder.calls if call["argv"][0:2] == ("git", "push"))
         assert f"{VALID_SHA}:refs/heads/{TEST_BRANCH}" in push_call["argv"]
-        assert any(
-            call["argv"][0] == "git" and call["argv"][-4:-2] == ("lfs", "push")
-            for call in authenticated_calls
+        source_ref_call = next(
+            call
+            for call in recorder.calls
+            if call["argv"][0:3] == ("git", "update-ref", "refs/heads/assembly-source")
         )
+        assert source_ref_call["argv"][-1] == VALID_SHA
+        assert TEST_TOKEN not in (source_ref_call["kwargs"].get("env") or {}).values()
+        lfs_push_call = next(
+            call
+            for call in authenticated_calls
+            if call["argv"][0] == "git"
+            and ("lfs", "push") in zip(call["argv"], call["argv"][1:], strict=False)
+        )
+        assert f"lfs.storage={tmp_path / '.git' / 'lfs'}" in lfs_push_call["argv"]
+        assert lfs_push_call["argv"][-1] == "refs/heads/assembly-source"
 
     @pytest.mark.asyncio
     async def test_token_never_appears_in_argv(
