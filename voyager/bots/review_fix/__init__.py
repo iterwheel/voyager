@@ -12,7 +12,7 @@ from .constants import (
     REVIEW_FIX_KIND,
 )
 from .routing import route_review_fix_event, should_run_review_fix
-from .writeback import dispatch_review_fix_writeback
+from .writeback import dispatch_review_fix_for_findings, dispatch_review_fix_writeback
 
 __all__ = [
     "REVIEW_FIX_AGENT_ID",
@@ -22,6 +22,7 @@ __all__ = [
     "REVIEW_FIX_DYNAMIC",
     "REVIEW_FIX_KIND",
     "ReviewFixCommand",
+    "dispatch_review_fix_for_findings",
     "dispatch_review_fix_writeback",
     "parse_review_fix_command",
     "route_review_fix_event",

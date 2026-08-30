@@ -18,7 +18,7 @@ The Voyager discussion tracker for 2026-08-30.
 | DN | Status | Parent | Source | Created | Updated | Topic |
 |----|--------|--------|--------|---------|---------|-------|
 | D1 | Done | — | graph-engineering.bob | 04:50 | 04:52 | Clearance state-A author wake-up and review-fix fallback PRP |
-| D2 | WIP | D1 | graph-engineering.bob | 10:20 | — | Implement VOY-1843 via CHG-1844 and sandbox-first rollout |
+| D2 | WIP | D1 | graph-engineering.bob | 10:20 | 10:47 | Implement VOY-1843 via CHG-1844 and sandbox-first rollout |
 
 
 ## Archived Items
@@ -40,7 +40,8 @@ The Voyager discussion tracker for 2026-08-30.
 
 - **Source:** Owner-approved implementation task from `graph-engineering.bob` after PR #318 merged.
 - **Contract:** VOY-1844 CHG; one implementation PR, followed by VOY-1814 sandbox notification canary.
-- **Status:** CHG in progress; production code not yet written.
+- **Status:** Implementation and touched-surface validation complete locally;
+  implementation PR and post-merge sandbox canary remain.
 
 ---
 

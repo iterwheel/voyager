@@ -83,6 +83,26 @@ kill_switch_path = "~/.voyager/review-fix.disabled"
 escalation = "request-human-review"
 verify_command = "pytest tests/unit"
 
+# Clearance author wake-up is independently default-off and exact-repository
+# allowlisted. Enable notification delivery only after the PFC door advertises
+# the required durable send-ID retention and author-delivery receipt contract.
+# Auto review-fix stays off through the notification-only sandbox canary.
+[clearance.author_wakeup]
+enabled = false
+pfc_door_url = "http://localhost:8420/api/agent-send"
+reconcile_interval_seconds = 60
+notify_after_minutes = 10
+fallback_after_minutes = 20
+receipt_poll_interval_seconds = 2
+receipt_timeout_seconds = 90
+receipt_repost_safety_margin_seconds = 300
+max_same_id_reposts = 3
+max_delivery_attempts = 3
+required_send_id_retention_seconds = 86400
+auto_review_fix = false
+allowed_repositories = []
+audit_dir = "~/.voyager/state/clearance-author-wakeup"
+
 # Review-thread resolution runs out-of-band via `vyg countdown resolve-conversation`
 # (machine account, identity-gated). The former `[countdown.dedicated_pat_fallback]`
 # section was removed per VOY-1830 and is no longer parsed.

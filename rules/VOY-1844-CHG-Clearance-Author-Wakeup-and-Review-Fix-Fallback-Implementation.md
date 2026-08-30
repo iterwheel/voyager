@@ -142,23 +142,23 @@ this state machine.
 
 ## Acceptance Criteria
 
-- [ ] All author-wakeup settings default off/deny and env overrides win over
+- [x] All author-wakeup settings default off/deny and env overrides win over
   TOML without weakening validation.
-- [ ] Eligibility ignores maintainer/bot replies and keys only on the PR-author
+- [x] Eligibility ignores maintainer/bot replies and keys only on the PR-author
   login, current head, OPEN verdict, and unresolved/non-outdated state.
-- [ ] N timing, PR/head batching, duplicate webhook/restart dedupe, and audit
+- [x] N timing, PR/head batching, duplicate webhook/restart dedupe, and audit
   redaction are deterministic.
-- [ ] The PFC message carries exactly the reviewed v1 application fields and no
+- [x] The PFC message carries exactly the reviewed v1 application fields and no
   delivery-derived deadline.
-- [ ] Receipt correlation, same-ID/new-ID retries, 24h retention, safety margin,
+- [x] Receipt correlation, same-ID/new-ID retries, 24h retention, safety margin,
   `pfc_received`/`author_delivered`, and delivery-unknown behavior match
   VOY-1843.
-- [ ] Claim evidence cancels fallback; stale heads and unrelated replies behave
+- [x] Claim evidence cancels fallback; stale heads and unrelated replies behave
   per the merged contract.
-- [ ] Internal review-fix handles only the notified finding IDs, enforces the
+- [x] Internal review-fix handles only the notified finding IDs, enforces the
   notification-time head, advances only through its own verified commits, and
   retains all L3/kill-switch/dry-run/allowlist controls.
-- [ ] No author-wakeup path resolves, approves, or merges a PR.
+- [x] No author-wakeup path resolves, approves, or merges a PR.
 - [ ] Focused tests, static checks, CI, and the sandbox notification canary pass.
 
 ---
@@ -177,6 +177,9 @@ this state machine.
 |------|--------|--------|
 | 2026-08-30 | Created implementation CHG from merged VOY-1843 and owner start instruction | In progress; no production code written yet |
 | 2026-08-30 | Plan self-review against merged VOY-1843 and current config/server/review-fix seams | PASS — all PRP config, receipt, claim, fallback, rollout, and rollback surfaces mapped; PFC receipt dependency fails closed |
+| 2026-08-30 | Sequential RED/GREEN cycles for config, durable reconciler/receipt state machine, claim/fallback, internal review-fix guard, and bridge schedule | PASS — each behavior observed failing before its production change; no split worker configured |
+| 2026-08-30 | Focused touched-surface pytest | PASS — 90 passed |
+| 2026-08-30 | Touched-file Ruff, mypy, and Bandit | PASS — Ruff clean/format clean; mypy 5 source files clean; Bandit no findings |
 
 ---
 

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import tomllib
+from pathlib import Path
+
 from voyager.core.config import load_config
 from voyager.governance.enablement import Autonomy
 
@@ -38,3 +41,18 @@ def test_config_example_records_review_fix_l3_enablement() -> None:
     assert cfg.review_fix.enablement.envelope.max_rounds == 3
     assert cfg.review_fix.enablement.envelope.max_fixes_per_round == 2
     assert str(cfg.review_fix.audit_dir).endswith("/.voyager/state/review-fix/audit")
+
+
+def test_config_example_keeps_author_wakeup_and_fallback_default_off() -> None:
+    raw = tomllib.loads(Path("config.example.toml").read_text(encoding="utf-8"))
+    cfg = load_config("config.example.toml")
+
+    section = raw["clearance"]["author_wakeup"]
+    assert section["enabled"] is False
+    assert section["auto_review_fix"] is False
+    assert section["allowed_repositories"] == []
+    assert cfg.author_wakeup.enabled is False
+    assert cfg.author_wakeup.auto_review_fix is False
+    assert cfg.author_wakeup.allowed_repositories == ()
+    assert cfg.author_wakeup.pfc_door_url == "http://localhost:8420/api/agent-send"
+    assert cfg.author_wakeup.required_send_id_retention_seconds == 86400

@@ -28,8 +28,9 @@ from voyager.bots.clearance.classify import (
     latest_author_reply,
 )
 from voyager.core.config import ReviewFixConfig
+from voyager.core.repository_gate import _repository_allowed_for_agent
 from voyager.core.writeback import build_writeback_failure, dry_run_enabled
-from voyager.governance.audit_log import ReviewFixAuditLog
+from voyager.governance.audit_log import ReviewFixAuditLog, ReviewFixAuditRecord
 from voyager.governance.enablement import Autonomy, EnablementConfig
 from voyager.governance.loop_runner import (
     ReviewFixClassification,
@@ -64,8 +65,54 @@ class _LoopContext:
     adapter_results: list[dict[str, Any]] = field(default_factory=list)
     contracts: list[dict[str, Any]] = field(default_factory=list)
     expected_head_sha: str = ""
+    allowed_finding_ids: frozenset[str] | None = None
+    source: str = "manual"
     event_loop: asyncio.AbstractEventLoop | None = None
     event_loop_thread_id: int | None = None
+
+
+async def dispatch_review_fix_for_findings(
+    client: Any,
+    *,
+    repository: str,
+    pull_number: int,
+    expected_head_sha: str,
+    finding_ids: tuple[str, ...],
+    notification_id: str,
+    cfg: Any | None = None,
+) -> dict[str, Any]:
+    """Invoke governed review-fix for one author-wakeup notification."""
+    refusal = None
+    if not _repository_allowed_for_agent(repository, REVIEW_FIX_AGENT_SLUG, cfg):
+        refusal = {"reason": "repository_not_allowed"}
+    route: dict[str, Any] = {
+        "agent": REVIEW_FIX_AGENT_SLUG,
+        "kind": "review_fix_loop",
+        "event": "internal",
+        "delivery_id": f"clearance-author-wakeup-{notification_id}",
+        "validation": {
+            "status": "review_fix_ready" if refusal is None else "review_fix_refused",
+            "pr_number": int(pull_number),
+            "issue_number": int(pull_number),
+        },
+        "writeback": {
+            "command_flags": {},
+            "refusal": refusal,
+        },
+        "internal_invocation": {
+            "source": "clearance_author_wakeup",
+            "silent_refusal": True,
+            "expected_head_sha": expected_head_sha,
+            "finding_ids": list(finding_ids),
+            "notification_id": notification_id,
+        },
+    }
+    return await dispatch_review_fix_writeback(
+        client,
+        route,
+        repository=repository,
+        cfg=cfg,
+    )
 
 
 async def dispatch_review_fix_writeback(
@@ -78,6 +125,13 @@ async def dispatch_review_fix_writeback(
     """Run one bounded review-fix loop for an explicitly requested PR."""
     validation = route.get("validation") or {}
     writeback = route.get("writeback") or {}
+    invocation = route.get("internal_invocation") or {}
+    source = str(invocation.get("source") or "manual")
+    silent_refusal = bool(invocation.get("silent_refusal"))
+    supplied_expected_head = str(invocation.get("expected_head_sha") or "")
+    supplied_finding_ids = frozenset(
+        str(item).strip() for item in invocation.get("finding_ids") or () if str(item).strip()
+    )
     pr_number = validation.get("pr_number") or validation.get("issue_number")
     base_result: dict[str, Any] = {
         "applied": False,
@@ -96,50 +150,86 @@ async def dispatch_review_fix_writeback(
 
     if writeback.get("refusal") is not None:
         base_result["status"] = "review_fix_refused"
-        return await _post_refusal_comment(client, route, repository, base_result)
+        return await _maybe_post_refusal_comment(
+            client,
+            route,
+            repository,
+            base_result,
+            silent=silent_refusal,
+        )
     if not repository:
         return _refused(base_result, "missing_repository")
     if not pr_number:
-        return await _refuse_with_comment(
+        return await _refuse_for_dispatch(
             client,
             route,
             repository,
             base_result,
             "missing_pr_number",
+            silent=silent_refusal,
         )
 
     enablement = _enablement_from_config(cfg)
     if enablement is None:
-        return await _refuse_with_comment(
+        return await _refuse_for_dispatch(
             client,
             route,
             repository,
             base_result,
             "missing_review_fix_enablement",
+            silent=silent_refusal,
         )
     if enablement.autonomy is not Autonomy.L3 or enablement.envelope is None:
-        return await _refuse_with_comment(
+        return await _refuse_for_dispatch(
             client,
             route,
             repository,
             base_result,
             "review_fix_requires_l3_envelope",
+            silent=silent_refusal,
         )
 
     try:
         pull = await client.pull_request(ASSEMBLY_AGENT_SLUG, repository, int(pr_number))
     except Exception:
-        return await _refuse_with_comment(
+        return await _refuse_for_dispatch(
             client,
             route,
             repository,
             base_result,
             "pull_request_fetch_failed",
+            silent=silent_refusal,
         )
 
     guard = _guard_pull_request_target(pull, repository)
     if guard is not None:
-        return await _refuse_with_comment(client, route, repository, base_result, guard)
+        return await _refuse_for_dispatch(
+            client,
+            route,
+            repository,
+            base_result,
+            guard,
+            silent=silent_refusal,
+        )
+
+    if supplied_expected_head and _expected_head_sha(pull) != supplied_expected_head:
+        reason = "review_fix_notification_head_mismatch"
+        _audit_internal_refusal(
+            cfg=cfg,
+            repository=repository,
+            pr_number=int(pr_number),
+            notification_id=str(invocation.get("notification_id") or "unknown"),
+            expected_head_sha=supplied_expected_head,
+            reason=reason,
+        )
+        return await _refuse_for_dispatch(
+            client,
+            route,
+            repository,
+            base_result,
+            reason,
+            silent=silent_refusal,
+        )
 
     try:
         threads = await client.pull_request_review_threads(
@@ -148,12 +238,13 @@ async def dispatch_review_fix_writeback(
             pull_number=int(pr_number),
         )
     except Exception:
-        return await _refuse_with_comment(
+        return await _refuse_for_dispatch(
             client,
             route,
             repository,
             base_result,
             "review_thread_fetch_failed",
+            silent=silent_refusal,
         )
 
     audit_log_path = _audit_log_path(cfg, repository, int(pr_number))
@@ -167,7 +258,9 @@ async def dispatch_review_fix_writeback(
         audit_log_path=audit_log_path,
         dry_run=base_result["dry_run"],
         cfg=cfg,
-        expected_head_sha=_expected_head_sha(pull),
+        expected_head_sha=supplied_expected_head or _expected_head_sha(pull),
+        allowed_finding_ids=(supplied_finding_ids if invocation else None),
+        source=source,
         event_loop=asyncio.get_running_loop(),
         event_loop_thread_id=threading.get_ident(),
     )
@@ -218,6 +311,8 @@ def _gather_findings(
     for thread in context.threads:
         thread_id = str(thread.get("id") or "").strip()
         if not thread_id or thread_id in context.handled:
+            continue
+        if context.allowed_finding_ids is not None and thread_id not in context.allowed_finding_ids:
             continue
         if not _thread_is_actionable(thread):
             continue
@@ -279,7 +374,10 @@ def _fix_finding(
     if adapter_result.status == "dry_run" and context.dry_run:
         context.handled.add(work.finding.finding_id)
     elif adapter_result.status == "executed" and adapter_result.commit_shas:
-        context.expected_head_sha = str(adapter_result.commit_shas[-1])
+        _verify_execution_advancement(
+            context,
+            returned_commit_sha=str(adapter_result.commit_shas[-1]),
+        )
         cleared = _finding_cleared_after_execution(context, work.finding)
         if cleared is None:
             raise ReviewFixLoopRunnerError("post_execution_thread_refresh_failed")
@@ -367,6 +465,7 @@ def _build_contract(
                 "category": finding.category,
                 "pr_number": int(pull.get("number") or 0),
                 "expected_head_sha": expected_head_sha,
+                "source": context.source,
             }
         },
     )
@@ -473,6 +572,58 @@ def _ensure_expected_head_current(context: _LoopContext) -> None:
         )
     context.pull = pull
     context.expected_head_sha = actual_sha
+
+
+def _verify_execution_advancement(
+    context: _LoopContext,
+    *,
+    returned_commit_sha: str,
+) -> None:
+    prior_expected_sha = context.expected_head_sha or _expected_head_sha(context.pull)
+    if not prior_expected_sha:
+        raise ReviewFixLoopRunnerError("missing_prior_expected_head_sha")
+    pr_number = int(context.pull.get("number") or 0)
+    try:
+        pull = _run_context_coroutine(
+            context,
+            context.client.pull_request(
+                ASSEMBLY_AGENT_SLUG,
+                context.repository,
+                pr_number,
+            ),
+        )
+    except Exception as exc:
+        raise ReviewFixLoopRunnerError("post_execution_head_read_failed") from exc
+    actual_sha = _expected_head_sha(pull)
+    if actual_sha != returned_commit_sha:
+        raise ReviewFixLoopRunnerError(
+            "post_execution_head_mismatch: "
+            f"returned={returned_commit_sha[:12] or 'none'} "
+            f"actual={actual_sha[:12] or 'none'}"
+        )
+    try:
+        comparison = _run_context_coroutine(
+            context,
+            context.client.compare_commits(
+                ASSEMBLY_AGENT_SLUG,
+                context.repository,
+                prior_expected_sha,
+                returned_commit_sha,
+            ),
+        )
+    except Exception as exc:
+        raise ReviewFixLoopRunnerError("post_execution_compare_failed") from exc
+    status = str((comparison or {}).get("status") or "")
+    ahead_by = (comparison or {}).get("ahead_by")
+    if (
+        status != "ahead"
+        or isinstance(ahead_by, bool)
+        or not isinstance(ahead_by, int)
+        or ahead_by < 1
+    ):
+        raise ReviewFixLoopRunnerError("post_execution_commit_not_descendant")
+    context.pull = pull
+    context.expected_head_sha = returned_commit_sha
 
 
 def _run_context_coroutine(context: _LoopContext, coro: Any) -> Any:
@@ -604,6 +755,59 @@ async def _refuse_with_comment(
     reason: str,
 ) -> dict[str, Any]:
     return await _post_refusal_comment(client, route, repository, _refused(result, reason))
+
+
+async def _refuse_for_dispatch(
+    client: Any,
+    route: dict[str, Any],
+    repository: str,
+    result: dict[str, Any],
+    reason: str,
+    *,
+    silent: bool,
+) -> dict[str, Any]:
+    return await _maybe_post_refusal_comment(
+        client,
+        route,
+        repository,
+        _refused(result, reason),
+        silent=silent,
+    )
+
+
+async def _maybe_post_refusal_comment(
+    client: Any,
+    route: dict[str, Any],
+    repository: str | None,
+    result: dict[str, Any],
+    *,
+    silent: bool,
+) -> dict[str, Any]:
+    if silent:
+        return result
+    return await _post_refusal_comment(client, route, repository, result)
+
+
+def _audit_internal_refusal(
+    *,
+    cfg: Any | None,
+    repository: str,
+    pr_number: int,
+    notification_id: str,
+    expected_head_sha: str,
+    reason: str,
+) -> None:
+    ReviewFixAuditLog(_audit_log_path(cfg, repository, pr_number)).append(
+        ReviewFixAuditRecord(
+            round=1,
+            ts=datetime.now(UTC),
+            commit=expected_head_sha or "unknown",
+            finding_id=f"notification:{_path_token(notification_id)}",
+            category="clearance_author_wakeup",
+            verdict="refused",
+            tests=(reason,),
+        )
+    )
 
 
 async def _post_refusal_comment(

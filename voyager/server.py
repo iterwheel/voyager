@@ -23,10 +23,17 @@ from voyager.bots.blueprint import route_blueprint_event
 from voyager.bots.changelog import route_changelog_event
 from voyager.bots.cleanup import route_pr_merge_cleanup
 from voyager.bots.clearance import route_clearance_event
+from voyager.bots.clearance.author_wakeup import (
+    AuthorWakeupReconciler,
+    PfcDoorClient,
+    WakeupLedger,
+)
+from voyager.bots.clearance.constants import CLEARANCE_AGENT_SLUG
 from voyager.bots.countdown import COUNTDOWN_AGENT_SLUG, route_countdown_trigger
-from voyager.bots.review_fix import route_review_fix_event
+from voyager.bots.review_fix import dispatch_review_fix_for_findings, route_review_fix_event
 from voyager.bots.stack import route_stack_event
 from voyager.build_info import BUILD_COMMIT, VERSION
+from voyager.core.config import AuthorWakeupConfig, resolve_author_wakeup_config
 from voyager.core.repository_gate import _repository_allowed_for_agent
 from voyager.core.security import match_signature
 from voyager.core.writeback import dry_run_enabled
@@ -42,6 +49,10 @@ _investigator: Any = _SENTINEL
 _drift_alert_task: asyncio.Task[None] | None = None
 _stale_pr_task: asyncio.Task[None] | None = None
 _ci_failing_task: asyncio.Task[None] | None = None
+_author_wakeup_task: asyncio.Task[None] | None = None
+_author_wakeup_event: asyncio.Event | None = None
+_author_wakeup_reconciler: AuthorWakeupReconciler | None = None
+_author_wakeup_door: PfcDoorClient | None = None
 
 
 def _get_config() -> Any:
@@ -457,14 +468,126 @@ async def _stop_ci_failing_schedule() -> None:
     _ci_failing_task = None
 
 
+async def _author_wakeup_loop(config: AuthorWakeupConfig) -> None:
+    next_scan = 0.0
+    while True:
+        try:
+            reconciler = _author_wakeup_reconciler
+            event = _author_wakeup_event
+            if reconciler is None or event is None:
+                return
+            loop = asyncio.get_running_loop()
+            nudged = event.is_set()
+            event.clear()
+            scan = nudged or loop.time() >= next_scan
+            await reconciler.tick(now=datetime.now(UTC), scan=scan)
+            if scan:
+                next_scan = loop.time() + config.reconcile_interval_seconds
+            with suppress(TimeoutError):
+                await asyncio.wait_for(
+                    event.wait(),
+                    timeout=config.receipt_poll_interval_seconds,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("Clearance author-wakeup reconcile tick failed")
+            await asyncio.sleep(min(config.receipt_poll_interval_seconds, 60))
+
+
+async def _start_author_wakeup_schedule() -> None:
+    global _author_wakeup_door
+    global _author_wakeup_event
+    global _author_wakeup_reconciler
+    global _author_wakeup_task
+
+    if _author_wakeup_task is not None and not _author_wakeup_task.done():
+        return
+    cfg = _get_config()
+    if cfg is None:
+        return
+    try:
+        config = resolve_author_wakeup_config(cfg)
+    except ValueError:
+        _log.exception("Invalid Clearance author-wakeup config; schedule remains disabled")
+        return
+    if not config.enabled:
+        return
+    client = _get_client()
+    clearance_store = _get_store()
+    if client is None or clearance_store is None:
+        _log.error("Clearance author-wakeup dependencies unavailable; schedule remains disabled")
+        return
+
+    audit_dir = config.audit_dir or cfg.work_dir / "clearance-author-wakeup"
+    door = PfcDoorClient(
+        config.pfc_door_url,
+        required_retention_seconds=config.required_send_id_retention_seconds,
+    )
+
+    async def invoke_review_fix(**kwargs: Any) -> dict[str, Any]:
+        return await dispatch_review_fix_for_findings(client, cfg=cfg, **kwargs)
+
+    try:
+        reconciler = AuthorWakeupReconciler(
+            config=config,
+            clearance_store=clearance_store,
+            ledger=WakeupLedger(audit_dir / "author-wakeup.db"),
+            github=client,
+            door=door,
+            review_fix=invoke_review_fix,
+        )
+    except Exception:
+        await door.close()
+        _log.exception(
+            "Clearance author-wakeup state initialization failed; schedule remains disabled"
+        )
+        return
+    _author_wakeup_door = door
+    _author_wakeup_event = asyncio.Event()
+    _author_wakeup_reconciler = reconciler
+    _author_wakeup_task = asyncio.create_task(
+        _author_wakeup_loop(config),
+        name="clearance-author-wakeup",
+    )
+
+
+async def _stop_author_wakeup_schedule() -> None:
+    global _author_wakeup_door
+    global _author_wakeup_event
+    global _author_wakeup_reconciler
+    global _author_wakeup_task
+
+    task = _author_wakeup_task
+    _author_wakeup_task = None
+    if task is not None:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+    door = _author_wakeup_door
+    _author_wakeup_door = None
+    if door is not None:
+        await door.close()
+    _author_wakeup_event = None
+    _author_wakeup_reconciler = None
+
+
+def _nudge_author_wakeup() -> None:
+    event = _author_wakeup_event
+    if event is not None:
+        event.set()
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await _start_deployed_version_drift_schedule()
     await _start_ci_failing_schedule()
     await _start_stale_pr_schedule()
+    await _start_author_wakeup_schedule()
     try:
         yield
     finally:
+        await _stop_author_wakeup_schedule()
         await _stop_ci_failing_schedule()
         await _stop_stale_pr_schedule()
         await _stop_deployed_version_drift_schedule()
@@ -609,6 +732,9 @@ async def _process_route_writebacks(
             )
         except Exception:
             _log.exception("writeback failed for route %r", route.get("agent"))
+        finally:
+            if route.get("agent") == CLEARANCE_AGENT_SLUG:
+                _nudge_author_wakeup()
 
 
 def _extract_pr_number_from_payload(payload: dict[str, Any]) -> int | None:
@@ -645,6 +771,11 @@ async def root() -> dict[str, Any]:
 @app.get("/healthz")
 async def healthz() -> dict[str, Any]:
     cfg = _get_config()
+    try:
+        author_wakeup_enabled = bool(cfg and resolve_author_wakeup_config(cfg).enabled)
+    except ValueError:
+        author_wakeup_enabled = False
+    author_wakeup_running = bool(_author_wakeup_task is not None and not _author_wakeup_task.done())
     return {
         "ok": True,
         "service": "iterwheel-github-bridge",
@@ -652,6 +783,10 @@ async def healthz() -> dict[str, Any]:
         "dry_run": dry_run_enabled(cfg),
         "version": VERSION,
         "build_commit": BUILD_COMMIT,
+        "author_wakeup": {
+            "enabled": author_wakeup_enabled,
+            "running": author_wakeup_running,
+        },
     }
 
 

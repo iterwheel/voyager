@@ -60,6 +60,9 @@ def test_wukong_env_example_preserves_production_safety_contract() -> None:
     assert "BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_CLEANUP=iterwheel/voyager" in text
     assert "BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_CI_FAILING=iterwheel/voyager" in text
     assert "BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_ASSEMBLY=" not in text
+    assert "CLEARANCE_AUTHOR_WAKEUP_ENABLED=false" in text
+    assert "CLEARANCE_AUTHOR_WAKEUP_AUTO_REVIEW_FIX=false" in text
+    assert "# CLEARANCE_AUTHOR_WAKEUP_ALLOWED_REPOSITORIES=" in text
     assert "GITHUB_REPOSITORY_WEBHOOK_SECRET=replace-with-repository-webhook-secret" in text
     assert "GITHUB_WEBHOOK_SECRET=replace-with-repository-webhook-secret" not in text
 

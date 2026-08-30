@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import os
+import re
 import tomllib
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from voyager.governance.enablement import EnablementConfig, parse_enablement_config
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 
 _VALID_REASONING_EFFORTS = frozenset({"low", "medium", "high", "max"})
+_EXACT_REPOSITORY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 _DEFAULT_SEARCH_ORDER = [
     lambda: str(Path.home() / ".voyager" / "config.toml"),
@@ -100,6 +104,26 @@ class ReviewFixConfig:
 
 
 @dataclass(frozen=True, kw_only=True)
+class AuthorWakeupConfig:
+    """Default-off Clearance author-wakeup runtime settings."""
+
+    enabled: bool = False
+    pfc_door_url: str = "http://localhost:8420/api/agent-send"
+    reconcile_interval_seconds: int = 60
+    notify_after_minutes: int = 10
+    fallback_after_minutes: int = 20
+    receipt_poll_interval_seconds: int = 2
+    receipt_timeout_seconds: int = 90
+    receipt_repost_safety_margin_seconds: int = 300
+    max_same_id_reposts: int = 3
+    max_delivery_attempts: int = 3
+    required_send_id_retention_seconds: int = 86400
+    auto_review_fix: bool = False
+    allowed_repositories: tuple[str, ...] = ()
+    audit_dir: Path | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
 class VoyagerConfig:
     """Top-level voyager configuration.
 
@@ -116,6 +140,7 @@ class VoyagerConfig:
     bridge: BridgeConfig = field(default_factory=BridgeConfig)
     assembly: AssemblyConfig = field(default_factory=AssemblyConfig)
     review_fix: ReviewFixConfig = field(default_factory=ReviewFixConfig)
+    author_wakeup: AuthorWakeupConfig = field(default_factory=AuthorWakeupConfig)
 
 
 def _parse_app(item: dict[str, Any]) -> AppConfig:
@@ -401,6 +426,185 @@ def _parse_review_fix(raw: dict[str, Any]) -> ReviewFixConfig:
     )
 
 
+def _parse_author_wakeup(raw: dict[str, Any]) -> AuthorWakeupConfig:
+    clearance = _optional_table(raw.get("clearance"), "[clearance]")
+    section = _optional_table(
+        clearance.get("author_wakeup"),
+        "[clearance.author_wakeup]",
+    )
+    defaults = AuthorWakeupConfig()
+
+    def boolean(key: str, default: bool) -> bool:
+        value = section.get(key, default)
+        if not isinstance(value, bool):
+            raise ValueError(
+                f"[clearance.author_wakeup].{key} must be a TOML boolean, "
+                f"got {type(value).__name__}: {value!r}"
+            )
+        return value
+
+    def positive_integer(key: str, default: int) -> int:
+        value = section.get(key, default)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(
+                f"[clearance.author_wakeup].{key} must be a TOML integer, "
+                f"got {type(value).__name__}: {value!r}"
+            )
+        if value < 1:
+            raise ValueError(f"[clearance.author_wakeup].{key} must be >= 1, got {value!r}")
+        return value
+
+    audit_dir_raw = _optional_string(section, "audit_dir", "[clearance.author_wakeup]")
+    return AuthorWakeupConfig(
+        enabled=boolean("enabled", defaults.enabled),
+        pfc_door_url=(
+            _optional_string(section, "pfc_door_url", "[clearance.author_wakeup]")
+            or defaults.pfc_door_url
+        ),
+        reconcile_interval_seconds=positive_integer(
+            "reconcile_interval_seconds", defaults.reconcile_interval_seconds
+        ),
+        notify_after_minutes=positive_integer(
+            "notify_after_minutes", defaults.notify_after_minutes
+        ),
+        fallback_after_minutes=positive_integer(
+            "fallback_after_minutes", defaults.fallback_after_minutes
+        ),
+        receipt_poll_interval_seconds=positive_integer(
+            "receipt_poll_interval_seconds", defaults.receipt_poll_interval_seconds
+        ),
+        receipt_timeout_seconds=positive_integer(
+            "receipt_timeout_seconds", defaults.receipt_timeout_seconds
+        ),
+        receipt_repost_safety_margin_seconds=positive_integer(
+            "receipt_repost_safety_margin_seconds",
+            defaults.receipt_repost_safety_margin_seconds,
+        ),
+        max_same_id_reposts=positive_integer("max_same_id_reposts", defaults.max_same_id_reposts),
+        max_delivery_attempts=positive_integer(
+            "max_delivery_attempts", defaults.max_delivery_attempts
+        ),
+        required_send_id_retention_seconds=positive_integer(
+            "required_send_id_retention_seconds",
+            defaults.required_send_id_retention_seconds,
+        ),
+        auto_review_fix=boolean("auto_review_fix", defaults.auto_review_fix),
+        allowed_repositories=_string_tuple(
+            section,
+            "allowed_repositories",
+            "[clearance.author_wakeup]",
+            case="lower",
+        ),
+        audit_dir=Path(audit_dir_raw).expanduser() if audit_dir_raw is not None else None,
+    )
+
+
+def resolve_author_wakeup_config(
+    cfg: VoyagerConfig,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> AuthorWakeupConfig:
+    """Apply env-over-TOML precedence and validate the author-wakeup boundary."""
+    env = os.environ if environ is None else environ
+    base = cfg.author_wakeup
+    prefix = "CLEARANCE_AUTHOR_WAKEUP_"
+
+    def boolean(name: str, current: bool) -> bool:
+        raw = env.get(prefix + name)
+        if raw is None:
+            return current
+        normalized = raw.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+        raise ValueError(f"{prefix}{name} must be a boolean, got {raw!r}")
+
+    def positive_integer(name: str, current: int) -> int:
+        raw = env.get(prefix + name)
+        if raw is None:
+            return current
+        try:
+            value = int(raw)
+        except ValueError:
+            raise ValueError(f"{prefix}{name} must be an integer, got {raw!r}") from None
+        if value < 1:
+            raise ValueError(f"{prefix}{name} must be >= 1, got {value!r}")
+        return value
+
+    allowed_raw = env.get(prefix + "ALLOWED_REPOSITORIES")
+    allowed = (
+        tuple(item.lower() for item in re.split(r"[\s,]+", allowed_raw.strip()) if item)
+        if allowed_raw is not None
+        else base.allowed_repositories
+    )
+    audit_dir_raw = env.get(prefix + "AUDIT_DIR")
+    resolved = replace(
+        base,
+        enabled=boolean("ENABLED", base.enabled),
+        pfc_door_url=env.get(prefix + "PFC_DOOR_URL", base.pfc_door_url).strip(),
+        reconcile_interval_seconds=positive_integer(
+            "RECONCILE_INTERVAL_SECONDS", base.reconcile_interval_seconds
+        ),
+        notify_after_minutes=positive_integer("NOTIFY_AFTER_MINUTES", base.notify_after_minutes),
+        fallback_after_minutes=positive_integer(
+            "FALLBACK_AFTER_MINUTES", base.fallback_after_minutes
+        ),
+        receipt_poll_interval_seconds=positive_integer(
+            "RECEIPT_POLL_INTERVAL_SECONDS", base.receipt_poll_interval_seconds
+        ),
+        receipt_timeout_seconds=positive_integer(
+            "RECEIPT_TIMEOUT_SECONDS", base.receipt_timeout_seconds
+        ),
+        receipt_repost_safety_margin_seconds=positive_integer(
+            "RECEIPT_REPOST_SAFETY_MARGIN_SECONDS",
+            base.receipt_repost_safety_margin_seconds,
+        ),
+        max_same_id_reposts=positive_integer("MAX_SAME_ID_REPOSTS", base.max_same_id_reposts),
+        max_delivery_attempts=positive_integer("MAX_DELIVERY_ATTEMPTS", base.max_delivery_attempts),
+        required_send_id_retention_seconds=positive_integer(
+            "REQUIRED_SEND_ID_RETENTION_SECONDS",
+            base.required_send_id_retention_seconds,
+        ),
+        auto_review_fix=boolean("AUTO_REVIEW_FIX", base.auto_review_fix),
+        allowed_repositories=allowed,
+        audit_dir=(
+            Path(audit_dir_raw).expanduser()
+            if audit_dir_raw is not None and audit_dir_raw.strip()
+            else base.audit_dir
+        ),
+    )
+    _validate_author_wakeup_config(resolved)
+    return resolved
+
+
+def _validate_author_wakeup_config(config: AuthorWakeupConfig) -> None:
+    try:
+        parsed = urlsplit(config.pfc_door_url)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError(f"pfc_door_url is invalid: {exc}") from None
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname not in {"localhost", "127.0.0.1", "::1"}
+        or port is None
+    ):
+        raise ValueError("pfc_door_url must be an explicit HTTP loopback URL with a port")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("pfc_door_url must not contain userinfo, query, or fragment")
+    if parsed.path != "/api/agent-send":
+        raise ValueError("pfc_door_url path must be exactly /api/agent-send")
+    for repository in config.allowed_repositories:
+        if not _EXACT_REPOSITORY_RE.fullmatch(repository):
+            raise ValueError(
+                f"allowed_repositories entries must be exact owner/repo values, got {repository!r}"
+            )
+    if config.receipt_timeout_seconds <= 60:
+        raise ValueError("receipt_timeout_seconds must be greater than the 60-second idle gate")
+    if config.receipt_repost_safety_margin_seconds >= config.required_send_id_retention_seconds:
+        raise ValueError("receipt safety margin must be smaller than send-ID retention")
+
+
 def load_config(path: str | Path | None = None) -> VoyagerConfig:
     if path is None:
         env_path = os.environ.get("VOYAGER_CONFIG_PATH")
@@ -478,6 +682,7 @@ def load_config(path: str | Path | None = None) -> VoyagerConfig:
     bridge = _parse_bridge(raw)
     assembly = _parse_assembly(raw)
     review_fix = _parse_review_fix(raw)
+    author_wakeup = _parse_author_wakeup(raw)
 
     return VoyagerConfig(
         apps=apps,
@@ -488,6 +693,7 @@ def load_config(path: str | Path | None = None) -> VoyagerConfig:
         bridge=bridge,
         assembly=assembly,
         review_fix=review_fix,
+        author_wakeup=author_wakeup,
     )
 
 
