@@ -178,7 +178,7 @@ this state machine.
 | 2026-08-30 | Created implementation CHG from merged VOY-1843 and owner start instruction | In progress; no production code written yet |
 | 2026-08-30 | Plan self-review against merged VOY-1843 and current config/server/review-fix seams | PASS — all PRP config, receipt, claim, fallback, rollout, and rollback surfaces mapped; PFC receipt dependency fails closed |
 | 2026-08-30 | Sequential RED/GREEN cycles for config, durable reconciler/receipt state machine, claim/fallback, internal review-fix guard, and bridge schedule | PASS — each behavior observed failing before its production change; no split worker configured |
-| 2026-08-30 | Focused touched-surface pytest | PASS — 115 passed |
+| 2026-08-30 | Focused touched-surface pytest | PASS — 116 passed |
 | 2026-08-30 | Touched-file Ruff, mypy, and Bandit | PASS — Ruff clean/format clean; mypy 6 source files clean; Bandit no findings |
 | 2026-08-30 | PR #319 Codex review: revalidate every due observation in the current successful scan and restart N after a cleared key becomes eligible again | PASS — allowlist removal clears state, read failure cannot page, and same-head reactivation resets `first_seen` |
 | 2026-08-30 | PR #319 current-head Codex review: gate every recovered/retried POST on current scope and stop interval rescans of terminal history | PASS — scope revocation is terminal before PFC; durable poll checkpoints plus webhook-targeted cache refresh bound steady-state scans to active/new PRs |
@@ -193,6 +193,8 @@ this state machine.
 | 2026-08-30 | Frank-approved cap +1 (PFC-2502/D20): disable environment proxies on the loopback PFC client and normalize fallback allowlist casing | PASS — owned HTTPX client uses `trust_env=False`; canonical owner/name matches lowercased exact config entries |
 | 2026-08-30 | PFC-2502/D20 correction: owner lifted the cap for #319; atomically release observations when recovered delivery scope is revoked | PASS — revoked assignments clear in the same transaction; re-enable on the same head starts a fresh N and sends once |
 | 2026-08-30 | Owner-rule continuation: audit every valid internal pre-loop review-fix refusal and retain its reason in the wake-up ledger | PASS — silent refusal writes append-only `ReviewFixAuditRecord`; `fallback_status` preserves the concrete dispatcher reason |
+| 2026-08-30 | Post-merge sandbox rollout attempt from wheel `6734f98`; bridge exhausted file descriptors while bootstrapping 578 historical polls | FAILED SAFE — health never converged; restored config/env backups and atomically swapped back to wheel `e4602d2`; local/public health recovered |
+| 2026-08-30 | Rollout-blocker RED/GREEN: explicitly close every SQLite connection after transaction completion | PASS — all 14 ledger connection sites use a close-guaranteeing context manager; tracked-connection regression passes |
 
 ---
 

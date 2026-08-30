@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import stat
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -187,6 +188,40 @@ def test_wakeup_ledger_survives_restart_and_keeps_event_history(tmp_path) -> Non
     ]
     assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_wakeup_ledger_explicitly_closes_every_connection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_connect = sqlite3.connect
+    opened: list[sqlite3.Connection] = []
+
+    class TrackedConnection(sqlite3.Connection):
+        explicitly_closed = False
+
+        def close(self) -> None:
+            self.explicitly_closed = True
+            super().close()
+
+    def tracked_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+        kwargs["factory"] = TrackedConnection
+        connection = real_connect(*args, **kwargs)
+        opened.append(connection)
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", tracked_connect)
+    ledger = WakeupLedger(tmp_path / "state.db")
+    key = ObservationKey("iterwheel/voyager-sandbox", 42, "b" * 40, "PRRT_one")
+    now = datetime(2026, 8, 30, 0, 0, tzinfo=UTC)
+
+    ledger.observe(key, now)
+    ledger.active_observations(key.repository, key.pull_number)
+    ledger.notifications()
+    ledger.events()
+
+    assert opened
+    assert all(connection.explicitly_closed for connection in opened)
 
 
 def test_cleared_observation_reactivates_with_a_new_continuous_window(tmp_path: Path) -> None:

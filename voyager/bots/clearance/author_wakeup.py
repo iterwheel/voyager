@@ -6,7 +6,8 @@ import json
 import logging
 import os
 import sqlite3
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta
 from hashlib import sha256
@@ -113,7 +114,7 @@ class WakeupLedger:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.path.parent, 0o700)
-        with self._connect() as db:
+        with self._connection() as db:
             db.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS observations (
@@ -160,13 +161,26 @@ class WakeupLedger:
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path)
-        db.row_factory = sqlite3.Row
-        db.execute("PRAGMA journal_mode=DELETE")
-        db.execute("PRAGMA synchronous=FULL")
+        try:
+            db.row_factory = sqlite3.Row
+            db.execute("PRAGMA journal_mode=DELETE")
+            db.execute("PRAGMA synchronous=FULL")
+        except BaseException:
+            db.close()
+            raise
         return db
 
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        db = self._connect()
+        try:
+            with db:
+                yield db
+        finally:
+            db.close()
+
     def observe(self, key: ObservationKey, at: datetime) -> ObservationState:
-        with self._connect() as db:
+        with self._connection() as db:
             cursor = db.execute(
                 """
                 INSERT OR IGNORE INTO observations
@@ -241,7 +255,7 @@ class WakeupLedger:
     ) -> None:
         data = notification.to_dict()
         encoded = json.dumps(data, separators=(",", ":"), sort_keys=True)
-        with self._connect() as db:
+        with self._connection() as db:
             db.execute(
                 """
                 INSERT INTO notifications (notification_id, state, data) VALUES (?, ?, ?)
@@ -263,7 +277,7 @@ class WakeupLedger:
             )
 
     def observations(self) -> tuple[ObservationState, ...]:
-        with self._connect() as db:
+        with self._connection() as db:
             rows = db.execute(
                 """
                 SELECT repository, pull_number, head_sha, thread_id,
@@ -311,7 +325,7 @@ class WakeupLedger:
         params = (
             (repository, pull_number) if repository is not None and pull_number is not None else ()
         )
-        with self._connect() as db:
+        with self._connection() as db:
             rows = db.execute(query, params).fetchall()
         return tuple(
             ObservationState(
@@ -333,7 +347,7 @@ class WakeupLedger:
         keys: Sequence[ObservationKey],
         notification_id: str,
     ) -> None:
-        with self._connect() as db:
+        with self._connection() as db:
             for key in keys:
                 db.execute(
                     """
@@ -359,7 +373,7 @@ class WakeupLedger:
     ) -> None:
         data = notification.to_dict()
         encoded = json.dumps(data, separators=(",", ":"), sort_keys=True)
-        with self._connect() as db:
+        with self._connection() as db:
             db.execute(
                 """
                 INSERT INTO notifications (notification_id, state, data) VALUES (?, ?, ?)
@@ -441,7 +455,7 @@ class WakeupLedger:
         )
         data = stale.to_dict()
         encoded = json.dumps(data, separators=(",", ":"), sort_keys=True)
-        with self._connect() as db:
+        with self._connection() as db:
             db.execute(
                 """
                 INSERT INTO notifications (notification_id, state, data) VALUES (?, ?, ?)
@@ -534,7 +548,7 @@ class WakeupLedger:
         eligible_keys: set[ObservationKey],
         at: datetime,
     ) -> None:
-        with self._connect() as db:
+        with self._connection() as db:
             rows = db.execute(
                 """
                 SELECT repository, pull_number, head_sha, thread_id
@@ -582,7 +596,7 @@ class WakeupLedger:
                 )
 
     def notifications(self) -> tuple[NotificationState, ...]:
-        with self._connect() as db:
+        with self._connection() as db:
             rows = db.execute("SELECT data FROM notifications ORDER BY notification_id").fetchall()
         return tuple(NotificationState.from_dict(json.loads(str(row["data"]))) for row in rows)
 
@@ -593,7 +607,7 @@ class WakeupLedger:
         normalized = tuple(sorted(set(states)))
         if not normalized:
             return ()
-        with self._connect() as db:
+        with self._connection() as db:
             rows = db.execute(
                 """
                 SELECT data FROM notifications
@@ -612,7 +626,7 @@ class WakeupLedger:
         poll_identity: str,
         head_sha: str,
     ) -> bool:
-        with self._connect() as db:
+        with self._connection() as db:
             row = db.execute(
                 """
                 SELECT 1 FROM terminal_scan_checkpoints
@@ -632,7 +646,7 @@ class WakeupLedger:
         reason: str,
         at: datetime,
     ) -> None:
-        with self._connect() as db:
+        with self._connection() as db:
             db.execute(
                 """
                 INSERT INTO terminal_scan_checkpoints
@@ -655,7 +669,7 @@ class WakeupLedger:
             )
 
     def events(self) -> tuple[dict[str, Any], ...]:
-        with self._connect() as db:
+        with self._connection() as db:
             rows = db.execute(
                 """
                 SELECT at, event, notification_id, repository, pull_number, head_sha, payload
