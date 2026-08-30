@@ -42,7 +42,6 @@ Safety:
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import re
 import shutil
@@ -204,8 +203,10 @@ async def publish_branch(
     checkout_dir: Path,
     timeout_seconds: int = 300,
     expected_remote_sha: str | None = None,
+    source_sha: str | None = None,
+    push_lfs: bool = False,
 ) -> PublishResult:
-    """Push ``HEAD:refs/heads/<branch_name>`` to the target repository.
+    """Push one checkout commit to ``refs/heads/<branch_name>``.
 
     Uses the Assembly App installation token for authentication via a
     temporary GIT_ASKPASS script.  The push target is always an explicit
@@ -213,10 +214,11 @@ async def publish_branch(
     named remote like ``origin``, so fork remotes or SSH remotes cannot
     bypass App-token auth.
 
-    Uses a temporary named remote (``assembly-publish-*``) instead of
-    pushing directly to the URL so that ``--force-with-lease`` has a
-    remote-tracking ref to check — pushing to a bare URL makes the lease
-    check a no-op.
+    Authenticated Git commands run from a fresh temporary bare repository
+    whose object store reads the checkout through Git alternates.  This keeps
+    model-written checkout config out of the credential boundary while a
+    temporary named remote (``assembly-publish-*``) supplies the tracking ref
+    needed by ``--force-with-lease``.
 
     Args:
         repository: ``"owner/repo"`` format.
@@ -227,13 +229,17 @@ async def publish_branch(
         expected_remote_sha: Optional explicit remote branch SHA for
             ``--force-with-lease=refs/heads/<branch>:<sha>``. Use this when
             updating a live PR branch whose reviewed head must be preserved.
+        source_sha: Optional explicit checkout commit SHA to publish. When
+            omitted, the function resolves the checkout's current ``HEAD``
+            before constructing trusted publish metadata.
+        push_lfs: Upload Git LFS objects reachable from ``source_sha`` before
+            publishing the branch.
 
     Returns:
         ``PublishResult`` with ``success=True`` on clean push.
 
-    The temporary askpass script, temp directory, and temporary remote
-    are removed before returning in all paths (success, failure, or
-    timeout).
+    The temporary askpass script and trusted metadata directory are removed
+    before returning in all paths (success, failure, or timeout).
     """
     remote_url = _github_safe_remote(repository)
     expected_sha = _expected_remote_sha(expected_remote_sha)
@@ -244,23 +250,76 @@ async def publish_branch(
             phase="git_publish_expected_remote_sha",
             command="validate expected remote sha",
         )
+    resolved_source_sha = _expected_remote_sha(source_sha)
+    if source_sha is not None and resolved_source_sha is None:
+        return PublishResult(
+            success=False,
+            message="source_sha must be a 40-character commit SHA",
+            phase="git_publish_source_sha",
+            command="validate source sha",
+        )
+    if resolved_source_sha is None:
+        source_env = scoped_git_env()
+        rc_source, stdout_source, stderr_source, source_timed_out = await _run_git_push(
+            ["git", "rev-parse", "HEAD"],
+            cwd=checkout_dir,
+            timeout_seconds=timeout_seconds,
+            env=source_env,
+        )
+        resolved_source_sha = _expected_remote_sha(stdout_source)
+        if rc_source != 0 or resolved_source_sha is None:
+            return PublishResult(
+                success=False,
+                message=f"Failed to resolve checkout HEAD: {stderr_source.strip()}",
+                returncode=rc_source,
+                stdout=stdout_source,
+                stderr=stderr_source,
+                timed_out=source_timed_out,
+                phase="git_publish_source_sha",
+                command="git rev-parse HEAD",
+            )
     remote_name: str | None = None
-    remote_created = False
     askpass: Path | None = None
     temp_dir: Path | None = None
 
     try:
         temp_dir = Path(tempfile.mkdtemp(prefix="assembly-publish-"))
+        temp_dir.chmod(0o700)
         remote_name = temp_dir.name
+        trusted_git_dir = temp_dir / "metadata.git"
+        metadata_env = scoped_git_env()
+        rc_init, stdout_init, stderr_init, init_timed_out = await _run_git_push(
+            ["git", "init", "--bare", str(trusted_git_dir)],
+            cwd=temp_dir,
+            timeout_seconds=timeout_seconds,
+            env=metadata_env,
+        )
+        if rc_init != 0:
+            return PublishResult(
+                success=False,
+                message=f"Failed to initialize trusted Git metadata: {stderr_init.strip()}",
+                returncode=rc_init,
+                stdout=stdout_init,
+                stderr=stderr_init,
+                timed_out=init_timed_out,
+                phase="git_publish_metadata_init",
+                command="git init --bare",
+            )
+
+        object_dir = _checkout_object_directory(checkout_dir)
+        metadata_env["GIT_DIR"] = str(trusted_git_dir)
+        metadata_env["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = str(object_dir)
         askpass = _write_git_askpass(temp_dir)
-        env = _git_push_env(token=installation_token, askpass=askpass)
+        auth_env = _git_push_env(token=installation_token, askpass=askpass)
+        auth_env["GIT_DIR"] = str(trusted_git_dir)
+        auth_env["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = str(object_dir)
 
         # ---- Step 1: add temporary named remote ----
         rc_add, _stdout_add, stderr_add, add_timed_out = await _run_git_push(
             ["git", "remote", "add", remote_name, remote_url],
-            cwd=checkout_dir,
+            cwd=temp_dir,
             timeout_seconds=timeout_seconds,
-            env=env,
+            env=metadata_env,
         )
         if rc_add != 0:
             return PublishResult(
@@ -273,8 +332,6 @@ async def publish_branch(
                 phase="git_publish_remote_add",
                 command="git remote add",
             )
-        remote_created = True
-
         # ---- Step 2: fetch target branch for lease baseline ----
         # Fetch the branch into the named remote's tracking ref so that
         # --force-with-lease has a baseline to check.  On first push the
@@ -287,9 +344,9 @@ async def publish_branch(
                 remote_name,
                 f"refs/heads/{branch_name}:refs/remotes/{remote_name}/{branch_name}",
             ],
-            cwd=checkout_dir,
+            cwd=temp_dir,
             timeout_seconds=timeout_seconds,
-            env=env,
+            env=auth_env,
         )
         if rc_fetch != 0:
             # A 128 exit with "could not find remote ref" is expected on first
@@ -326,11 +383,42 @@ async def publish_branch(
                     command="git fetch",
                 )
 
-        # ---- Step 3: push via named remote ----
+        # ---- Step 3: upload LFS objects from the pinned source commit ----
+        if push_lfs:
+            trusted_lfs_url = f"{remote_url}/info/lfs"
+            rc_lfs, stdout_lfs, stderr_lfs, lfs_timed_out = await _run_git_push(
+                [
+                    "git",
+                    "-c",
+                    f"lfs.url={trusted_lfs_url}",
+                    "-c",
+                    f"lfs.pushurl={trusted_lfs_url}",
+                    "lfs",
+                    "push",
+                    remote_name,
+                    resolved_source_sha,
+                ],
+                cwd=temp_dir,
+                timeout_seconds=timeout_seconds,
+                env=auth_env,
+            )
+            if rc_lfs != 0:
+                return PublishResult(
+                    success=False,
+                    message=f"git lfs push failed (exit {rc_lfs}): {stderr_lfs.strip()}",
+                    returncode=rc_lfs,
+                    stdout=stdout_lfs,
+                    stderr=stderr_lfs,
+                    timed_out=lfs_timed_out,
+                    phase="git_lfs_push",
+                    command="git lfs push",
+                )
+
+        # ---- Step 4: push via named remote ----
         # --force-with-lease now has a remote-tracking ref to check because
         # the fetch above (when the branch already exists on the remote)
         # populated refs/remotes/<remote_name>/<branch_name>.
-        target_ref = f"HEAD:refs/heads/{branch_name}"
+        target_ref = f"{resolved_source_sha}:refs/heads/{branch_name}"
         lease_arg = (
             f"--force-with-lease=refs/heads/{branch_name}:{expected_sha}"
             if expected_sha is not None
@@ -345,9 +433,9 @@ async def publish_branch(
                 remote_name,
                 target_ref,
             ],
-            cwd=checkout_dir,
+            cwd=temp_dir,
             timeout_seconds=timeout_seconds,
-            env=env,
+            env=auth_env,
         )
 
         if returncode != 0:
@@ -370,30 +458,34 @@ async def publish_branch(
 
         return PublishResult(
             success=True,
-            message=f"Pushed HEAD:refs/heads/{branch_name} to {remote_url}",
+            message=f"Pushed {resolved_source_sha}:refs/heads/{branch_name} to {remote_url}",
         )
 
     finally:
-        # Best-effort remove temporary remote so the checkout is not
-        # polluted. Uses a lightweight subprocess (not _run_git_push) to
-        # avoid requiring the auth env during cleanup.
-        if remote_created and remote_name is not None and checkout_dir.exists():
-            with contextlib.suppress(Exception):
-                proc = await asyncio.create_subprocess_exec(
-                    "git",
-                    "remote",
-                    "remove",
-                    remote_name,
-                    cwd=checkout_dir,
-                    env=scoped_git_env(),
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
-                await asyncio.wait_for(proc.wait(), timeout=10)
         if askpass is not None and askpass.exists():
             askpass.unlink(missing_ok=True)
         if temp_dir is not None:
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def _checkout_object_directory(checkout_dir: Path) -> Path:
+    """Return the checkout object directory without consulting Git config."""
+    git_path = checkout_dir / ".git"
+    if git_path.is_file():
+        lines = git_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        if lines and lines[0].startswith("gitdir:"):
+            target = Path(lines[0].removeprefix("gitdir:").strip())
+            if not target.is_absolute():
+                target = checkout_dir / target
+            target = target.resolve()
+            common_dir_path = target / "commondir"
+            if common_dir_path.is_file():
+                common_dir = Path(common_dir_path.read_text(encoding="utf-8").strip())
+                if not common_dir.is_absolute():
+                    common_dir = target / common_dir
+                target = common_dir.resolve()
+            return target / "objects"
+    return git_path / "objects"
 
 
 def _expected_remote_sha(value: str | None) -> str | None:

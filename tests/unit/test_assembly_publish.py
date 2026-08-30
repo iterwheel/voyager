@@ -23,6 +23,7 @@ import pytest
 
 from voyager.bots.assembly.publish import (
     _append_git_config,
+    _checkout_object_directory,
     _git_push_env,
     _github_safe_remote,
     _run_git_push,
@@ -50,6 +51,18 @@ class TestGithubSafeRemote:
         assert (
             _github_safe_remote("my-org/my_project") == "https://github.com/my-org/my_project.git"
         )
+
+
+def test_checkout_object_directory_resolves_linked_worktree_common_dir(tmp_path: Path) -> None:
+    checkout = tmp_path / "checkout"
+    worktree_git_dir = tmp_path / "main.git" / "worktrees" / "checkout"
+    common_git_dir = tmp_path / "main.git"
+    checkout.mkdir()
+    worktree_git_dir.mkdir(parents=True)
+    (checkout / ".git").write_text(f"gitdir: {worktree_git_dir}\n", encoding="utf-8")
+    (worktree_git_dir / "commondir").write_text("../..\n", encoding="utf-8")
+
+    assert _checkout_object_directory(checkout) == common_git_dir / "objects"
 
 
 # ---------------------------------------------------------------------------
@@ -224,7 +237,15 @@ class _CommandRecorder:
         self.calls: list[dict[str, Any]] = []
 
     async def create_subprocess_exec(self, *argv: object, cwd: object = None, **kwargs: Any):
-        return self._handle_subprocess(tuple(str(item) for item in argv), kwargs=kwargs)
+        normalized = tuple(str(item) for item in argv)
+        if normalized[0:3] == ("git", "rev-parse", "HEAD"):
+            call_kwargs = {"cwd": cwd, **kwargs}
+            self.calls.append({"argv": normalized, "kwargs": call_kwargs})
+            return _FakeProcess(normalized, returncode=0, stdout=f"{VALID_SHA}\n", stderr="")
+        return self._handle_subprocess(
+            normalized,
+            kwargs={"cwd": cwd, **kwargs},
+        )
 
     def _handle_subprocess(self, argv: tuple[str, ...], *, kwargs: dict[str, Any]) -> _FakeProcess:
         self.calls.append({"argv": argv, "kwargs": kwargs})
@@ -495,6 +516,47 @@ class TestPublishBranch:
     # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
+    async def test_authenticated_publish_uses_fresh_trusted_git_metadata(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        recorder = _CommandRecorder()
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", recorder.create_subprocess_exec)
+        monkeypatch.setattr(
+            "voyager.bots.assembly.publish.shutil.rmtree",
+            lambda _dir, **kw: None,
+        )
+
+        result = await publish_branch(
+            repository=TEST_REPOSITORY,
+            branch_name=TEST_BRANCH,
+            installation_token=TEST_TOKEN,
+            checkout_dir=tmp_path,
+            timeout_seconds=30,
+            source_sha=VALID_SHA,
+            push_lfs=True,
+        )
+
+        assert result.success
+        authenticated_calls = [
+            call
+            for call in recorder.calls
+            if TEST_TOKEN in (call["kwargs"].get("env") or {}).values()
+        ]
+        assert authenticated_calls
+        for call in authenticated_calls:
+            env = call["kwargs"]["env"]
+            trusted_git_dir = Path(env["GIT_DIR"])
+            assert trusted_git_dir != tmp_path / ".git"
+            assert tmp_path not in trusted_git_dir.parents
+            assert env["GIT_ALTERNATE_OBJECT_DIRECTORIES"] == str(tmp_path / ".git" / "objects")
+        push_call = next(call for call in recorder.calls if call["argv"][0:2] == ("git", "push"))
+        assert f"{VALID_SHA}:refs/heads/{TEST_BRANCH}" in push_call["argv"]
+        assert any(
+            call["argv"][0] == "git" and call["argv"][-4:-2] == ("lfs", "push")
+            for call in authenticated_calls
+        )
+
+    @pytest.mark.asyncio
     async def test_token_never_appears_in_argv(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -636,7 +698,7 @@ class TestPublishBranch:
         push_calls = [call for call in recorder.calls if "push" in " ".join(call["argv"])]
         assert push_calls
         push_argv = " ".join(push_calls[0]["argv"])
-        assert f"HEAD:refs/heads/{TEST_BRANCH}" in push_argv
+        assert f"{VALID_SHA}:refs/heads/{TEST_BRANCH}" in push_argv
 
     # ------------------------------------------------------------------
     # Temp file cleanup

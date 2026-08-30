@@ -461,6 +461,84 @@ class PiOhMyPiDeepSeekAdapter:
                     context=context,
                 )
 
+            if _local_git_config_digest(checkout_dir) != trusted_git_config_digest:
+                return _failed_pi_result(
+                    "Local Git config changed during Assembly OMP execution.",
+                    token,
+                    details,
+                    failure_diagnostic=_simple_diagnostic(
+                        phase="git_config_integrity",
+                        command_category="git",
+                        command="verify .git/config",
+                    ),
+                    temp_root_path=temp_root_path,
+                    contract=contract,
+                    context=context,
+                )
+
+            uses_git_lfs_after_omp = _repository_uses_git_lfs(checkout_dir)
+            if uses_git_lfs_after_omp and not uses_git_lfs:
+                lfs_install = await _run_exec(
+                    ["git", "lfs", "install", "--local"],
+                    cwd=checkout_dir,
+                    timeout_seconds=timeout_seconds,
+                    env=git_env,
+                )
+                if lfs_install.returncode != 0:
+                    return _failed_pi_result(
+                        "Git LFS local filter initialization failed for Assembly OMP backend.",
+                        token,
+                        details,
+                        failure_diagnostic=_diagnostic_from_process(
+                            phase="git_lfs_install",
+                            command_category="git",
+                            command="git lfs install --local",
+                            process=lfs_install,
+                            secret=token,
+                        ),
+                        temp_root_path=temp_root_path,
+                        contract=contract,
+                        context=context,
+                    )
+                lfs_renormalize = await _run_exec(
+                    ["git", "add", "--renormalize", "."],
+                    cwd=checkout_dir,
+                    timeout_seconds=timeout_seconds,
+                    env=git_env,
+                )
+                if lfs_renormalize.returncode != 0:
+                    return _failed_pi_result(
+                        "Git LFS renormalization failed for Assembly OMP backend.",
+                        token,
+                        details,
+                        failure_diagnostic=_diagnostic_from_process(
+                            phase="git_lfs_renormalize",
+                            command_category="git",
+                            command="git add --renormalize .",
+                            process=lfs_renormalize,
+                            secret=token,
+                        ),
+                        temp_root_path=temp_root_path,
+                        contract=contract,
+                        context=context,
+                    )
+                trusted_git_config_digest = _local_git_config_digest(checkout_dir)
+                if trusted_git_config_digest is None:
+                    return _failed_pi_result(
+                        "Could not snapshot local Git config after Git LFS initialization.",
+                        token,
+                        details,
+                        failure_diagnostic=_simple_diagnostic(
+                            phase="git_config_integrity",
+                            command_category="git",
+                            command="snapshot .git/config",
+                        ),
+                        temp_root_path=temp_root_path,
+                        contract=contract,
+                        context=context,
+                    )
+            uses_git_lfs = uses_git_lfs_after_omp
+
             status = await _run_exec(
                 ["git", "status", "--porcelain"],
                 cwd=checkout_dir,
@@ -647,40 +725,6 @@ class PiOhMyPiDeepSeekAdapter:
                     context=context,
                 )
 
-            if uses_git_lfs:
-                lfs_push = await _run_exec(
-                    [
-                        "git",
-                        "-c",
-                        f"lfs.url={_github_lfs_url(repository)}",
-                        "-c",
-                        f"lfs.pushurl={_github_lfs_url(repository)}",
-                        "lfs",
-                        "push",
-                        "origin",
-                        "HEAD",
-                    ],
-                    cwd=checkout_dir,
-                    timeout_seconds=timeout_seconds,
-                    env=git_auth_env,
-                )
-                if lfs_push.returncode != 0:
-                    return _failed_pi_result(
-                        "Git LFS push failed for Assembly OMP backend.",
-                        token,
-                        details,
-                        failure_diagnostic=_diagnostic_from_process(
-                            phase="git_lfs_push",
-                            command_category="git",
-                            command="git lfs push origin HEAD",
-                            process=lfs_push,
-                            secret=token,
-                        ),
-                        temp_root_path=temp_root_path,
-                        contract=contract,
-                        context=context,
-                    )
-
             publish_result = await publish_branch(
                 repository=repository,
                 branch_name=contract.branch_name,
@@ -688,6 +732,8 @@ class PiOhMyPiDeepSeekAdapter:
                 checkout_dir=checkout_dir,
                 timeout_seconds=timeout_seconds,
                 expected_remote_sha=context.expected_remote_sha,
+                source_sha=head_sha,
+                push_lfs=uses_git_lfs,
             )
             if not publish_result.success:
                 return _failed_pi_result(
