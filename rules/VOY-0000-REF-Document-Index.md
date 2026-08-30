@@ -56,7 +56,7 @@
 | 1841 | CHG | Countdown Event Driven Trigger from Clearance Resolved Verdicts | Completed |
 | 1842 | CHG | Countdown In Process Trigger from Clearance Pipeline | Completed |
 | 1843 | PRP | Clearance Open Threads Reach the PR Author PFC Door Notification and Review Fix Auto Fallback | Implemented |
-| 1844 | CHG | Clearance Author Wakeup and Review Fix Fallback Implementation | Completed |
+| 1844 | CHG | Clearance Author Wakeup and Review Fix Fallback Implementation | In Progress |
 
 ---
 
