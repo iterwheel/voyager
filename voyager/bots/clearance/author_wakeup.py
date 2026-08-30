@@ -712,7 +712,7 @@ class PfcDoorClient:
         )
         self.required_retention_seconds = required_retention_seconds
         self._owns_http = http is None
-        self.http = http or httpx.AsyncClient(timeout=20)
+        self.http = http or httpx.AsyncClient(timeout=20, trust_env=False)
 
     async def close(self) -> None:
         if self._owns_http:
@@ -1335,7 +1335,7 @@ class AuthorWakeupReconciler:
             return "auto_review_fix_disabled"
         if self.review_fix is None:
             return "review_fix_invoker_missing"
-        if notification.repository not in set(self.config.allowed_repositories):
+        if notification.repository.lower() not in set(self.config.allowed_repositories):
             return "repository_not_allowlisted"
         if not self._repository_in_scope(notification.repository):
             return "clearance_repository_not_allowlisted"

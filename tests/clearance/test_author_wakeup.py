@@ -341,6 +341,27 @@ async def test_pfc_client_rejects_non_object_json() -> None:
             )
 
 
+def test_pfc_client_disables_environment_proxy_for_owned_http(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: dict[str, object] = {}
+    fake_http = AsyncMock()
+
+    def build_http(**kwargs: object) -> AsyncMock:
+        created.update(kwargs)
+        return fake_http
+
+    monkeypatch.setattr(httpx, "AsyncClient", build_http)
+
+    client = PfcDoorClient(
+        "http://localhost:8420/api/agent-send",
+        required_retention_seconds=86400,
+    )
+
+    assert client.http is fake_http
+    assert created == {"timeout": 20, "trust_env": False}
+
+
 @pytest.mark.asyncio
 async def test_reconciler_waits_for_n_then_batches_and_dedupes(
     tmp_path: Path,
@@ -1645,6 +1666,40 @@ async def test_missing_pr_author_metadata_refuses_fallback(tmp_path: Path) -> No
 
     assert ledger.notifications()[0].fallback_status == "missing_pr_author_login"
     review_fix.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_fallback_allowlist_matches_canonical_repository_case(tmp_path: Path) -> None:
+    now = datetime(2026, 8, 30, 1, 0, tzinfo=UTC)
+    github = AsyncMock()
+    github.pull_request.return_value = {
+        "number": 42,
+        "state": "open",
+        "head": {"sha": "b" * 40},
+        "user": {"login": "ryosaeba1985"},
+    }
+    github.pull_request_review_threads.return_value = [_live_thread()]
+    review_fix = AsyncMock(return_value={"status": "review_fix_succeeded"})
+    reconciler, ledger, notification = _notified_reconciler(
+        tmp_path,
+        now=now,
+        github=github,
+        auto_review_fix=True,
+        review_fix=review_fix,
+    )
+    canonical = notification.with_updates(repository="IterWheel/Voyager-Sandbox")
+    ledger.save_notification(canonical, event="notified", at=now)
+
+    await reconciler.tick(now=now, scan=False)
+
+    review_fix.assert_awaited_once_with(
+        repository="IterWheel/Voyager-Sandbox",
+        pull_number=42,
+        expected_head_sha=canonical.head_sha,
+        finding_ids=canonical.thread_ids,
+        notification_id=canonical.notification_id,
+    )
+    assert ledger.notifications()[0].state == "fallback_finished"
 
 
 @pytest.mark.asyncio
