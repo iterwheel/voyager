@@ -1160,7 +1160,12 @@ class AuthorWakeupReconciler:
                 notification.repository,
                 notification.pull_number,
             )
-        except (httpx.HTTPError, TimeoutError, RuntimeError):
+        except (
+            httpx.HTTPError,
+            TimeoutError,
+            RuntimeError,
+            GitHubGraphQLError,
+        ):
             return
 
         claim_class = _claim_class(notification, pull, list(threads or []))
@@ -1232,6 +1237,16 @@ class AuthorWakeupReconciler:
             return "missing_pr_author_login"
 
         live_by_id = {str(thread.get("id") or ""): thread for thread in threads}
+        if any(
+            thread_id in live_by_id
+            and latest_author_reply(
+                live_by_id[thread_id],
+                author_login=author_login,
+            )
+            is not None
+            for thread_id in notification.thread_ids
+        ):
+            return "author_reply_present"
         if any(
             thread_id not in live_by_id
             or not is_codex_thread(live_by_id[thread_id])

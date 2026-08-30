@@ -48,6 +48,7 @@ def _live_thread(
     reply_login: str | None = None,
     resolved: bool = False,
     thread_id: str = "PRRT_state_a",
+    reply_created_at: str = "2026-08-30T00:50:00Z",
 ) -> dict:
     comments = [
         {
@@ -63,7 +64,7 @@ def _live_thread(
                 "databaseId": 102,
                 "author": {"login": reply_login},
                 "body": "reply",
-                "createdAt": "2026-08-30T00:50:00Z",
+                "createdAt": reply_created_at,
             }
         )
     return {
@@ -430,7 +431,12 @@ async def test_state_a_change_before_n_clears_observation(tmp_path: Path) -> Non
     }
     github.pull_request_review_threads.side_effect = [
         [_live_thread()],
-        [_live_thread(reply_login="ryosaeba1985")],
+        [
+            _live_thread(
+                reply_login="ryosaeba1985",
+                reply_created_at="2026-08-30T01:00:00Z",
+            )
+        ],
     ]
     ledger = WakeupLedger(tmp_path / "wakeup" / "state.db")
     reconciler = AuthorWakeupReconciler(
@@ -1368,6 +1374,39 @@ async def test_claim_evidence_cancels_fallback(
 
 
 @pytest.mark.asyncio
+async def test_pre_delivery_author_reply_refuses_fallback(tmp_path: Path) -> None:
+    now = datetime(2026, 8, 30, 1, 0, tzinfo=UTC)
+    github = AsyncMock()
+    github.pull_request.return_value = {
+        "number": 42,
+        "state": "open",
+        "head": {"sha": "b" * 40},
+        "user": {"login": "ryosaeba1985"},
+    }
+    github.pull_request_review_threads.return_value = [
+        _live_thread(
+            reply_login="ryosaeba1985",
+            reply_created_at="2026-08-30T00:30:00Z",
+        )
+    ]
+    review_fix = AsyncMock()
+    reconciler, ledger, _ = _notified_reconciler(
+        tmp_path,
+        now=now,
+        github=github,
+        auto_review_fix=True,
+        review_fix=review_fix,
+    )
+
+    await reconciler.tick(now=now, scan=False)
+
+    review_fix.assert_not_awaited()
+    current = ledger.notifications()[0]
+    assert current.state == "fallback_refused"
+    assert current.fallback_status == "author_reply_present"
+
+
+@pytest.mark.asyncio
 async def test_maintainer_reply_does_not_claim_before_deadline(tmp_path: Path) -> None:
     now = datetime(2026, 8, 30, 1, 0, tzinfo=UTC)
     github = AsyncMock()
@@ -1447,6 +1486,63 @@ async def test_missing_pr_author_metadata_refuses_fallback(tmp_path: Path) -> No
 
     assert ledger.notifications()[0].fallback_status == "missing_pr_author_login"
     review_fix.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_claim_graphql_failure_does_not_starve_later_notification(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 8, 30, 1, 0, tzinfo=UTC)
+    ledger = WakeupLedger(tmp_path / "state.db")
+    for index, pull_number in enumerate((41, 42)):
+        notification = NotificationState(
+            notification_id=("a" if index == 0 else "b") * 32,
+            repository="iterwheel/voyager-sandbox",
+            pull_number=pull_number,
+            head_sha="c" * 40,
+            thread_ids=("PRRT_state_a",),
+            state="notified",
+            created_at=now - timedelta(minutes=2),
+            author_delivered_at=now - timedelta(minutes=1),
+            claim_deadline=now + timedelta(minutes=19),
+            recipient_citizen="voyager",
+        )
+        ledger.save_notification(notification, event="notified", at=now)
+    github = AsyncMock()
+    github.pull_request.side_effect = [
+        {
+            "number": pull_number,
+            "state": "open",
+            "head": {"sha": "c" * 40},
+            "user": {"login": "ryosaeba1985"},
+        }
+        for pull_number in (41, 42)
+    ]
+    github.pull_request_review_threads.side_effect = [
+        GitHubGraphQLError([{"type": "FORBIDDEN", "message": "fixture"}]),
+        [
+            _live_thread(
+                reply_login="ryosaeba1985",
+                reply_created_at="2026-08-30T01:00:00Z",
+            )
+        ],
+    ]
+    reconciler = AuthorWakeupReconciler(
+        config=AuthorWakeupConfig(
+            enabled=True,
+            allowed_repositories=("iterwheel/voyager-sandbox",),
+        ),
+        clearance_store=StateStore(tmp_path / "clearance"),
+        ledger=ledger,
+        github=github,
+        door=AsyncMock(),
+    )
+
+    await reconciler.tick(now=now, scan=False)
+
+    current = ledger.notifications()
+    assert current[0].state == "notified"
+    assert current[1].state == "claimed"
 
 
 @pytest.mark.asyncio
