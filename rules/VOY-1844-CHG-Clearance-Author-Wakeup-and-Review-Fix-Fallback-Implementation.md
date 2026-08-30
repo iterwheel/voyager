@@ -178,7 +178,7 @@ this state machine.
 | 2026-08-30 | Created implementation CHG from merged VOY-1843 and owner start instruction | In progress; no production code written yet |
 | 2026-08-30 | Plan self-review against merged VOY-1843 and current config/server/review-fix seams | PASS — all PRP config, receipt, claim, fallback, rollout, and rollback surfaces mapped; PFC receipt dependency fails closed |
 | 2026-08-30 | Sequential RED/GREEN cycles for config, durable reconciler/receipt state machine, claim/fallback, internal review-fix guard, and bridge schedule | PASS — each behavior observed failing before its production change; no split worker configured |
-| 2026-08-30 | Focused touched-surface pytest | PASS — 90 passed |
+| 2026-08-30 | Focused touched-surface pytest | PASS — 91 passed |
 | 2026-08-30 | Touched-file Ruff, mypy, and Bandit | PASS — Ruff clean/format clean; mypy 5 source files clean; Bandit no findings |
 
 ---

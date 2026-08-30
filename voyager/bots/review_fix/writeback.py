@@ -83,7 +83,12 @@ async def dispatch_review_fix_for_findings(
 ) -> dict[str, Any]:
     """Invoke governed review-fix for one author-wakeup notification."""
     refusal = None
-    if not _repository_allowed_for_agent(repository, REVIEW_FIX_AGENT_SLUG, cfg):
+    if not _repository_allowed_for_agent(
+        repository,
+        REVIEW_FIX_AGENT_SLUG,
+        cfg,
+        allow_dry_run_default=False,
+    ):
         refusal = {"reason": "repository_not_allowed"}
     route: dict[str, Any] = {
         "agent": REVIEW_FIX_AGENT_SLUG,

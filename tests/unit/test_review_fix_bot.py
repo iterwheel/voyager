@@ -357,6 +357,30 @@ def test_internal_dispatch_requires_review_fix_repository_allowlist(
     client.upsert_issue_comment.assert_not_awaited()
 
 
+def test_internal_dispatch_requires_explicit_allowlist_even_in_dry_run(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("DRY_RUN", raising=False)
+    client = _FakeReviewFixClient()
+
+    result = asyncio.run(
+        dispatch_review_fix_for_findings(
+            client,
+            repository="iterwheel/voyager",
+            pull_number=187,
+            expected_head_sha="a" * 40,
+            finding_ids=("PRRT_review_fix_1",),
+            notification_id="c" * 32,
+            cfg=_cfg(tmp_path, enablement=_l3(tmp_path), dry_run=True),
+        )
+    )
+
+    assert result["status"] == "review_fix_refused"
+    assert result["refusal"]["reason"] == "repository_not_allowed"
+    assert client.pull_calls == []
+
+
 def test_dispatch_refuses_default_branch_target_before_thread_poll(
     monkeypatch,
     tmp_path: Path,

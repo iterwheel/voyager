@@ -40,6 +40,8 @@ def _repository_allowed_for_agent(
     repository: str | None,
     agent_slug: str,
     cfg: Any | None = None,
+    *,
+    allow_dry_run_default: bool = True,
 ) -> bool:
     """Return whether a route may run for this repository and agent.
 
@@ -58,7 +60,7 @@ def _repository_allowed_for_agent(
             (getattr(bridge, "allowed_repositories", {}) or {}).get(agent_slug.lower(), ())
         )
     if not allowed:
-        return dry_run_enabled(cfg)
+        return allow_dry_run_default and dry_run_enabled(cfg)
     if not repository:
         return False
     normalized_repo = repository.strip().lower()
