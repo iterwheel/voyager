@@ -427,6 +427,26 @@ async def test_model_and_verification_subprocesses_receive_only_safe_environment
     git_transport_input = {
         "HTTPS_PROXY": "http://proxy.example",
         "NO_PROXY": "github.com",
+        "GIT_CONFIG_COUNT": "7",
+        "GIT_CONFIG_KEY_0": "http.proxy",
+        "GIT_CONFIG_VALUE_0": "http://git-proxy.example",
+        "GIT_CONFIG_KEY_1": "http.sslCAInfo",
+        "GIT_CONFIG_VALUE_1": "/safe/ca.pem",
+        "GIT_CONFIG_KEY_2": "http.proxySSLCAInfo",
+        "GIT_CONFIG_VALUE_2": "/safe/proxy-ca.pem",
+        "GIT_CONFIG_KEY_3": "http.proxySSLCert",
+        "GIT_CONFIG_VALUE_3": "/safe/proxy-cert.pem",
+        "GIT_CONFIG_KEY_4": "http.proxySSLKey",
+        "GIT_CONFIG_VALUE_4": "/safe/proxy-key.pem",
+        "GIT_CONFIG_KEY_5": "http.sslCAPath",
+        "GIT_CONFIG_VALUE_5": "/safe/ca-directory",
+        "GIT_CONFIG_KEY_6": "credential.helper",
+        "GIT_CONFIG_VALUE_6": "!malicious-helper",
+    }
+    for name, value in git_transport_input.items():
+        monkeypatch.setenv(name, value)
+    expected_git_transport_values = {
+        **{name: git_transport_input[name] for name in ("HTTPS_PROXY", "NO_PROXY")},
         "GIT_CONFIG_COUNT": "6",
         "GIT_CONFIG_KEY_0": "http.proxy",
         "GIT_CONFIG_VALUE_0": "http://git-proxy.example",
@@ -438,24 +458,8 @@ async def test_model_and_verification_subprocesses_receive_only_safe_environment
         "GIT_CONFIG_VALUE_3": "/safe/proxy-cert.pem",
         "GIT_CONFIG_KEY_4": "http.proxySSLKey",
         "GIT_CONFIG_VALUE_4": "/safe/proxy-key.pem",
-        "GIT_CONFIG_KEY_5": "credential.helper",
-        "GIT_CONFIG_VALUE_5": "!malicious-helper",
-    }
-    for name, value in git_transport_input.items():
-        monkeypatch.setenv(name, value)
-    expected_git_transport_values = {
-        **{name: git_transport_input[name] for name in ("HTTPS_PROXY", "NO_PROXY")},
-        "GIT_CONFIG_COUNT": "5",
-        "GIT_CONFIG_KEY_0": "http.proxy",
-        "GIT_CONFIG_VALUE_0": "http://git-proxy.example",
-        "GIT_CONFIG_KEY_1": "http.sslCAInfo",
-        "GIT_CONFIG_VALUE_1": "/safe/ca.pem",
-        "GIT_CONFIG_KEY_2": "http.proxySSLCAInfo",
-        "GIT_CONFIG_VALUE_2": "/safe/proxy-ca.pem",
-        "GIT_CONFIG_KEY_3": "http.proxySSLCert",
-        "GIT_CONFIG_VALUE_3": "/safe/proxy-cert.pem",
-        "GIT_CONFIG_KEY_4": "http.proxySSLKey",
-        "GIT_CONFIG_VALUE_4": "/safe/proxy-key.pem",
+        "GIT_CONFIG_KEY_5": "http.sslCAPath",
+        "GIT_CONFIG_VALUE_5": "/safe/ca-directory",
     }
 
     recorder = _CommandRecorder(status_porcelain="M voyager/example.py\n")
@@ -529,15 +533,15 @@ async def test_model_and_verification_subprocesses_receive_only_safe_environment
         if is_publish_call and "ASSEMBLY_GITHUB_TOKEN" in env:
             expected.update(
                 {
-                    "GIT_CONFIG_COUNT": "6",
-                    "GIT_CONFIG_KEY_5": "credential.helper",
-                    "GIT_CONFIG_VALUE_5": "",
+                    "GIT_CONFIG_COUNT": "7",
+                    "GIT_CONFIG_KEY_6": "credential.helper",
+                    "GIT_CONFIG_VALUE_6": "",
                 }
             )
         assert {name: env[name] for name in expected} == expected
         if not is_publish_call:
-            assert "GIT_CONFIG_KEY_5" not in env
-            assert "GIT_CONFIG_VALUE_5" not in env
+            assert "GIT_CONFIG_KEY_6" not in env
+            assert "GIT_CONFIG_VALUE_6" not in env
 
 
 @pytest.mark.asyncio
