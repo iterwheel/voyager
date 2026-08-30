@@ -98,8 +98,7 @@ cd /Users/frank/Projects/voyager
 export VOYAGER_TEST_BOT_LOGINS="voyager-e2e-bot[bot]"
 export DRY_RUN=true              # voyager won't write labels/merges during testing
 export VOYAGER_E2E_DEBUG=1       # enables /e2e/recent_writebacks (the runner polls it)
-# Optional defense-in-depth: pair with X-Voyager-E2E-Token header
-# export VOYAGER_E2E_TOKEN="<random-secret>"  # if set, runner reads same env var
+export VOYAGER_E2E_TOKEN="<random-secret>"  # required; runner sends the matching header
 uv run uvicorn voyager.server:app --host 127.0.0.1 --port 8000
 ```
 
@@ -108,8 +107,7 @@ sandbox-only swap procedure per Q1(c).)
 
 > Without `VOYAGER_E2E_DEBUG=1` the runner fails fast on the first scenario
 > with "endpoint is gated" (404 from the loopback debug endpoint). The
-> `VOYAGER_E2E_TOKEN` pairing is optional but recommended on multi-tenant
-> hosts.
+> `VOYAGER_E2E_TOKEN` pairing is mandatory whenever debug mode is enabled.
 
 **Terminal 3 — run the matrix:**
 
@@ -137,9 +135,10 @@ which is layered behind:
 2. **Loopback-only by default** — non-127.0.0.1 / non-::1 clients get 404.
    Override with `VOYAGER_E2E_ALLOW_NON_LOOPBACK=1` for bastion / split-host
    setups (you almost certainly don't want this).
-3. **Optional shared-secret token** — if `VOYAGER_E2E_TOKEN` is set on the
-   voyager side, requests must carry `X-Voyager-E2E-Token: <value>`. The
-   runner reads the same env var to send the header automatically.
+3. **Mandatory shared-secret token** — `VOYAGER_E2E_TOKEN` must be set on the
+   Voyager side whenever debug mode is enabled, and requests must carry
+   `X-Voyager-E2E-Token: <value>`. The runner reads the same env var to send the
+   header automatically. Missing token configuration fails closed with 404.
 4. **`Cache-Control: no-store`** on the response.
 
 Production never sets `VOYAGER_E2E_DEBUG`; the `E2E` in the var name + the

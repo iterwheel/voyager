@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import logging
 import os
@@ -810,7 +811,14 @@ def _truthy(s: str | None) -> bool:
     return (s or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+def _is_loopback_host(host: str) -> bool:
+    """Return whether *host* is a loopback IP literal, including IPv4-mapped IPv6."""
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    mapped = getattr(address, "ipv4_mapped", None)
+    return address.is_loopback or bool(mapped and mapped.is_loopback)
 
 
 @app.get("/e2e/recent_writebacks", include_in_schema=False)
@@ -823,12 +831,13 @@ async def e2e_recent_writebacks(
 
       1. ``VOYAGER_E2E_DEBUG=1`` env required (404 otherwise — doesn't leak
          the endpoint's existence)
-      2. Request client must be loopback (127.0.0.1 / ::1 / localhost). A
+      2. Request client must be a loopback IP literal. A
          tunnel or LAN client gets 404. Operators wanting non-loopback access
          must opt in with VOYAGER_E2E_ALLOW_NON_LOOPBACK=1.
-      3. If ``VOYAGER_E2E_TOKEN`` env is set, the request must carry the
-         matching ``X-Voyager-E2E-Token`` header. Constant-time compare via
-         secrets.compare_digest to avoid timing oracle.
+      3. ``VOYAGER_E2E_TOKEN`` is mandatory whenever debug mode is enabled;
+         missing configuration returns 404. Requests must carry the matching
+         ``X-Voyager-E2E-Token`` header. Constant-time compare via
+         secrets.compare_digest avoids a timing oracle.
       4. ``Cache-Control: no-store, max-age=0`` on the response so the
          writeback record isn't cached by intermediaries.
 
@@ -839,7 +848,7 @@ async def e2e_recent_writebacks(
 
     if not _truthy(os.environ.get("VOYAGER_E2E_ALLOW_NON_LOOPBACK")):
         client_host = (request.client.host if request.client else "") or ""
-        if client_host not in _LOOPBACK_HOSTS:
+        if not _is_loopback_host(client_host):
             _log.warning(
                 "e2e endpoint rejected non-loopback client %r (set "
                 "VOYAGER_E2E_ALLOW_NON_LOOPBACK=1 to override)",
@@ -847,14 +856,14 @@ async def e2e_recent_writebacks(
             )
             raise HTTPException(status_code=404, detail="Not found")
 
-    expected_token = os.environ.get("VOYAGER_E2E_TOKEN")
-    if expected_token:
-        import secrets as _secrets
+    expected_token = (os.environ.get("VOYAGER_E2E_TOKEN") or "").strip()
+    if not expected_token:
+        raise HTTPException(status_code=404, detail="Not found")
 
-        if not x_voyager_e2e_token or not _secrets.compare_digest(
-            expected_token, x_voyager_e2e_token
-        ):
-            raise HTTPException(status_code=401, detail="missing or invalid e2e token")
+    import secrets as _secrets
+
+    if not x_voyager_e2e_token or not _secrets.compare_digest(expected_token, x_voyager_e2e_token):
+        raise HTTPException(status_code=401, detail="missing or invalid e2e token")
 
     return JSONResponse(
         content={
