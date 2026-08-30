@@ -669,13 +669,14 @@ def _poll_for_writeback(
             if r.status_code in (401, 403):
                 return None, (
                     f"voyager auth rejected ({r.status_code}): the e2e endpoint "
-                    f"requires VOYAGER_E2E_DEBUG=1 and a matching X-Voyager-E2E-Token "
-                    f"header if VOYAGER_E2E_TOKEN is set."
+                    f"requires VOYAGER_E2E_DEBUG=1, mandatory VOYAGER_E2E_TOKEN, "
+                    f"and a matching X-Voyager-E2E-Token header."
                 )
             if r.status_code == 404:
                 return None, (
                     "voyager returned 404 for /e2e/recent_writebacks — endpoint is "
-                    "gated by VOYAGER_E2E_DEBUG=1; start voyager with that env set."
+                    "gated by VOYAGER_E2E_DEBUG=1 and mandatory VOYAGER_E2E_TOKEN; "
+                    "start voyager with both env vars set."
                 )
             if r.status_code >= 500:
                 last_transient = f"voyager 5xx: HTTP {r.status_code}"

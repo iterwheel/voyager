@@ -4,7 +4,7 @@ The endpoint has layered defense-in-depth (trinity round 1 P1):
   1. VOYAGER_E2E_DEBUG=1 gates everything (404 otherwise)
   2. Loopback-only by default (non-loopback → 404, override with
      VOYAGER_E2E_ALLOW_NON_LOOPBACK=1)
-  3. Optional VOYAGER_E2E_TOKEN paired with X-Voyager-E2E-Token header
+  3. Mandatory VOYAGER_E2E_TOKEN paired with X-Voyager-E2E-Token header
   4. Cache-Control: no-store on the response
 
 These tests pin all four layers + the unchanged "returns deque contents"
@@ -23,9 +23,14 @@ def client(monkeypatch) -> TestClient:
     request.client.host is `testclient`, not 127.0.0.1. Individual tests
     that exercise the loopback gate override the env explicitly."""
     monkeypatch.setenv("VOYAGER_E2E_ALLOW_NON_LOOPBACK", "1")
+    monkeypatch.setenv("VOYAGER_E2E_TOKEN", "secret-abc")
     from voyager.server import app
 
-    return TestClient(app, raise_server_exceptions=False)
+    return TestClient(
+        app,
+        headers={"X-Voyager-E2E-Token": "secret-abc"},
+        raise_server_exceptions=False,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +103,20 @@ def test_endpoint_sets_no_store_cache_header(monkeypatch, client) -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("host", ["127.0.0.1", "::1", "::ffff:127.0.0.1"])
+def test_loopback_host_accepts_ip_literal_forms(host) -> None:
+    from voyager.server import _is_loopback_host
+
+    assert _is_loopback_host(host) is True
+
+
+@pytest.mark.parametrize("host", ["localhost", "testclient", "192.0.2.1", ""])
+def test_loopback_host_rejects_names_and_non_loopback_addresses(host) -> None:
+    from voyager.server import _is_loopback_host
+
+    assert _is_loopback_host(host) is False
+
+
 def test_endpoint_404_for_non_loopback_when_override_unset(monkeypatch) -> None:
     """Without the override, non-loopback clients (e.g. TestClient with
     `testclient` host) get a 404 — same shape as the debug-gate 404 so
@@ -115,22 +134,29 @@ def test_endpoint_200_when_loopback_override_set(monkeypatch) -> None:
     """The escape hatch for operators running on bastions etc."""
     monkeypatch.setenv("VOYAGER_E2E_DEBUG", "1")
     monkeypatch.setenv("VOYAGER_E2E_ALLOW_NON_LOOPBACK", "1")
+    monkeypatch.setenv("VOYAGER_E2E_TOKEN", "secret-abc")
     from voyager.server import app
 
     raw_client = TestClient(app, raise_server_exceptions=False)
-    response = raw_client.get("/e2e/recent_writebacks")
+    response = raw_client.get(
+        "/e2e/recent_writebacks",
+        headers={"X-Voyager-E2E-Token": "secret-abc"},
+    )
     assert response.status_code == 200
 
 
 # ---------------------------------------------------------------------------
-# Token gate (when VOYAGER_E2E_TOKEN is set)
+# Mandatory token gate
 # ---------------------------------------------------------------------------
 
 
 def test_endpoint_401_when_token_required_and_header_missing(monkeypatch, client) -> None:
     monkeypatch.setenv("VOYAGER_E2E_DEBUG", "1")
     monkeypatch.setenv("VOYAGER_E2E_TOKEN", "secret-abc")
-    response = client.get("/e2e/recent_writebacks")
+    response = client.get(
+        "/e2e/recent_writebacks",
+        headers={"X-Voyager-E2E-Token": ""},
+    )
     assert response.status_code == 401
 
 
@@ -148,13 +174,18 @@ def test_endpoint_200_when_token_required_and_header_matches(monkeypatch, client
     assert response.status_code == 200
 
 
-def test_endpoint_token_unset_means_no_header_required(monkeypatch, client) -> None:
-    """Backward-compat: existing operators who set only VOYAGER_E2E_DEBUG=1
-    keep working without configuring a token."""
+@pytest.mark.parametrize("configured_token", [None, "", "   "])
+def test_endpoint_404_when_debug_token_is_missing_or_blank(
+    monkeypatch, client, configured_token
+) -> None:
+    """Debug mode fails closed unless the operator configured a non-blank token."""
     monkeypatch.setenv("VOYAGER_E2E_DEBUG", "1")
-    monkeypatch.delenv("VOYAGER_E2E_TOKEN", raising=False)
+    if configured_token is None:
+        monkeypatch.delenv("VOYAGER_E2E_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("VOYAGER_E2E_TOKEN", configured_token)
     response = client.get("/e2e/recent_writebacks")
-    assert response.status_code == 200
+    assert response.status_code == 404
 
 
 # ---------------------------------------------------------------------------
