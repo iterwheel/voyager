@@ -24,6 +24,7 @@ from voyager.bots.clearance.author_wakeup import (
 from voyager.bots.clearance.models import PollRecord, Severity, Status, Thread, Verdict
 from voyager.bots.clearance.state import StateStore
 from voyager.core.config import AuthorWakeupConfig
+from voyager.core.github_app import GitHubGraphQLError
 
 
 def _persisted_thread(**overrides: object) -> Thread:
@@ -554,6 +555,55 @@ async def test_due_observation_waits_for_a_successful_current_scan(tmp_path: Pat
     await reconciler.tick(now=now + timedelta(minutes=1, seconds=1), scan=True)
 
     door.post.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_graphql_failure_isolated_to_one_scan_target(tmp_path: Path) -> None:
+    now = datetime(2026, 8, 30, 0, 0, tzinfo=UTC)
+    repository = "iterwheel/voyager-sandbox"
+    head_sha = "b" * 40
+    clearance_store = StateStore(tmp_path / "clearance")
+    for pull_number in (41, 42):
+        clearance_store.append_poll(
+            PollRecord(
+                ts=now,
+                repo=repository,
+                pr=pull_number,
+                head_sha=head_sha,
+                status=Status.BLOCKED,
+                threads=[_persisted_thread()],
+            )
+        )
+    github = AsyncMock()
+    github.pull_request.side_effect = [
+        {
+            "number": pull_number,
+            "state": "open",
+            "head": {"sha": head_sha},
+            "user": {"login": "ryosaeba1985"},
+        }
+        for pull_number in (41, 42)
+    ]
+    github.pull_request_review_threads.side_effect = [
+        GitHubGraphQLError([{"type": "FORBIDDEN", "message": "fixture"}]),
+        [_live_thread()],
+    ]
+    ledger = WakeupLedger(tmp_path / "wakeup" / "state.db")
+    reconciler = AuthorWakeupReconciler(
+        config=AuthorWakeupConfig(
+            enabled=True,
+            allowed_repositories=(repository,),
+        ),
+        clearance_store=clearance_store,
+        ledger=ledger,
+        github=github,
+        door=AsyncMock(),
+    )
+
+    summary = await reconciler.tick(now=now, scan=True)
+
+    assert summary.observed == 1
+    assert ledger.active_observations()[0].key.pull_number == 42
 
 
 @pytest.mark.asyncio
@@ -1095,6 +1145,42 @@ async def test_recovery_rechecks_current_repository_scope(
 
     door.post.assert_not_awaited()
     assert ledger.notifications()[0].state == "notify_scope_revoked"
+
+
+@pytest.mark.asyncio
+async def test_tick_does_not_load_terminal_notification_history(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 8, 30, 0, 2, tzinfo=UTC)
+    ledger = WakeupLedger(tmp_path / "state.db")
+    terminal = NotificationState(
+        notification_id="a" * 32,
+        repository="iterwheel/voyager-sandbox",
+        pull_number=42,
+        head_sha="b" * 40,
+        thread_ids=("PRRT_one",),
+        state="fallback_finished",
+        created_at=now,
+    )
+    ledger.save_notification(terminal, event=terminal.state, at=now)
+    monkeypatch.setattr(
+        ledger,
+        "notifications",
+        lambda: pytest.fail("tick must not load terminal notification history"),
+    )
+    reconciler = AuthorWakeupReconciler(
+        config=AuthorWakeupConfig(
+            enabled=True,
+            allowed_repositories=(terminal.repository,),
+        ),
+        clearance_store=StateStore(tmp_path / "clearance"),
+        ledger=ledger,
+        github=AsyncMock(),
+        door=AsyncMock(),
+    )
+
+    await reconciler.tick(now=now, scan=False)
 
 
 @pytest.mark.asyncio

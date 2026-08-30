@@ -22,8 +22,20 @@ from voyager.bots.clearance.constants import CLEARANCE_AGENT_SLUG
 from voyager.bots.clearance.models import PollRecord, Thread, Verdict
 from voyager.bots.clearance.state import StateStore
 from voyager.core.config import AuthorWakeupConfig
+from voyager.core.github_app import GitHubGraphQLError
 
 _log = logging.getLogger(__name__)
+_ACTIONABLE_NOTIFICATION_STATES = (
+    "fallback_intent",
+    "fallback_started",
+    "notified",
+    "notify_attempt_failed",
+    "notify_attempt_intent",
+    "notify_attempt_uncertain",
+    "notify_intent",
+    "notify_queued",
+    "pfc_received",
+)
 
 
 @dataclass(frozen=True)
@@ -118,8 +130,11 @@ class WakeupLedger:
                     ON observations (status, repository, pull_number);
                 CREATE TABLE IF NOT EXISTS notifications (
                     notification_id TEXT PRIMARY KEY,
+                    state TEXT NOT NULL,
                     data TEXT NOT NULL
                 );
+                CREATE INDEX IF NOT EXISTS idx_notifications_state
+                    ON notifications (state);
                 CREATE TABLE IF NOT EXISTS terminal_scan_checkpoints (
                     repository TEXT NOT NULL,
                     pull_number INTEGER NOT NULL,
@@ -229,10 +244,12 @@ class WakeupLedger:
         with self._connect() as db:
             db.execute(
                 """
-                INSERT INTO notifications (notification_id, data) VALUES (?, ?)
-                ON CONFLICT(notification_id) DO UPDATE SET data=excluded.data
+                INSERT INTO notifications (notification_id, state, data) VALUES (?, ?, ?)
+                ON CONFLICT(notification_id) DO UPDATE SET
+                    state=excluded.state,
+                    data=excluded.data
                 """,
-                (notification.notification_id, encoded),
+                (notification.notification_id, notification.state, encoded),
             )
             self._append_event(
                 db,
@@ -345,10 +362,12 @@ class WakeupLedger:
         with self._connect() as db:
             db.execute(
                 """
-                INSERT INTO notifications (notification_id, data) VALUES (?, ?)
-                ON CONFLICT(notification_id) DO UPDATE SET data=excluded.data
+                INSERT INTO notifications (notification_id, state, data) VALUES (?, ?, ?)
+                ON CONFLICT(notification_id) DO UPDATE SET
+                    state=excluded.state,
+                    data=excluded.data
                 """,
-                (notification.notification_id, encoded),
+                (notification.notification_id, notification.state, encoded),
             )
             self._append_event(
                 db,
@@ -435,6 +454,24 @@ class WakeupLedger:
     def notifications(self) -> tuple[NotificationState, ...]:
         with self._connect() as db:
             rows = db.execute("SELECT data FROM notifications ORDER BY notification_id").fetchall()
+        return tuple(NotificationState.from_dict(json.loads(str(row["data"]))) for row in rows)
+
+    def actionable_notifications(
+        self,
+        states: Sequence[str],
+    ) -> tuple[NotificationState, ...]:
+        normalized = tuple(sorted(set(states)))
+        if not normalized:
+            return ()
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT data FROM notifications
+                WHERE state IN (SELECT value FROM json_each(?))
+                ORDER BY notification_id
+                """,
+                (json.dumps(normalized),),
+            ).fetchall()
         return tuple(NotificationState.from_dict(json.loads(str(row["data"]))) for row in rows)
 
     def terminal_scan_matches(
@@ -692,37 +729,32 @@ class AuthorWakeupReconciler:
         observed = notifications_started = receipts_checked = 0
         if scan:
             observed, notifications_started = await self._scan(now)
-        for notification in self.ledger.notifications():
+        notifications = self.ledger.actionable_notifications(_ACTIONABLE_NOTIFICATION_STATES)
+        for notification in notifications:
             if notification.state == "notify_intent":
                 await self._post_notification(notification, now)
-        for notification in self.ledger.notifications():
-            if notification.state not in {
+            elif notification.state in {
                 "notify_attempt_intent",
                 "notify_attempt_uncertain",
                 "notify_queued",
                 "pfc_received",
             }:
-                continue
-            await self._check_receipt(notification, now)
-            receipts_checked += 1
-        for notification in self.ledger.notifications():
-            if (
+                await self._check_receipt(notification, now)
+                receipts_checked += 1
+            elif (
                 notification.state == "notify_attempt_failed"
                 and notification.next_delivery_attempt_at is not None
                 and now >= notification.next_delivery_attempt_at
             ):
                 await self._post_notification(notification, now)
-        for notification in self.ledger.notifications():
-            if notification.state == "fallback_started":
+            elif notification.state == "fallback_started":
                 refused = notification.with_updates(
                     state="fallback_refused",
                     fallback_status="restart_after_fallback_started",
                 )
                 self.ledger.save_notification(refused, event=refused.state, at=now)
-                continue
-            if notification.state not in {"notified", "fallback_intent"}:
-                continue
-            await self._check_claim_or_fallback(notification, now)
+            elif notification.state in {"notified", "fallback_intent"}:
+                await self._check_claim_or_fallback(notification, now)
         return TickSummary(
             observed=observed,
             notifications_started=notifications_started,
@@ -782,7 +814,12 @@ class AuthorWakeupReconciler:
                 live_threads = await self.github.pull_request_review_threads(
                     CLEARANCE_AGENT_SLUG, repository, pull_number
                 )
-            except (httpx.HTTPError, TimeoutError, RuntimeError):
+            except (
+                httpx.HTTPError,
+                TimeoutError,
+                RuntimeError,
+                GitHubGraphQLError,
+            ):
                 continue
             head_sha = str((pull.get("head") or {}).get("sha") or "")
             if str(pull.get("state") or "").lower() != "open" or head_sha != poll.head_sha:
