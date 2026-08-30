@@ -131,10 +131,24 @@ class GitHubAppClient:
     async def installation_token(self, app_slug: str, *, repository: str | None = None) -> str:
         app = self._apps[app_slug]
         installation_id = app.configured_installation_id_for_repository(repository)
-        if not installation_id:
-            installation_id = getattr(app, "installation_id", "") or None
+        # Issue #252: for an explicit repository, try installation discovery BEFORE
+        # falling back to the app-level default. The default belongs to one org;
+        # silently minting a wrong-installation token for an unmapped repo makes
+        # every subsequent API call 404 ("Resource not accessible") with no hint.
         if not installation_id and repository:
             installation_id = await self._discover_installation_id(app, repository)
+        if not installation_id:
+            installation_id = getattr(app, "installation_id", "") or None
+            if installation_id and repository:
+                _log.warning(
+                    "installation_id for %s is neither configured nor discoverable for %s; "
+                    "falling back to the app-level default installation %s — expect 404s "
+                    "if %s is not installed on that installation",
+                    app.slug,
+                    repository,
+                    installation_id,
+                    repository,
+                )
         if not installation_id:
             target = f" on {repository}" if repository else ""
             raise RuntimeError(

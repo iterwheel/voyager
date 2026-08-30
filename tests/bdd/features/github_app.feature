@@ -127,6 +127,23 @@ Feature: GitHub App authentication — JWT and installation token machinery
     When an installation token is requested again for repository "test-org/new-repo"
     Then only one discovery GET call was made in total
 
+  # Issue #252: for an explicit repository, discovery runs BEFORE the app-level
+  # default installation. The default belongs to one org; silently minting a
+  # wrong-installation token makes every subsequent call 404.
+
+  Scenario: Unmapped repository discovers before the app-level default installation
+    Given GitHub discovery returns installation_id "55500011" for "other-org/other-repo"
+    And GitHub returns a valid installation token response
+    When an installation token is requested for repository "other-org/other-repo"
+    Then the GET discovery call was made to "/repos/other-org/other-repo/installation"
+    And the HTTP call was POST to "/app/installations/55500011/access_tokens"
+
+  Scenario: Unmapped and undiscoverable repository falls back to the default installation
+    Given GitHub discovery returns 404 for "other-org/unknown-repo"
+    And GitHub returns a valid installation token response
+    When an installation token is requested for repository "other-org/unknown-repo"
+    Then the HTTP call was POST to "/app/installations/99887766/access_tokens"
+
   # ---------------------------------------------------------------------------
   # Multi-app routing
   # ---------------------------------------------------------------------------
@@ -158,13 +175,15 @@ Feature: GitHub App authentication — JWT and installation token machinery
   # ---------------------------------------------------------------------------
 
   Scenario: request() acquires an installation token then sends the API call
-    Given GitHub returns a valid installation token response
+    Given the app has repository "test-org/my-repo" mapped to installation_id "99887766"
+    And GitHub returns a valid installation token response
     And GitHub returns a generic 200 JSON response
     When a GET request is made to path "/repos/test-org/my-repo/pulls/1"
     Then the request Authorization header starts with "Bearer ghs_test_installation_token"
 
   Scenario: request() returns None for HTTP 204 responses
-    Given GitHub returns a valid installation token response
+    Given the app has repository "test-org/my-repo" mapped to installation_id "99887766"
+    And GitHub returns a valid installation token response
     And GitHub returns a 204 No Content response
     When a DELETE request is made to path "/repos/test-org/my-repo/issues/1/labels/foo"
     Then the result is None
@@ -174,7 +193,8 @@ Feature: GitHub App authentication — JWT and installation token machinery
   # ---------------------------------------------------------------------------
 
   Scenario: graphql() raises GitHubGraphQLError when response contains errors
-    Given GitHub returns a valid installation token response
+    Given the app has repository "test-org/my-repo" mapped to installation_id "99887766"
+    And GitHub returns a valid installation token response
     And GitHub returns a GraphQL response with errors
     When a GraphQL query is executed
     Then a GitHubGraphQLError is raised
@@ -216,6 +236,7 @@ Feature: GitHub App authentication — JWT and installation token machinery
     Given a test GitHub App with slug "iterwheel-clearance" and app_id "9999"
     And the app has a valid RSA private key
     And the app has installation_id "55544433"
+    And the app has repository "iterwheel/voyager-sandbox" mapped to installation_id "55544433"
     And the GitHub API returns a token then a 200 diff response with a sample PR diff
     When pull_request_diff is called for "iterwheel/voyager-sandbox" PR 7
     Then the returned diff contains "diff --git a/app.py b/app.py"
@@ -239,6 +260,7 @@ Feature: GitHub App authentication — JWT and installation token machinery
     Given a test GitHub App with slug "iterwheel-clearance" and app_id "9999"
     And the app has a valid RSA private key
     And the app has installation_id "55544433"
+    And the app has repository "iterwheel/voyager-sandbox" mapped to installation_id "55544433"
     And the GitHub API returns a token then a branch response with protected true
     When branch_protected is called for "iterwheel/voyager-sandbox" branch "main"
     Then branch_protected returned True
@@ -247,6 +269,7 @@ Feature: GitHub App authentication — JWT and installation token machinery
     Given a test GitHub App with slug "iterwheel-clearance" and app_id "9999"
     And the app has a valid RSA private key
     And the app has installation_id "55544433"
+    And the app has repository "iterwheel/voyager-sandbox" mapped to installation_id "55544433"
     And the GitHub API returns a token then a branch response with protected false
     When branch_protected is called for "iterwheel/voyager-sandbox" branch "main"
     Then branch_protected returned False
@@ -255,6 +278,7 @@ Feature: GitHub App authentication — JWT and installation token machinery
     Given a test GitHub App with slug "iterwheel-clearance" and app_id "9999"
     And the app has a valid RSA private key
     And the app has installation_id "55544433"
+    And the app has repository "iterwheel/voyager-sandbox" mapped to installation_id "55544433"
     And the GitHub API returns a token then a 404 branch response
     When branch_protected is called for "iterwheel/voyager-sandbox" branch "main"
     Then branch_protected returned True
@@ -264,6 +288,7 @@ Feature: GitHub App authentication — JWT and installation token machinery
     Given a test GitHub App with slug "iterwheel-clearance" and app_id "9999"
     And the app has a valid RSA private key
     And the app has installation_id "55544433"
+    And the app has repository "iterwheel/voyager-sandbox" mapped to installation_id "55544433"
     And the GitHub API returns a token then a 500 branch response
     When branch_protected is called for "iterwheel/voyager-sandbox" branch "main"
     Then branch_protected returned True
@@ -273,6 +298,7 @@ Feature: GitHub App authentication — JWT and installation token machinery
     Given a test GitHub App with slug "iterwheel-clearance" and app_id "9999"
     And the app has a valid RSA private key
     And the app has installation_id "55544433"
+    And the app has repository "iterwheel/voyager-sandbox" mapped to installation_id "55544433"
     And the GitHub API returns a token then a branch response with protected true
     When branch_protected is called for "iterwheel/voyager-sandbox" branch "release/2026.05"
     Then branch_protected returned True
