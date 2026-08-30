@@ -44,12 +44,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import os
 import re
 import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+
+from .subprocess_env import scoped_git_env
 
 _log = logging.getLogger(__name__)
 _COMMIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -145,10 +146,7 @@ def _git_push_env(*, token: str, askpass: Path) -> dict[str, str]:
     Returns:
         Environment dict safe for ``asyncio.create_subprocess_exec``.
     """
-    env = dict(os.environ)
-    env["GIT_TERMINAL_PROMPT"] = "0"
-    env["GIT_ASKPASS"] = str(askpass)
-    env["ASSEMBLY_GITHUB_TOKEN"] = token
+    env = scoped_git_env(token=token, askpass=askpass)
     # Host-level credential helpers such as macOS osxkeychain can satisfy
     # HTTPS prompts before GIT_ASKPASS runs. Force this subprocess family to
     # use only the Assembly App token supplied by the temporary askpass script.
@@ -387,6 +385,7 @@ async def publish_branch(
                     "remove",
                     remote_name,
                     cwd=checkout_dir,
+                    env=scoped_git_env(),
                     stdout=asyncio.subprocess.DEVNULL,
                     stderr=asyncio.subprocess.DEVNULL,
                 )

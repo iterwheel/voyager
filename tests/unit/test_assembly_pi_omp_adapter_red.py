@@ -472,12 +472,7 @@ async def test_model_and_verification_subprocesses_receive_only_safe_environment
     assert set(omp_env) <= allowed_names | {"DEEPSEEK_API_KEY"}
     assert omp_env["DEEPSEEK_API_KEY"] == "secret-deepseek_api_key"
 
-    adapter_calls = [
-        call
-        for call in recorder.calls
-        if not any(arg.startswith("assembly-publish-") for arg in call["argv"])
-    ]
-    for call in adapter_calls:
+    for call in recorder.calls:
         env = call["kwargs"].get("env") or {}
         for name in ambient_secret_names[2:]:
             assert name not in env
@@ -485,7 +480,7 @@ async def test_model_and_verification_subprocesses_receive_only_safe_environment
         if call is not omp_call:
             assert "DEEPSEEK_API_KEY" not in env
     adapter_git_calls = [
-        call for call in adapter_calls if call["argv"] and Path(call["argv"][0]).name == "git"
+        call for call in recorder.calls if call["argv"] and Path(call["argv"][0]).name == "git"
     ]
     assert adapter_git_calls
     commit_calls = recorder.git_calls("commit")
@@ -493,11 +488,20 @@ async def test_model_and_verification_subprocesses_receive_only_safe_environment
     assert "--no-gpg-sign" in commit_calls[0]["argv"]
     for call in adapter_git_calls:
         env = call["kwargs"]["env"]
-        assert {name: env[name] for name in expected_git_transport_values} == (
-            expected_git_transport_values
-        )
-        assert "GIT_CONFIG_KEY_2" not in env
-        assert "GIT_CONFIG_VALUE_2" not in env
+        is_publish_call = any(arg.startswith("assembly-publish-") for arg in call["argv"])
+        expected = dict(expected_git_transport_values)
+        if is_publish_call and "ASSEMBLY_GITHUB_TOKEN" in env:
+            expected.update(
+                {
+                    "GIT_CONFIG_COUNT": "3",
+                    "GIT_CONFIG_KEY_2": "credential.helper",
+                    "GIT_CONFIG_VALUE_2": "",
+                }
+            )
+        assert {name: env[name] for name in expected} == expected
+        if not is_publish_call:
+            assert "GIT_CONFIG_KEY_2" not in env
+            assert "GIT_CONFIG_VALUE_2" not in env
 
 
 @pytest.mark.asyncio

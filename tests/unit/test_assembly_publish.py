@@ -84,15 +84,15 @@ class TestGitPushEnv:
         assert env["ASSEMBLY_GITHUB_TOKEN"] == TEST_TOKEN
         assert env["GIT_TERMINAL_PROMPT"] == "0"
 
-    def test_preserves_original_env(self, tmp_path: Path) -> None:
-        os.environ["PUBLISH_TEST_VAR"] = "preserve-me"
+    def test_drops_unapproved_original_env(self, tmp_path: Path) -> None:
+        os.environ["GITHUB_WEBHOOK_SECRET_ITERWHEEL_ASSEMBLY"] = "must-not-cross"
         try:
             askpass = tmp_path / "askpass.sh"
             askpass.write_text("#!/bin/sh\necho ok\n")
             env = _git_push_env(token=TEST_TOKEN, askpass=askpass)
-            assert env["PUBLISH_TEST_VAR"] == "preserve-me"
+            assert "GITHUB_WEBHOOK_SECRET_ITERWHEEL_ASSEMBLY" not in env
         finally:
-            os.environ.pop("PUBLISH_TEST_VAR", None)
+            os.environ.pop("GITHUB_WEBHOOK_SECRET_ITERWHEEL_ASSEMBLY", None)
 
     def test_overrides_previous_token(self, tmp_path: Path) -> None:
         os.environ["ASSEMBLY_GITHUB_TOKEN"] = "old-token"
