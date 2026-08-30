@@ -89,14 +89,40 @@ def _assert_no_secret(value: Any, secret: str = INSTALLATION_TOKEN) -> None:
     assert "ghs_stage2" not in serialized
 
 
-def test_repository_lfs_detection_ignores_commented_attribute_rules(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_repository_lfs_detection_ignores_commented_attribute_rules(
+    tmp_path: Path,
+) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     (tmp_path / ".gitattributes").write_text(
         "# *.bin filter=lfs diff=lfs merge=lfs -text\n"
         "   # *.zip filter=lfs diff=lfs merge=lfs -text\n",
         encoding="utf-8",
     )
 
-    assert not adapters_module._repository_uses_git_lfs(tmp_path)
+    assert not await adapters_module._repository_uses_git_lfs(tmp_path)
+
+    (tmp_path / ".gitattributes").write_text(
+        "*.bin filter=lfs diff=lfs merge=lfs -text\n",
+        encoding="utf-8",
+    )
+    assert await adapters_module._repository_uses_git_lfs(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_repository_lfs_detection_ignores_attribute_files_in_ignored_trees(
+    tmp_path: Path,
+) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
+    ignored_tree = tmp_path / "node_modules" / "dependency"
+    ignored_tree.mkdir(parents=True)
+    (ignored_tree / ".gitattributes").write_text(
+        "*.bin filter=lfs diff=lfs merge=lfs -text\n",
+        encoding="utf-8",
+    )
+
+    assert not await adapters_module._repository_uses_git_lfs(tmp_path)
 
 
 class _FakeProcess:
@@ -237,6 +263,17 @@ class _CommandRecorder:
             config_path = cwd_path / ".git" / "config"
             with config_path.open("a", encoding="utf-8") as stream:
                 stream.write('[filter "lfs"]\n\tclean = git-lfs clean -- %f\n')
+        if len(argv) > 1 and argv[1] == "ls-files":
+            assert cwd_path is not None
+            attribute_paths = [
+                str(path.relative_to(cwd_path))
+                for path in cwd_path.rglob(".gitattributes")
+                if ".git" not in path.relative_to(cwd_path).parts
+            ]
+            stdout = "\0".join(attribute_paths)
+            if attribute_paths:
+                stdout += "\0"
+            return _FakeProcess(argv, returncode=0, stdout=stdout, stderr="")
         if len(argv) > 1 and argv[1] == "fetch":
             if self.remote_branch_exists:
                 return _FakeProcess(argv, returncode=0, stdout="", stderr="")

@@ -338,7 +338,11 @@ class PiOhMyPiDeepSeekAdapter:
                     context=context,
                 )
 
-            uses_git_lfs = _repository_uses_git_lfs(checkout_dir)
+            uses_git_lfs = await _repository_uses_git_lfs(
+                checkout_dir,
+                timeout_seconds=timeout_seconds,
+                env=git_env,
+            )
             lfs_install = await _run_exec(
                 ["git", "lfs", "install", "--local"],
                 cwd=checkout_dir,
@@ -487,7 +491,11 @@ class PiOhMyPiDeepSeekAdapter:
                     context=context,
                 )
 
-            uses_git_lfs_after_omp = _repository_uses_git_lfs(checkout_dir)
+            uses_git_lfs_after_omp = await _repository_uses_git_lfs(
+                checkout_dir,
+                timeout_seconds=timeout_seconds,
+                env=git_env,
+            )
             if uses_git_lfs_after_omp and not uses_git_lfs:
                 lfs_install = await _run_exec(
                     ["git", "lfs", "install", "--local"],
@@ -823,10 +831,34 @@ def _local_git_config_digest(checkout_dir: Path) -> str | None:
         return None
 
 
-def _repository_uses_git_lfs(checkout_dir: Path) -> bool:
-    for attributes in checkout_dir.rglob(".gitattributes"):
-        if ".git" in attributes.relative_to(checkout_dir).parts:
+async def _repository_uses_git_lfs(
+    checkout_dir: Path,
+    *,
+    timeout_seconds: int = 30,
+    env: dict[str, str] | None = None,
+) -> bool:
+    listed = await _run_exec(
+        [
+            "git",
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+            ".gitattributes",
+            ":(glob)**/.gitattributes",
+        ],
+        cwd=checkout_dir,
+        timeout_seconds=timeout_seconds,
+        env=env or _git_env(),
+    )
+    if listed.returncode != 0:
+        return True
+    for relative_name in listed.stdout.split("\0"):
+        if not relative_name:
             continue
+        attributes = checkout_dir / relative_name
         try:
             text = attributes.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
