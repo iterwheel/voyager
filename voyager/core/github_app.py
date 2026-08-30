@@ -252,6 +252,23 @@ class GitHubAppClient:
         )
         return dict(payload or {})
 
+    async def compare_commits(
+        self,
+        app_slug: str,
+        repo: str,
+        base_sha: str,
+        head_sha: str,
+    ) -> dict[str, Any]:
+        """Return GitHub's ancestry comparison for two exact commit SHAs."""
+        owner, name = repo.split("/", 1)
+        payload = await self.request(
+            app_slug,
+            "GET",
+            f"/repos/{owner}/{name}/compare/{base_sha}...{head_sha}",
+            repository=repo,
+        )
+        return dict(payload or {})
+
     async def get_issue(self, app_slug: str, repo: str, issue_number: int) -> dict[str, Any]:
         """Fetch the current state of an issue (or issue-shaped PR)."""
         owner, name = repo.split("/", 1)

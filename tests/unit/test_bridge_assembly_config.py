@@ -26,7 +26,14 @@ from voyager.bots.assembly.constants import (
     AUTHORIZED_ASSOCIATIONS_ENV,
 )
 from voyager.bots.assembly.phase import PhaseMode, PhaseName, select_phase_backend
-from voyager.core.config import AssemblyConfig, BridgeConfig, VoyagerConfig, load_config
+from voyager.core.config import (
+    AssemblyConfig,
+    AuthorWakeupConfig,
+    BridgeConfig,
+    VoyagerConfig,
+    load_config,
+    resolve_author_wakeup_config,
+)
 from voyager.core.writeback import dry_run_enabled
 
 
@@ -34,6 +41,7 @@ def _cfg(
     *,
     bridge: BridgeConfig | None = None,
     assembly: AssemblyConfig | None = None,
+    author_wakeup: AuthorWakeupConfig | None = None,
 ) -> VoyagerConfig:
     return VoyagerConfig(
         apps={},
@@ -42,6 +50,7 @@ def _cfg(
         default_profile=None,
         bridge=bridge or BridgeConfig(),
         assembly=assembly or AssemblyConfig(),
+        author_wakeup=author_wakeup or AuthorWakeupConfig(),
     )
 
 
@@ -55,6 +64,125 @@ def _actor_payload(login: str, association: str = "NONE") -> dict[str, object]:
         },
         "sender": {"login": login},
     }
+
+
+def test_author_wakeup_config_defaults_fail_closed() -> None:
+    cfg = _cfg()
+
+    assert cfg.author_wakeup == AuthorWakeupConfig()
+    assert cfg.author_wakeup.enabled is False
+    assert cfg.author_wakeup.auto_review_fix is False
+    assert cfg.author_wakeup.allowed_repositories == ()
+
+
+def test_load_config_parses_author_wakeup_section(tmp_path: Path) -> None:
+    path = tmp_path / "voyager.toml"
+    path.write_text(
+        """
+[clearance.author_wakeup]
+enabled = true
+pfc_door_url = "http://127.0.0.1:8421/api/agent-send"
+reconcile_interval_seconds = 30
+notify_after_minutes = 7
+fallback_after_minutes = 19
+receipt_poll_interval_seconds = 3
+receipt_timeout_seconds = 120
+receipt_repost_safety_margin_seconds = 360
+max_same_id_reposts = 4
+max_delivery_attempts = 5
+required_send_id_retention_seconds = 90000
+auto_review_fix = true
+allowed_repositories = ["Iterwheel/Voyager-Sandbox"]
+audit_dir = "~/.voyager/state/custom-author-wakeup"
+""",
+        encoding="utf-8",
+    )
+
+    config = load_config(path).author_wakeup
+
+    assert config == AuthorWakeupConfig(
+        enabled=True,
+        pfc_door_url="http://127.0.0.1:8421/api/agent-send",
+        reconcile_interval_seconds=30,
+        notify_after_minutes=7,
+        fallback_after_minutes=19,
+        receipt_poll_interval_seconds=3,
+        receipt_timeout_seconds=120,
+        receipt_repost_safety_margin_seconds=360,
+        max_same_id_reposts=4,
+        max_delivery_attempts=5,
+        required_send_id_retention_seconds=90000,
+        auto_review_fix=True,
+        allowed_repositories=("iterwheel/voyager-sandbox",),
+        audit_dir=Path("~/.voyager/state/custom-author-wakeup").expanduser(),
+    )
+
+
+def test_author_wakeup_env_overrides_toml() -> None:
+    cfg = _cfg(
+        author_wakeup=AuthorWakeupConfig(
+            enabled=False,
+            pfc_door_url="http://localhost:8420/api/agent-send",
+            notify_after_minutes=10,
+            allowed_repositories=("iterwheel/voyager",),
+        )
+    )
+
+    resolved = resolve_author_wakeup_config(
+        cfg,
+        environ={
+            "CLEARANCE_AUTHOR_WAKEUP_ENABLED": "true",
+            "CLEARANCE_AUTHOR_WAKEUP_PFC_DOOR_URL": "http://127.0.0.1:8421/api/agent-send",
+            "CLEARANCE_AUTHOR_WAKEUP_NOTIFY_AFTER_MINUTES": "2",
+            "CLEARANCE_AUTHOR_WAKEUP_ALLOWED_REPOSITORIES": (
+                "iterwheel/voyager-sandbox,frankyxhl/alfred"
+            ),
+        },
+    )
+
+    assert resolved.enabled is True
+    assert resolved.pfc_door_url == "http://127.0.0.1:8421/api/agent-send"
+    assert resolved.notify_after_minutes == 2
+    assert resolved.allowed_repositories == (
+        "iterwheel/voyager-sandbox",
+        "frankyxhl/alfred",
+    )
+
+
+@pytest.mark.parametrize(
+    ("config", "message"),
+    [
+        (
+            AuthorWakeupConfig(pfc_door_url="https://example.com/api/agent-send"),
+            "loopback",
+        ),
+        (
+            AuthorWakeupConfig(pfc_door_url="http://localhost:8420/wrong"),
+            "/api/agent-send",
+        ),
+        (
+            AuthorWakeupConfig(allowed_repositories=("iterwheel/*",)),
+            "exact owner/repo",
+        ),
+        (
+            AuthorWakeupConfig(receipt_timeout_seconds=60),
+            "receipt_timeout_seconds",
+        ),
+        (
+            AuthorWakeupConfig(
+                receipt_repost_safety_margin_seconds=86400,
+                required_send_id_retention_seconds=86400,
+            ),
+            "safety margin",
+        ),
+    ],
+)
+def test_author_wakeup_config_rejects_unsafe_runtime_values(
+    config: AuthorWakeupConfig,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=re.escape(message)):
+        resolve_author_wakeup_config(_cfg(author_wakeup=config), environ={})
 
 
 def test_load_config_parses_bridge_and_assembly_runtime_sections(tmp_path: Path) -> None:

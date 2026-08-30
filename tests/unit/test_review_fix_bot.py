@@ -12,12 +12,14 @@ from voyager.bots.assembly.constants import ASSEMBLY_AGENT_SLUG, AUTHORIZED_ASSO
 from voyager.bots.review_fix import (
     REVIEW_FIX_AGENT_SLUG,
     REVIEW_FIX_DYNAMIC,
+    dispatch_review_fix_for_findings,
     route_review_fix_event,
     should_run_review_fix,
 )
 from voyager.bots.review_fix import writeback as review_fix_writeback
 from voyager.bots.review_fix.constants import REVIEW_FIX_COMMENT_MARKER
 from voyager.core.config import AssemblyConfig, BridgeConfig, ReviewFixConfig, VoyagerConfig
+from voyager.core.github_app import GitHubAppClient
 from voyager.core.writeback import dispatch_route_writeback
 from voyager.governance.audit_log import ReviewFixAuditLog
 from voyager.governance.enablement import Autonomy, EnablementConfig, SafetyEnvelope
@@ -36,6 +38,7 @@ class _FakeReviewFixClient:
         pull_batches: list[dict[str, Any]] | None = None,
         threads: list[dict[str, Any]] | None = None,
         thread_batches: list[list[dict[str, Any]]] | None = None,
+        compare_result: dict[str, Any] | None = None,
     ) -> None:
         self.pull = pull or _pull()
         self.pull_batches = list(pull_batches or [])
@@ -44,6 +47,8 @@ class _FakeReviewFixClient:
         self.pull_calls: list[tuple[str, str, int]] = []
         self.thread_calls: list[tuple[str, str, int]] = []
         self.thread_loop_ids: list[int] = []
+        self.compare_result = compare_result or {"status": "ahead", "ahead_by": 1}
+        self.compare_calls: list[tuple[str, str, str, str]] = []
         self.upsert_issue_comment = AsyncMock(
             return_value={
                 "id": 777,
@@ -68,6 +73,16 @@ class _FakeReviewFixClient:
         if self.thread_batches:
             return self.thread_batches.pop(0)
         return self.threads
+
+    async def compare_commits(
+        self,
+        app_slug: str,
+        repo: str,
+        base_sha: str,
+        head_sha: str,
+    ) -> dict[str, Any]:
+        self.compare_calls.append((app_slug, repo, base_sha, head_sha))
+        return self.compare_result
 
 
 def _payload(body: str = "/review-fix") -> dict[str, Any]:
@@ -156,13 +171,17 @@ def _cfg(
     *,
     enablement: EnablementConfig | None,
     dry_run: bool = True,
+    allowed_repositories: dict[str, tuple[str, ...]] | None = None,
 ) -> VoyagerConfig:
     return VoyagerConfig(
         apps={},
         work_dir=tmp_path / "state",
         profiles={},
         default_profile=None,
-        bridge=BridgeConfig(dry_run=dry_run),
+        bridge=BridgeConfig(
+            dry_run=dry_run,
+            allowed_repositories=allowed_repositories or {},
+        ),
         assembly=AssemblyConfig(execution_backend="dry-run"),
         review_fix=ReviewFixConfig(
             enablement=enablement,
@@ -204,6 +223,27 @@ def test_review_fix_route_triggers_only_for_pr_command(
     assert route["writeback"]["command_flags"] == {"dry_run": True}
 
 
+@pytest.mark.asyncio
+async def test_github_compare_commits_uses_exact_sha_pair() -> None:
+    client = GitHubAppClient({})
+    client.request = AsyncMock(return_value={"status": "ahead", "ahead_by": 1})  # type: ignore[method-assign]
+
+    result = await client.compare_commits(
+        ASSEMBLY_AGENT_SLUG,
+        "iterwheel/voyager",
+        "a" * 40,
+        "b" * 40,
+    )
+
+    assert result == {"status": "ahead", "ahead_by": 1}
+    client.request.assert_awaited_once_with(
+        ASSEMBLY_AGENT_SLUG,
+        "GET",
+        f"/repos/iterwheel/voyager/compare/{'a' * 40}...{'b' * 40}",
+        repository="iterwheel/voyager",
+    )
+
+
 def test_dispatch_refuses_missing_enablement_without_fetching_github(
     monkeypatch,
     tmp_path: Path,
@@ -224,6 +264,157 @@ def test_dispatch_refuses_missing_enablement_without_fetching_github(
     assert result["refusal"]["reason"] == "missing_review_fix_enablement"
     assert client.pull_calls == []
     assert client.thread_calls == []
+
+
+def test_internal_dispatch_refuses_notification_head_before_thread_fetch(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("DRY_RUN", raising=False)
+    client = _FakeReviewFixClient(pull=_pull(head_sha="b" * 40))
+    cfg = _cfg(
+        tmp_path,
+        enablement=_l3(tmp_path),
+        dry_run=False,
+        allowed_repositories={ASSEMBLY_AGENT_SLUG: ("iterwheel/voyager",)},
+    )
+
+    result = asyncio.run(
+        dispatch_review_fix_for_findings(
+            client,
+            repository="iterwheel/voyager",
+            pull_number=187,
+            expected_head_sha="a" * 40,
+            finding_ids=("PRRT_review_fix_1",),
+            notification_id="c" * 32,
+            cfg=cfg,
+        )
+    )
+
+    assert result["status"] == "review_fix_refused"
+    assert result["refusal"]["reason"] == "review_fix_notification_head_mismatch"
+    assert len(client.pull_calls) == 1
+    assert client.thread_calls == []
+    client.upsert_issue_comment.assert_not_awaited()
+
+
+def test_internal_dispatch_scopes_dry_run_to_exact_finding_ids(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("DRY_RUN", raising=False)
+    first = _codex_thread(thread_id="PRRT_review_fix_1")
+    second = _codex_thread(thread_id="PRRT_review_fix_2")
+    client = _FakeReviewFixClient(threads=[first, second])
+    cfg = _cfg(
+        tmp_path,
+        enablement=_l3(tmp_path),
+        dry_run=True,
+        allowed_repositories={ASSEMBLY_AGENT_SLUG: ("iterwheel/voyager",)},
+    )
+
+    result = asyncio.run(
+        dispatch_review_fix_for_findings(
+            client,
+            repository="iterwheel/voyager",
+            pull_number=187,
+            expected_head_sha="a" * 40,
+            finding_ids=("PRRT_review_fix_2",),
+            notification_id="c" * 32,
+            cfg=cfg,
+        )
+    )
+
+    assert result["status"] == "review_fix_converged"
+    assert [contract["extra"]["review_fix"]["finding_id"] for contract in result["contracts"]] == [
+        "PRRT_review_fix_2"
+    ]
+    assert result["contracts"][0]["extra"]["review_fix"]["source"] == ("clearance_author_wakeup")
+
+
+def test_internal_dispatch_requires_review_fix_repository_allowlist(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("DRY_RUN", raising=False)
+    client = _FakeReviewFixClient()
+    cfg = _cfg(tmp_path, enablement=_l3(tmp_path), dry_run=False)
+
+    result = asyncio.run(
+        dispatch_review_fix_for_findings(
+            client,
+            repository="iterwheel/voyager",
+            pull_number=187,
+            expected_head_sha="a" * 40,
+            finding_ids=("PRRT_review_fix_1",),
+            notification_id="c" * 32,
+            cfg=cfg,
+        )
+    )
+
+    assert result["status"] == "review_fix_refused"
+    assert result["refusal"]["reason"] == "repository_not_allowed"
+    assert client.pull_calls == []
+    client.upsert_issue_comment.assert_not_awaited()
+    records = ReviewFixAuditLog(result["audit_log_path"]).read_all()
+    assert records[-1].verdict == "refused"
+    assert records[-1].tests == ("repository_not_allowed",)
+
+
+def test_internal_dispatch_audits_missing_enablement_refusal(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("DRY_RUN", raising=False)
+    client = _FakeReviewFixClient()
+    cfg = _cfg(
+        tmp_path,
+        enablement=None,
+        dry_run=False,
+        allowed_repositories={ASSEMBLY_AGENT_SLUG: ("iterwheel/voyager",)},
+    )
+
+    result = asyncio.run(
+        dispatch_review_fix_for_findings(
+            client,
+            repository="iterwheel/voyager",
+            pull_number=187,
+            expected_head_sha="a" * 40,
+            finding_ids=("PRRT_review_fix_1",),
+            notification_id="c" * 32,
+            cfg=cfg,
+        )
+    )
+
+    assert result["status"] == "review_fix_refused"
+    assert result["refusal"]["reason"] == "missing_review_fix_enablement"
+    assert client.pull_calls == []
+    records = ReviewFixAuditLog(result["audit_log_path"]).read_all()
+    assert records[-1].tests == ("missing_review_fix_enablement",)
+
+
+def test_internal_dispatch_requires_explicit_allowlist_even_in_dry_run(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("DRY_RUN", raising=False)
+    client = _FakeReviewFixClient()
+
+    result = asyncio.run(
+        dispatch_review_fix_for_findings(
+            client,
+            repository="iterwheel/voyager",
+            pull_number=187,
+            expected_head_sha="a" * 40,
+            finding_ids=("PRRT_review_fix_1",),
+            notification_id="c" * 32,
+            cfg=_cfg(tmp_path, enablement=_l3(tmp_path), dry_run=True),
+        )
+    )
+
+    assert result["status"] == "review_fix_refused"
+    assert result["refusal"]["reason"] == "repository_not_allowed"
+    assert client.pull_calls == []
 
 
 def test_dispatch_refuses_default_branch_target_before_thread_poll(
@@ -659,6 +850,117 @@ def test_successful_fix_refreshes_expected_head_sha_for_next_fix(
     assert len(set(client.thread_loop_ids)) == 1
 
 
+def test_executed_result_refuses_to_advance_when_returned_commit_is_not_live_head(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("DRY_RUN", raising=False)
+    cfg = _cfg(tmp_path, enablement=_l3(tmp_path), dry_run=False)
+    client = _FakeReviewFixClient()
+
+    class FakeAdapter:
+        name = "fake"
+        requires_installation_token = False
+        supports_resume = False
+
+    async def fake_build_adapter_context(*args: Any, **kwargs: Any) -> AdapterExecutionContext:
+        return AdapterExecutionContext(
+            repository="iterwheel/voyager",
+            workdir=tmp_path,
+            timeout_seconds=120,
+            command_path="omp",
+        )
+
+    async def fake_execute(*args: Any, **kwargs: Any) -> AdapterResult:
+        return AdapterResult(
+            status="executed",
+            commit_shas=["b" * 40],
+            summary="adapter claimed to push a fix",
+        )
+
+    monkeypatch.setattr(
+        review_fix_writeback,
+        "select_execution_adapter",
+        lambda cfg=None: FakeAdapter(),
+    )
+    monkeypatch.setattr(
+        review_fix_writeback,
+        "_build_adapter_context",
+        fake_build_adapter_context,
+    )
+    monkeypatch.setattr(review_fix_writeback, "_execute_adapter", fake_execute)
+
+    result = asyncio.run(
+        dispatch_route_writeback(
+            client,
+            _route(),
+            repository="iterwheel/voyager",
+            cfg=cfg,
+        )
+    )
+
+    assert result["status"] == "review_fix_escalated"
+    records = ReviewFixAuditLog(result["audit_log_path"]).read_all()
+    assert any("post_execution_head_mismatch" in item for item in records[-1].tests)
+    assert client.compare_calls == []
+
+
+def test_executed_result_requires_returned_commit_to_descend_from_prior_head(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("DRY_RUN", raising=False)
+    cfg = _cfg(tmp_path, enablement=_l3(tmp_path), dry_run=False)
+    client = _FakeReviewFixClient(compare_result={"status": "diverged", "ahead_by": 0})
+
+    class FakeAdapter:
+        name = "fake"
+        requires_installation_token = False
+        supports_resume = False
+
+    async def fake_build_adapter_context(*args: Any, **kwargs: Any) -> AdapterExecutionContext:
+        return AdapterExecutionContext(
+            repository="iterwheel/voyager",
+            workdir=tmp_path,
+            timeout_seconds=120,
+            command_path="omp",
+        )
+
+    async def fake_execute(*args: Any, **kwargs: Any) -> AdapterResult:
+        client.pull["head"]["sha"] = "b" * 40
+        return AdapterResult(
+            status="executed",
+            commit_shas=["b" * 40],
+            summary="adapter pushed an unrelated commit",
+        )
+
+    monkeypatch.setattr(
+        review_fix_writeback,
+        "select_execution_adapter",
+        lambda cfg=None: FakeAdapter(),
+    )
+    monkeypatch.setattr(
+        review_fix_writeback,
+        "_build_adapter_context",
+        fake_build_adapter_context,
+    )
+    monkeypatch.setattr(review_fix_writeback, "_execute_adapter", fake_execute)
+
+    result = asyncio.run(
+        dispatch_route_writeback(
+            client,
+            _route(),
+            repository="iterwheel/voyager",
+            cfg=cfg,
+        )
+    )
+
+    assert result["status"] == "review_fix_escalated"
+    records = ReviewFixAuditLog(result["audit_log_path"]).read_all()
+    assert any("post_execution_commit_not_descendant" in item for item in records[-1].tests)
+    assert client.compare_calls == [(ASSEMBLY_AGENT_SLUG, "iterwheel/voyager", "a" * 40, "b" * 40)]
+
+
 def test_executed_result_escalates_when_thread_refresh_fails(
     monkeypatch,
     tmp_path: Path,
@@ -698,6 +1000,7 @@ def test_executed_result_escalates_when_thread_refresh_fails(
         )
 
     async def fake_execute(*args: Any, **kwargs: Any) -> AdapterResult:
+        client.pull["head"]["sha"] = "b" * 40
         return AdapterResult(
             status="executed",
             commit_shas=["b" * 40],
