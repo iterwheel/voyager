@@ -339,30 +339,30 @@ class PiOhMyPiDeepSeekAdapter:
                 )
 
             uses_git_lfs = _repository_uses_git_lfs(checkout_dir)
+            lfs_install = await _run_exec(
+                ["git", "lfs", "install", "--local"],
+                cwd=checkout_dir,
+                timeout_seconds=timeout_seconds,
+                env=git_env,
+            )
+            if lfs_install.returncode != 0 and uses_git_lfs:
+                return _failed_pi_result(
+                    "Git LFS local filter initialization failed for Assembly OMP backend.",
+                    token,
+                    details,
+                    failure_diagnostic=_diagnostic_from_process(
+                        phase="git_lfs_install",
+                        command_category="git",
+                        command="git lfs install --local",
+                        process=lfs_install,
+                        secret=token,
+                    ),
+                    temp_root_path=temp_root_path,
+                    contract=contract,
+                    context=context,
+                )
             if uses_git_lfs:
                 trusted_lfs_url = _github_lfs_url(repository)
-                lfs_install = await _run_exec(
-                    ["git", "lfs", "install", "--local"],
-                    cwd=checkout_dir,
-                    timeout_seconds=timeout_seconds,
-                    env=git_env,
-                )
-                if lfs_install.returncode != 0:
-                    return _failed_pi_result(
-                        "Git LFS local filter initialization failed for Assembly OMP backend.",
-                        token,
-                        details,
-                        failure_diagnostic=_diagnostic_from_process(
-                            phase="git_lfs_install",
-                            command_category="git",
-                            command="git lfs install --local",
-                            process=lfs_install,
-                            secret=token,
-                        ),
-                        temp_root_path=temp_root_path,
-                        contract=contract,
-                        context=context,
-                    )
                 lfs_pull = await _run_exec(
                     [
                         "git",

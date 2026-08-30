@@ -116,6 +116,7 @@ class _CommandRecorder:
         local_git_config_after_omp: str | None = None,
         uses_git_lfs: bool = False,
         introduces_git_lfs_after_omp: bool = False,
+        omp_installs_git_lfs: bool = False,
     ) -> None:
         self.status_porcelain = status_porcelain
         self.omp_returncode = omp_returncode
@@ -126,6 +127,7 @@ class _CommandRecorder:
         self.local_git_config_after_omp = local_git_config_after_omp
         self.uses_git_lfs = uses_git_lfs
         self.introduces_git_lfs_after_omp = introduces_git_lfs_after_omp
+        self.omp_installs_git_lfs = omp_installs_git_lfs
         self.calls: list[dict[str, Any]] = []
 
     async def create_subprocess_exec(self, *argv: object, cwd: object = None, **kwargs: Any):
@@ -191,6 +193,14 @@ class _CommandRecorder:
                     "*.bin filter=lfs diff=lfs merge=lfs -text\n",
                     encoding="utf-8",
                 )
+            if self.omp_installs_git_lfs and cwd_path is not None:
+                config_path = cwd_path / ".git" / "config"
+                config = config_path.read_text(encoding="utf-8")
+                if '[filter "lfs"]' not in config:
+                    config_path.write_text(
+                        f'{config}[filter "lfs"]\n\tclean = git-lfs clean -- %f\n',
+                        encoding="utf-8",
+                    )
             return _FakeProcess(
                 argv,
                 returncode=self.omp_returncode,
@@ -619,6 +629,7 @@ async def test_pi_adapter_initializes_and_uploads_lfs_introduced_by_omp(
     recorder = _CommandRecorder(
         status_porcelain="M .gitattributes\nM large.bin\n",
         introduces_git_lfs_after_omp=True,
+        omp_installs_git_lfs=True,
     )
     _install_command_fakes(monkeypatch, recorder)
 
@@ -626,8 +637,11 @@ async def test_pi_adapter_initializes_and_uploads_lfs_introduced_by_omp(
 
     assert result.status == "executed"
     omp_call = recorder.command_calls("omp")[0]
-    install_call = next(
-        call for call in recorder.calls if call["argv"][0:3] == ("git", "lfs", "install")
+    omp_idx = recorder.calls.index(omp_call)
+    install_idx = next(
+        index
+        for index, call in enumerate(recorder.calls[omp_idx + 1 :], start=omp_idx + 1)
+        if call["argv"][0:3] == ("git", "lfs", "install")
     )
     renormalize_call = next(
         call for call in recorder.calls if call["argv"][0:3] == ("git", "add", "--renormalize")
@@ -639,8 +653,8 @@ async def test_pi_adapter_initializes_and_uploads_lfs_introduced_by_omp(
         if call["argv"][0] == "git" and call["argv"][-4:-2] == ("lfs", "push")
     )
     branch_push_call = recorder.git_calls("push")[0]
-    assert recorder.calls.index(omp_call) < recorder.calls.index(install_call)
-    assert recorder.calls.index(install_call) < recorder.calls.index(renormalize_call)
+    assert omp_idx < install_idx
+    assert install_idx < recorder.calls.index(renormalize_call)
     assert recorder.calls.index(renormalize_call) < recorder.calls.index(add_call)
     assert recorder.calls.index(add_call) < recorder.calls.index(lfs_push_call)
     assert recorder.calls.index(lfs_push_call) < recorder.calls.index(branch_push_call)
