@@ -304,7 +304,7 @@ async def assembly_app_publish(
                     pr_url=None,
                     pr_action=None,
                     codex_comment_id=None,
-                    error=f"git fetch failed: {stderr_fetch.strip()}",
+                    error=f"git fetch failed: {_sanitize(stderr_fetch.strip(), token)}",
                 )
 
         # ---- Step 4: push via named remote ----
