@@ -1,9 +1,9 @@
 # CHG-1819: Assembly Bot Hardening — F1-F6 Closure
 
 **Applies to:** VOY project
-**Last updated:** 2026-05-23
-**Last reviewed:** 2026-05-23
-**Status:** Proposed
+**Last updated:** 2026-08-30
+**Last reviewed:** 2026-08-30
+**Status:** Completed
 **Date:** 2026-05-23
 **Scheduled:** After CHG plan-review approval in the active VOY-1811 loop for #73.
 **Requested by:** Voyager maintainers (via #73, surfaced in VOY-1811 Phase 6 review of #69)
@@ -233,3 +233,4 @@ The full suite must remain green; no existing test changes shape.
 | 2026-05-23 | Initial CHG for issue #73 F1-F6 closure. | Claude (via VOY-1811 #73) |
 | 2026-05-23 | Round 1 plan-review remediation (GLM 9.1 PASS, DeepSeek 9.0 PASS, MiniMax 8.8 FIX): §What — added surface arithmetic explanation and stale-871-test acknowledgement [MM nit 1/2]; Surface 1 — added exact replacement comment text + cross-package grep confirmation [DS]; Surface 3 — documented intentional `_extract_task_summary` asymmetry [DS]; Surface 5 — replaced "alphabetical" with "positionally" wording so the F6 enum order matches the §Refusal Enum block [MM nit 3]; Surface 6 — explicit "post comment on #73 BEFORE merge" ordering rule [MM nit 4]; Surface 7 — replaced sleep + call-order list with `asyncio.Event`-based gating + specified expected RED-phase failure [GLM P1]; D5 — added title-edit corner explicitly [GLM P2]; D10 — added "first post-merge cross-CHG amendment" precedent [DS]; §Rollback plan — explicit F3 bridge-restart callout [DS]. | Claude (via VOY-1811 #73) |
 | 2026-05-23 | Round 2 plan-review pre-merge cleanup (GLM 9.5 PASS, DeepSeek 9.8 PASS, MiniMax 10.0 PASS — all clear; DeepSeek surfaced two optional advisories folded in here): §Out of Scope — added the `weakref.WeakValueDictionary` migration trigger row (the D6 forward-reference now matches a real §Out of Scope row) [DS-R2 advisory 1]; Surface 8 — replaced the synthetic `{"backend": "..."}` regression test with two structural tests: (a) parser-level "never emits backend key" gate in `test_assembly_commands.py`, (b) dispatcher-level source-inspection assertion in `test_assembly_writeback_dispatcher.py` [DS-R2 advisory 2]. | Claude (via VOY-1811 #73) |
+| 2026-08-30 | Lifecycle closeout: implementation PR #79 merged as `0eea218c`; source issue #73 is closed. Status changed from Proposed to Completed. | Codex |

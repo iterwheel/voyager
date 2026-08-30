@@ -3,7 +3,7 @@
 **Applies to:** VOY project — Clearance, Countdown, and governed review-fix automation
 **Last updated:** 2026-08-30
 **Last reviewed:** 2026-08-30
-**Status:** Proposed
+**Status:** Implemented
 **Related:** VOY-1814 (Wukong bridge rollout and rollback), VOY-1831 (Countdown resolve-loop), VOY-1839 (Countdown merge-loop), VOY-1840 (merge-loop deployment)
 **Reviewed by:** —
 **Alignment:** `crisp | questions_asked: 0 | terms_resolved: 4 | offered_adr: 0`
@@ -500,3 +500,4 @@ gated by default-off configuration and an implementation CHG.
 | 2026-08-30 | Addressed PR #318 Codex review round 5: derive receipt URL from door origin and require bounded same-ID re-POST    | Codex |
 | 2026-08-30 | Addressed PR #318 Codex review round 6: require durable send-ID retention across PFC restart                       | Codex |
 | 2026-08-30 | Addressed PR #318 Codex review round 7: start M on downstream author delivery and add retention safety margin      | Codex |
+| 2026-08-30 | Lifecycle closeout: proposal PR #318 merged as `eb7e03a0`; implementation PRs #319/#320 shipped the default-off contract. PFC claim telemetry and live review-fix fallback remain separately gated operational follow-ups. Status changed from Proposed to Implemented. | Codex |

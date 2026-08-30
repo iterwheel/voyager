@@ -1,9 +1,9 @@
 # CHG-1837: Clearance Webhook Fan-out Dedupe
 
 **Applies to:** VOY project
-**Last updated:** 2026-08-02
-**Last reviewed:** 2026-08-02
-**Status:** In Progress
+**Last updated:** 2026-08-30
+**Last reviewed:** 2026-08-30
+**Status:** Completed
 **Date:** 2026-08-02
 **Requested by:** Frank Xu
 **Priority:** Medium
@@ -276,3 +276,4 @@ without changing either marker format.
 | 2026-08-02 | Marked Approved after all three Round 2 plan reviewers passed with no blockers; incorporated key-type and deterministic-assertion advisories. | Codex |
 | 2026-08-02 | Remediated Round 1 plan-review findings with explicit BDD fixture reversal, deterministic existing test seam, exception-release coverage, and latency/provenance notes. | Codex |
 | 2026-08-02 | Initial proposed change contract for issue #292. | Codex |
+| 2026-08-30 | Lifecycle closeout: PR #293 merged as `c7aba1a9`; source issue #292 is closed and remote CI completed. Status changed from In Progress to Completed. | Codex |

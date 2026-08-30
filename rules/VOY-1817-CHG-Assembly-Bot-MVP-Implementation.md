@@ -1,9 +1,9 @@
 # CHG-1817: Assembly Bot MVP Implementation
 
 **Applies to:** VOY project
-**Last updated:** 2026-08-02
-**Last reviewed:** 2026-05-23
-**Status:** Proposed
+**Last updated:** 2026-08-30
+**Last reviewed:** 2026-08-30
+**Status:** Completed
 **Date:** 2026-05-23
 **Scheduled:** After CHG plan-review approval in the active VOY-1811 loop.
 **Requested by:** Frank Xu (via issue #69, 2026-05-23)
@@ -333,3 +333,4 @@ failure semantics is now resolved by D11.)
 | 2026-05-23 | Phase 6 cross-test divergence fix (DeepSeek finding): Gate Corner Table Row 5 amended to match implementation — `pull_request: {action: "skipped_no_changes"}` instead of `null`. Rows 4 and 5 share the "no commits → no PR" code path; the BE=dry / BE=pi distinction is visible via `adapter_result.status` and the progress comment body, not the `pull_request` field. | Claude (via VOY-1811) |
 | 2026-05-23 | CHG-1819 amendment: added `issue_closed` to the refusal enum list (implementation-added during VOY-1817 Phase 5). | Claude (via CHG-1819) |
 | 2026-08-02 | Applied Ruff 0.16.1 formatting to embedded code examples; no semantic changes. | Codex |
+| 2026-08-30 | Lifecycle closeout: implementation PR #74 merged as `44b2aa8d`; source issue #69 is closed. Status changed from Proposed to Completed. | Codex |

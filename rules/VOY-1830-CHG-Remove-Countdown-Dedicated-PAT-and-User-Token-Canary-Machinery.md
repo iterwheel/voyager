@@ -1,9 +1,9 @@
 # CHG-1830: Remove Countdown Dedicated PAT and User-Token Canary Machinery
 
 **Applies to:** VOY project
-**Last updated:** 2026-06-28
-**Last reviewed:** 2026-06-28
-**Status:** Proposed
+**Last updated:** 2026-08-30
+**Last reviewed:** 2026-08-30
+**Status:** Completed
 **Date:** 2026-06-28
 **Requested by:** Frank Xu
 **Priority:** Medium
@@ -92,3 +92,4 @@ The dedicated-PAT approach was retired in favor of gh-login as the machine accou
 | 2026-06-28 | Updated the fixed machine-account resolver login to `iterwheel-countdown-bot` after issue #226 account rename | Codex |
 | 2026-06-28 | Updated VOY-1827 superseded reference after HYP was reclassified as REF for validation compatibility. | Codex |
 | 2026-06-28 | Initial version | Claude Code |
+| 2026-08-30 | Lifecycle closeout: implementation PR #223 merged as `2bf653ad`, removing the dedicated-PAT and user-token canary machinery. Status changed from Proposed to Completed. | Codex |

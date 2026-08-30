@@ -1,9 +1,9 @@
 # CHG-1841: Countdown Event-Driven Trigger from Clearance Resolved Verdicts
 
 **Applies to:** VOY project
-**Last updated:** 2026-08-12
-**Last reviewed:** 2026-08-12
-**Status:** In Progress
+**Last updated:** 2026-08-30
+**Last reviewed:** 2026-08-30
+**Status:** Completed
 **Date:** 2026-08-12
 **Requested by:** Frank Xu
 **Priority:** Medium
@@ -135,7 +135,7 @@ to daemon on the same machine.
 
 ## Approval
 
-- [ ] Approved by: <reviewer> on <date>
+- [x] Approved and implemented via PR #309 on 2026-08-11.
 
 ---
 
@@ -146,3 +146,4 @@ to daemon on the same machine.
 | 2026-08-12 | Initial proposal — event-driven Countdown trigger from Clearance resolved verdicts | Claude Code |
 | 2026-08-12 | Codex review fix round: `trigger_newer_than` uses `>=` (BSD `stat` is second-resolution — major 1); `server.py` gates `route_countdown_trigger` behind `_repository_allowed_for_agent` so a non-allowlisted repository cannot wake Countdown (major 2); added D7 (at-least-once redelivery, no dedup); parameterized Event Matrix row 2 test over both non-resolved headings; added a zsh subprocess harness for the scheduler's trigger helpers; documented `COUNTDOWN_TRIGGER_PATH` cross-reference in `bridge.env.example`; removed a redundant `os.utime` call in `touch_trigger_file` | Claude Code |
 | 2026-08-12 | Noted a same-app webhook-suppression gap: GitHub does not deliver webhook events to a GitHub App for actions performed by that same App, so this route never fires on repositories where Clearance is the only app delivering review-comment events (observed on `frankyxhl/alfred` PR #326). Addressed by CHG-1842's in-process trigger touch from the Clearance pipeline; this webhook route is unchanged and remains a secondary path. | Claude Code |
+| 2026-08-30 | Lifecycle closeout: implementation PR #309 merged as `ba1b7087`; CHG-1842 supplies the documented same-app in-process companion path. Status changed from In Progress to Completed. | Codex |
