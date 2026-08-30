@@ -511,7 +511,7 @@ def _checkout_object_directory(checkout_dir: Path) -> Path:
                     common_dir = target / common_dir
                 target = common_dir.resolve()
             return target / "objects"
-    return git_path / "objects"
+    return (git_path / "objects").resolve()
 
 
 def _expected_remote_sha(value: str | None) -> str | None:

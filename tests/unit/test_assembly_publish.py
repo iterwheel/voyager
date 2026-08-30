@@ -65,6 +65,19 @@ def test_checkout_object_directory_resolves_linked_worktree_common_dir(tmp_path:
     assert _checkout_object_directory(checkout) == common_git_dir / "objects"
 
 
+def test_checkout_object_directory_canonicalizes_relative_checkout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    relative_checkout = Path("checkout")
+    (relative_checkout / ".git" / "objects").mkdir(parents=True)
+
+    assert _checkout_object_directory(relative_checkout) == (
+        tmp_path / "checkout" / ".git" / "objects"
+    )
+
+
 # ---------------------------------------------------------------------------
 # _write_git_askpass
 # ---------------------------------------------------------------------------
