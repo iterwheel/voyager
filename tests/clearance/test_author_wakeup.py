@@ -560,6 +560,67 @@ async def test_repo_removal_clears_due_observation_without_notifying(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_terminal_scan_checkpoint_skips_history_until_a_new_poll(tmp_path: Path) -> None:
+    now = datetime(2026, 8, 30, 0, 0, tzinfo=UTC)
+    repository = "iterwheel/voyager-sandbox"
+    head_sha = "b" * 40
+    clearance_store = StateStore(tmp_path / "clearance")
+
+    def append_poll(at: datetime) -> None:
+        clearance_store.append_poll(
+            PollRecord(
+                ts=at,
+                repo=repository,
+                pr=42,
+                head_sha=head_sha,
+                status=Status.BLOCKED,
+                threads=[_persisted_thread()],
+            )
+        )
+
+    append_poll(now)
+    github = AsyncMock()
+    github.pull_request.side_effect = [
+        {
+            "number": 42,
+            "state": "closed",
+            "head": {"sha": head_sha},
+            "user": {"login": "ryosaeba1985"},
+        },
+        {
+            "number": 42,
+            "state": "open",
+            "head": {"sha": head_sha},
+            "user": {"login": "ryosaeba1985"},
+        },
+    ]
+    github.pull_request_review_threads.return_value = [_live_thread()]
+    ledger = WakeupLedger(tmp_path / "wakeup" / "state.db")
+    reconciler = AuthorWakeupReconciler(
+        config=AuthorWakeupConfig(
+            enabled=True,
+            allowed_repositories=(repository,),
+        ),
+        clearance_store=clearance_store,
+        ledger=ledger,
+        github=github,
+        door=AsyncMock(),
+    )
+
+    await reconciler.tick(now=now, scan=True)
+    await reconciler.tick(now=now + timedelta(seconds=30), scan=True)
+
+    assert github.pull_request.await_count == 1
+
+    append_poll(now + timedelta(minutes=1))
+    reconciler.nudge(repository, 42)
+    await reconciler.tick(now=now + timedelta(minutes=1), scan=True)
+
+    assert github.pull_request.await_count == 2
+    assert ledger.observations()[0].status == "active"
+
+
+@pytest.mark.asyncio
 async def test_reconciler_reposts_same_id_after_ambiguous_window(tmp_path: Path) -> None:
     now = datetime(2026, 8, 30, 0, 2, tzinfo=UTC)
     ledger = WakeupLedger(tmp_path / "state.db")
@@ -782,6 +843,43 @@ async def test_restart_recovers_persisted_attempt_before_reposting(tmp_path: Pat
 
     door.post.assert_not_awaited()
     assert WakeupLedger(path).notifications()[0].state == "notified"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["notify_intent", "notify_attempt_failed"])
+async def test_recovery_rechecks_current_repository_scope(
+    tmp_path: Path,
+    state: str,
+) -> None:
+    now = datetime(2026, 8, 30, 0, 2, tzinfo=UTC)
+    ledger = WakeupLedger(tmp_path / "state.db")
+    notification = NotificationState(
+        notification_id="a" * 32,
+        repository="iterwheel/voyager-sandbox",
+        pull_number=42,
+        head_sha="b" * 40,
+        thread_ids=("PRRT_one",),
+        state=state,
+        created_at=now - timedelta(seconds=2),
+        attempt_number=1 if state == "notify_attempt_failed" else 0,
+        next_delivery_attempt_at=(
+            now - timedelta(seconds=1) if state == "notify_attempt_failed" else None
+        ),
+    )
+    ledger.save_notification(notification, event=state, at=now)
+    door = AsyncMock()
+    reconciler = AuthorWakeupReconciler(
+        config=AuthorWakeupConfig(enabled=True, allowed_repositories=()),
+        clearance_store=StateStore(tmp_path / "clearance"),
+        ledger=ledger,
+        github=AsyncMock(),
+        door=door,
+    )
+
+    await reconciler.tick(now=now, scan=False)
+
+    door.post.assert_not_awaited()
+    assert ledger.notifications()[0].state == "notify_scope_revoked"
 
 
 @pytest.mark.asyncio

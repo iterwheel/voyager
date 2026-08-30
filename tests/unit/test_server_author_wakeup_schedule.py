@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -137,7 +137,9 @@ async def test_clearance_writeback_completion_nudges_author_wakeup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     event = asyncio.Event()
+    reconciler = SimpleNamespace(nudge=Mock())
     monkeypatch.setattr(server, "_author_wakeup_event", event)
+    monkeypatch.setattr(server, "_author_wakeup_reconciler", reconciler)
     monkeypatch.setattr(server, "_get_client", lambda: object())
     monkeypatch.setattr(server, "_get_store", lambda: object())
     monkeypatch.setattr(server, "_get_config", lambda: None)
@@ -166,6 +168,7 @@ async def test_clearance_writeback_completion_nudges_author_wakeup(
     )
 
     assert event.is_set()
+    reconciler.nudge.assert_called_once_with("iterwheel/voyager-sandbox", 42)
 
 
 async def test_healthz_reports_safe_author_wakeup_task_state(

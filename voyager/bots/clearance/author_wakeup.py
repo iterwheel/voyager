@@ -117,6 +117,15 @@ class WakeupLedger:
                     notification_id TEXT PRIMARY KEY,
                     data TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS terminal_scan_checkpoints (
+                    repository TEXT NOT NULL,
+                    pull_number INTEGER NOT NULL,
+                    poll_ts TEXT NOT NULL,
+                    head_sha TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (repository, pull_number)
+                );
                 CREATE TABLE IF NOT EXISTS events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     at TEXT NOT NULL,
@@ -339,6 +348,56 @@ class WakeupLedger:
             rows = db.execute("SELECT data FROM notifications ORDER BY notification_id").fetchall()
         return tuple(NotificationState.from_dict(json.loads(str(row["data"]))) for row in rows)
 
+    def terminal_scan_matches(
+        self,
+        *,
+        repository: str,
+        pull_number: int,
+        poll_ts: datetime,
+        head_sha: str,
+    ) -> bool:
+        with self._connect() as db:
+            row = db.execute(
+                """
+                SELECT 1 FROM terminal_scan_checkpoints
+                WHERE repository=? AND pull_number=? AND poll_ts=? AND head_sha=?
+                """,
+                (repository, pull_number, poll_ts.isoformat(), head_sha),
+            ).fetchone()
+        return row is not None
+
+    def mark_terminal_scan(
+        self,
+        *,
+        repository: str,
+        pull_number: int,
+        poll_ts: datetime,
+        head_sha: str,
+        reason: str,
+        at: datetime,
+    ) -> None:
+        with self._connect() as db:
+            db.execute(
+                """
+                INSERT INTO terminal_scan_checkpoints
+                    (repository, pull_number, poll_ts, head_sha, reason, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(repository, pull_number) DO UPDATE SET
+                    poll_ts=excluded.poll_ts,
+                    head_sha=excluded.head_sha,
+                    reason=excluded.reason,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    repository,
+                    pull_number,
+                    poll_ts.isoformat(),
+                    head_sha,
+                    reason,
+                    at.isoformat(),
+                ),
+            )
+
     def events(self) -> tuple[dict[str, Any], ...]:
         with self._connect() as db:
             rows = db.execute(
@@ -530,6 +589,13 @@ class AuthorWakeupReconciler:
         self.door = door
         self.review_fix = review_fix
         self.send_id_factory = send_id_factory or (lambda: uuid4().hex)
+        self._poll_cache: dict[tuple[str, int], PollRecord] = {}
+        self._poll_cache_bootstrapped = False
+        self._dirty_scan_targets: set[tuple[str, int]] = set()
+
+    def nudge(self, repository: str, pull_number: int) -> None:
+        """Mark one PR's Clearance poll snapshot dirty after webhook writeback."""
+        self._dirty_scan_targets.add((repository.lower(), int(pull_number)))
 
     async def tick(self, *, now: datetime, scan: bool) -> TickSummary:
         observed = notifications_started = receipts_checked = 0
@@ -566,12 +632,11 @@ class AuthorWakeupReconciler:
         )
 
     async def _scan(self, now: datetime) -> tuple[int, int]:
-        latest: dict[tuple[str, int], PollRecord] = {}
-        for poll in self.clearance_store.read_polls():
-            latest[(poll.repo.lower(), poll.pr)] = poll
+        latest = self._scan_poll_snapshot()
         allowed = set(self.config.allowed_repositories)
         observed_count = 0
         revalidated_keys: set[ObservationKey] = set()
+        terminal_targets: set[tuple[str, int]] = set()
         for (repository, pull_number), poll in latest.items():
             if repository not in allowed:
                 self.ledger.reconcile_active_observations(
@@ -581,6 +646,38 @@ class AuthorWakeupReconciler:
                     eligible_keys=set(),
                     at=now,
                 )
+                terminal_targets.add((repository, pull_number))
+                continue
+            if self.ledger.terminal_scan_matches(
+                repository=repository,
+                pull_number=pull_number,
+                poll_ts=poll.ts,
+                head_sha=poll.head_sha,
+            ):
+                terminal_targets.add((repository, pull_number))
+                continue
+            persisted_candidates = [
+                thread
+                for thread in poll.threads
+                if thread.verdict is Verdict.OPEN and not thread.github_isResolved
+            ]
+            if not persisted_candidates:
+                self.ledger.reconcile_active_observations(
+                    repository=repository,
+                    pull_number=pull_number,
+                    current_head_sha=poll.head_sha,
+                    eligible_keys=set(),
+                    at=now,
+                )
+                self.ledger.mark_terminal_scan(
+                    repository=repository,
+                    pull_number=pull_number,
+                    poll_ts=poll.ts,
+                    head_sha=poll.head_sha,
+                    reason="no_open_persisted_threads",
+                    at=now,
+                )
+                terminal_targets.add((repository, pull_number))
                 continue
             try:
                 pull = await self.github.pull_request(CLEARANCE_AGENT_SLUG, repository, pull_number)
@@ -598,12 +695,25 @@ class AuthorWakeupReconciler:
                     eligible_keys=set(),
                     at=now,
                 )
+                self.ledger.mark_terminal_scan(
+                    repository=repository,
+                    pull_number=pull_number,
+                    poll_ts=poll.ts,
+                    head_sha=poll.head_sha,
+                    reason=(
+                        "pull_not_open"
+                        if str(pull.get("state") or "").lower() != "open"
+                        else "head_superseded"
+                    ),
+                    at=now,
+                )
+                terminal_targets.add((repository, pull_number))
                 continue
             author_login = ((pull.get("user") or {}).get("login")) or None
             live_by_id = {str(thread.get("id") or ""): thread for thread in live_threads or []}
             before = {item.key for item in self.ledger.observations() if item.status == "active"}
             eligible_keys: set[ObservationKey] = set()
-            for persisted in poll.threads:
+            for persisted in persisted_candidates:
                 live = live_by_id.get(persisted.id)
                 if live is None or not is_author_wakeup_eligible(
                     persisted, live, pr_author_login=author_login
@@ -622,8 +732,34 @@ class AuthorWakeupReconciler:
                 eligible_keys=eligible_keys,
                 at=now,
             )
+            if not eligible_keys:
+                self.ledger.mark_terminal_scan(
+                    repository=repository,
+                    pull_number=pull_number,
+                    poll_ts=poll.ts,
+                    head_sha=poll.head_sha,
+                    reason="no_live_eligible_threads",
+                    at=now,
+                )
+                terminal_targets.add((repository, pull_number))
+        for target in terminal_targets:
+            self._poll_cache.pop(target, None)
         started = await self._start_due_notifications(now, revalidated_keys)
         return observed_count, started
+
+    def _scan_poll_snapshot(self) -> dict[tuple[str, int], PollRecord]:
+        if not self._poll_cache_bootstrapped:
+            for poll in self.clearance_store.read_polls():
+                self._poll_cache[(poll.repo.lower(), poll.pr)] = poll
+            self._poll_cache_bootstrapped = True
+            self._dirty_scan_targets.clear()
+            return dict(self._poll_cache)
+        for repository, pull_number in self._dirty_scan_targets:
+            latest_poll = self.clearance_store.latest_poll(repository, pull_number)
+            if latest_poll is not None:
+                self._poll_cache[(repository, pull_number)] = latest_poll
+        self._dirty_scan_targets.clear()
+        return dict(self._poll_cache)
 
     async def _start_due_notifications(
         self,
@@ -671,6 +807,13 @@ class AuthorWakeupReconciler:
         transport_send_id: str | None = None,
         same_id_repost: bool = False,
     ) -> None:
+        if notification.repository not in set(self.config.allowed_repositories):
+            revoked = notification.with_updates(
+                state="notify_scope_revoked",
+                next_delivery_attempt_at=None,
+            )
+            self.ledger.save_notification(revoked, event=revoked.state, at=now)
+            return
         transport_send_id = transport_send_id or self.send_id_factory()
         message = build_wakeup_message(
             notification_id=notification.notification_id,

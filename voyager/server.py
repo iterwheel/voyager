@@ -572,7 +572,13 @@ async def _stop_author_wakeup_schedule() -> None:
     _author_wakeup_reconciler = None
 
 
-def _nudge_author_wakeup() -> None:
+def _nudge_author_wakeup(
+    repository: str | None = None,
+    pull_number: int | None = None,
+) -> None:
+    reconciler = _author_wakeup_reconciler
+    if reconciler is not None and repository is not None and pull_number is not None:
+        reconciler.nudge(repository, pull_number)
     event = _author_wakeup_event
     if event is not None:
         event.set()
@@ -734,7 +740,7 @@ async def _process_route_writebacks(
             _log.exception("writeback failed for route %r", route.get("agent"))
         finally:
             if route.get("agent") == CLEARANCE_AGENT_SLUG:
-                _nudge_author_wakeup()
+                _nudge_author_wakeup(repository, pr_number)
 
 
 def _extract_pr_number_from_payload(payload: dict[str, Any]) -> int | None:
