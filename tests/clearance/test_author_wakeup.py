@@ -672,6 +672,64 @@ async def test_terminal_scan_checkpoint_skips_history_until_a_new_poll(tmp_path:
 
 
 @pytest.mark.asyncio
+async def test_terminal_checkpoint_distinguishes_semantic_polls_in_same_second(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 8, 30, 0, 0, tzinfo=UTC)
+    repository = "iterwheel/voyager-sandbox"
+    head_sha = "b" * 40
+    clearance_store = StateStore(tmp_path / "clearance")
+    clearance_store.append_poll(
+        PollRecord(
+            ts=now,
+            repo=repository,
+            pr=42,
+            head_sha=head_sha,
+            status=Status.READY,
+            threads=[_persisted_thread(verdict=Verdict.RESOLVED)],
+        )
+    )
+    github = AsyncMock()
+    github.pull_request.return_value = {
+        "number": 42,
+        "state": "open",
+        "head": {"sha": head_sha},
+        "user": {"login": "ryosaeba1985"},
+    }
+    github.pull_request_review_threads.return_value = [_live_thread()]
+    ledger = WakeupLedger(tmp_path / "wakeup" / "state.db")
+    reconciler = AuthorWakeupReconciler(
+        config=AuthorWakeupConfig(
+            enabled=True,
+            allowed_repositories=(repository,),
+        ),
+        clearance_store=clearance_store,
+        ledger=ledger,
+        github=github,
+        door=AsyncMock(),
+    )
+
+    await reconciler.tick(now=now, scan=True)
+    assert github.pull_request.await_count == 0
+
+    clearance_store.append_poll(
+        PollRecord(
+            ts=now,
+            repo=repository,
+            pr=42,
+            head_sha=head_sha,
+            status=Status.BLOCKED,
+            threads=[_persisted_thread()],
+        )
+    )
+    reconciler.nudge(repository, 42)
+    await reconciler.tick(now=now + timedelta(milliseconds=1), scan=True)
+
+    assert github.pull_request.await_count == 1
+    assert ledger.observations()[0].status == "active"
+
+
+@pytest.mark.asyncio
 async def test_reversible_live_ineligibility_is_rechecked_without_a_new_poll(
     tmp_path: Path,
 ) -> None:

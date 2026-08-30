@@ -120,7 +120,7 @@ class WakeupLedger:
                 CREATE TABLE IF NOT EXISTS terminal_scan_checkpoints (
                     repository TEXT NOT NULL,
                     pull_number INTEGER NOT NULL,
-                    poll_ts TEXT NOT NULL,
+                    poll_identity TEXT NOT NULL,
                     head_sha TEXT NOT NULL,
                     reason TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -353,16 +353,16 @@ class WakeupLedger:
         *,
         repository: str,
         pull_number: int,
-        poll_ts: datetime,
+        poll_identity: str,
         head_sha: str,
     ) -> bool:
         with self._connect() as db:
             row = db.execute(
                 """
                 SELECT 1 FROM terminal_scan_checkpoints
-                WHERE repository=? AND pull_number=? AND poll_ts=? AND head_sha=?
+                WHERE repository=? AND pull_number=? AND poll_identity=? AND head_sha=?
                 """,
-                (repository, pull_number, poll_ts.isoformat(), head_sha),
+                (repository, pull_number, poll_identity, head_sha),
             ).fetchone()
         return row is not None
 
@@ -371,7 +371,7 @@ class WakeupLedger:
         *,
         repository: str,
         pull_number: int,
-        poll_ts: datetime,
+        poll_identity: str,
         head_sha: str,
         reason: str,
         at: datetime,
@@ -380,10 +380,10 @@ class WakeupLedger:
             db.execute(
                 """
                 INSERT INTO terminal_scan_checkpoints
-                    (repository, pull_number, poll_ts, head_sha, reason, updated_at)
+                    (repository, pull_number, poll_identity, head_sha, reason, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(repository, pull_number) DO UPDATE SET
-                    poll_ts=excluded.poll_ts,
+                    poll_identity=excluded.poll_identity,
                     head_sha=excluded.head_sha,
                     reason=excluded.reason,
                     updated_at=excluded.updated_at
@@ -391,7 +391,7 @@ class WakeupLedger:
                 (
                     repository,
                     pull_number,
-                    poll_ts.isoformat(),
+                    poll_identity,
                     head_sha,
                     reason,
                     at.isoformat(),
@@ -649,10 +649,11 @@ class AuthorWakeupReconciler:
                 )
                 terminal_targets.add((repository, pull_number))
                 continue
+            poll_identity = _poll_identity(poll)
             if self.ledger.terminal_scan_matches(
                 repository=repository,
                 pull_number=pull_number,
-                poll_ts=poll.ts,
+                poll_identity=poll_identity,
                 head_sha=poll.head_sha,
             ):
                 terminal_targets.add((repository, pull_number))
@@ -673,7 +674,7 @@ class AuthorWakeupReconciler:
                 self.ledger.mark_terminal_scan(
                     repository=repository,
                     pull_number=pull_number,
-                    poll_ts=poll.ts,
+                    poll_identity=poll_identity,
                     head_sha=poll.head_sha,
                     reason="no_open_persisted_threads",
                     at=now,
@@ -699,7 +700,7 @@ class AuthorWakeupReconciler:
                 self.ledger.mark_terminal_scan(
                     repository=repository,
                     pull_number=pull_number,
-                    poll_ts=poll.ts,
+                    poll_identity=poll_identity,
                     head_sha=poll.head_sha,
                     reason=(
                         "pull_not_open"
@@ -1054,6 +1055,10 @@ def _notification_id(
 ) -> str:
     material = "\0".join((repository, str(pull_number), head_sha, *sorted(thread_ids)))
     return sha256(material.encode("utf-8")).hexdigest()[:32]
+
+
+def _poll_identity(poll: PollRecord) -> str:
+    return sha256(poll.model_dump_json().encode("utf-8")).hexdigest()
 
 
 def is_author_wakeup_eligible(
