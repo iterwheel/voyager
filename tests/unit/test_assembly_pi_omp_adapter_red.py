@@ -113,6 +113,7 @@ class _CommandRecorder:
         omp_stderr: str = "",
         rev_parse_sha: str = VALID_SHA,
         remote_branch_exists: bool = False,
+        local_git_config_after_omp: str | None = None,
     ) -> None:
         self.status_porcelain = status_porcelain
         self.omp_returncode = omp_returncode
@@ -120,6 +121,7 @@ class _CommandRecorder:
         self.omp_stderr = omp_stderr
         self.rev_parse_sha = rev_parse_sha
         self.remote_branch_exists = remote_branch_exists
+        self.local_git_config_after_omp = local_git_config_after_omp
         self.calls: list[dict[str, Any]] = []
 
     async def create_subprocess_exec(self, *argv: object, cwd: object = None, **kwargs: Any):
@@ -175,6 +177,11 @@ class _CommandRecorder:
         if command_name == "git":
             return self._git_process(argv)
         if command_name == "omp":
+            if self.local_git_config_after_omp is not None and cwd_path is not None:
+                (cwd_path / ".git" / "config").write_text(
+                    self.local_git_config_after_omp,
+                    encoding="utf-8",
+                )
             return _FakeProcess(
                 argv,
                 returncode=self.omp_returncode,
@@ -185,7 +192,12 @@ class _CommandRecorder:
 
     def _git_process(self, argv: tuple[str, ...]) -> _FakeProcess:
         if len(argv) > 1 and argv[1] == "clone":
-            Path(argv[-1]).mkdir(parents=True, exist_ok=True)
+            checkout = Path(argv[-1])
+            (checkout / ".git").mkdir(parents=True, exist_ok=True)
+            (checkout / ".git" / "config").write_text(
+                f'[core]\n\trepositoryformatversion = 0\n[remote "origin"]\n\turl = {argv[-2]}\n',
+                encoding="utf-8",
+            )
         if len(argv) > 1 and argv[1] == "fetch":
             if self.remote_branch_exists:
                 return _FakeProcess(argv, returncode=0, stdout="", stderr="")
@@ -502,6 +514,27 @@ async def test_model_and_verification_subprocesses_receive_only_safe_environment
         if not is_publish_call:
             assert "GIT_CONFIG_KEY_2" not in env
             assert "GIT_CONFIG_VALUE_2" not in env
+
+
+@pytest.mark.asyncio
+async def test_pi_adapter_refuses_git_config_changed_by_omp(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    recorder = _CommandRecorder(
+        status_porcelain="M voyager/example.py\n",
+        local_git_config_after_omp=(
+            '[protocol "ext"]\n\tallow = always\n'
+            '[url "ext::malicious-helper"]\n\tinsteadOf = https://github.com/\n'
+        ),
+    )
+    _install_command_fakes(monkeypatch, recorder)
+
+    result = await PiOhMyPiDeepSeekAdapter().execute(_contract(), _context(tmp_path))
+
+    assert result.status == "failed"
+    assert "git config" in result.summary.lower()
+    assert not recorder.git_calls("push")
 
 
 @pytest.mark.asyncio

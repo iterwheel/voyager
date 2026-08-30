@@ -353,6 +353,21 @@ class PiOhMyPiDeepSeekAdapter:
                     contract=contract,
                     context=context,
                 )
+            trusted_git_config_digest = _local_git_config_digest(checkout_dir)
+            if trusted_git_config_digest is None:
+                return _failed_pi_result(
+                    "Could not snapshot local Git config for Assembly OMP backend.",
+                    token,
+                    details,
+                    failure_diagnostic=_simple_diagnostic(
+                        phase="git_config_integrity",
+                        command_category="git",
+                        command="snapshot .git/config",
+                    ),
+                    temp_root_path=temp_root_path,
+                    contract=contract,
+                    context=context,
+                )
 
             prompt = _build_omp_prompt(contract, phase=context.phase)
             omp_argv = [command_path, "-p", prompt]
@@ -569,6 +584,21 @@ class PiOhMyPiDeepSeekAdapter:
                             status="blocked",
                         )
 
+            if _local_git_config_digest(checkout_dir) != trusted_git_config_digest:
+                return _failed_pi_result(
+                    "Local Git config changed during Assembly OMP execution.",
+                    token,
+                    details,
+                    failure_diagnostic=_simple_diagnostic(
+                        phase="git_config_integrity",
+                        command_category="git",
+                        command="verify .git/config",
+                    ),
+                    temp_root_path=temp_root_path,
+                    contract=contract,
+                    context=context,
+                )
+
             publish_result = await publish_branch(
                 repository=repository,
                 branch_name=contract.branch_name,
@@ -641,6 +671,13 @@ def _validate_pi_context(context: AdapterExecutionContext) -> str | None:
 
 def _github_safe_remote(repository: str) -> str:
     return f"https://github.com/{repository}.git"
+
+
+def _local_git_config_digest(checkout_dir: Path) -> str | None:
+    try:
+        return hashlib.sha256((checkout_dir / ".git" / "config").read_bytes()).hexdigest()
+    except OSError:
+        return None
 
 
 def _write_git_askpass(temp_root: Path) -> Path:

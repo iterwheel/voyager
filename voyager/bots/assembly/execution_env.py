@@ -68,6 +68,8 @@ def scoped_git_env(*, token: str | None = None, askpass: Path | None = None) -> 
     """Return a Git-only env with approved transport settings and optional auth."""
     env = untrusted_subprocess_env()
     env.update(_git_transport_env())
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    env["GIT_CONFIG_GLOBAL"] = "/dev/null"
     if token and askpass is not None:
         env["GIT_ASKPASS"] = str(askpass)
         env["ASSEMBLY_GITHUB_TOKEN"] = token
