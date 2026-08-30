@@ -261,8 +261,9 @@ without changing either marker format.
 
 - Pre-P2 and P2 local implementation, validation, and COR-1610 review are
   complete. The P2 delta uses the loop-qualified weak registry and passed its
-  fresh-loop regression. Published-PR review, remote GitHub Actions CI, merge,
-  and deployment remain pending.
+  fresh-loop regression. PR #293 review and remote GitHub Actions CI passed;
+  merge `c7aba1a9` is included in the current Wukong wheel. No rollout gate
+  remains for this CHG.
 
 ---
 

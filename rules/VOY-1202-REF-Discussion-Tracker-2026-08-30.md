@@ -19,6 +19,7 @@ The Voyager discussion tracker for 2026-08-30.
 |----|--------|--------|--------|---------|---------|-------|
 | D1 | Done | — | graph-engineering.bob | 04:50 | 04:52 | Clearance state-A author wake-up and review-fix fallback PRP |
 | D2 | Done | D1 | graph-engineering.bob | 10:20 | 19:03 | Implement VOY-1843 via CHG-1844 and sandbox-first rollout |
+| D3 | WIP | D2 | graph-engineering.bob | 18:41 | 19:30 | Prove PFC terminal receipt and author-claim telemetry after D23 |
 
 
 ## Archived Items
@@ -44,6 +45,17 @@ The Voyager discussion tracker for 2026-08-30.
   proved delivery to pfc, and notification-only rollout expanded to sandbox,
   alfred, and trinity with N=10 and review-fix fallback disabled.
 
+### D3: Prove PFC terminal receipt and author-claim telemetry after D23
+
+- **Source:** Gated closeout task from `graph-engineering.bob`.
+- **Dependency:** `samon127/prefrontal-cortex#128` must merge and the Wukong
+  dashboard must serve that merge or a descendant.
+- **Gate:** Re-run one sandbox wake-up and author reply within M; require the
+  Voyager notification ledger to record `author_delivered_at` and
+  `claim_class` with state `claimed`, not `notify_delivery_unknown`.
+- **Status:** The dependency PR is open; a ten-minute background gate monitor
+  is active. Review-fix fallback remains disabled.
+
 ---
 
 ## Change History
@@ -53,3 +65,4 @@ The Voyager discussion tracker for 2026-08-30.
 | 2026-08-30 | Initial tracker with D1                 | Codex |
 | 2026-08-30 | Reopened tracker with D2 implementation | Codex |
 | 2026-08-30 | Closed D2 after merged implementation, sandbox proof, and three-repository notification rollout | Codex |
+| 2026-08-30 | Opened D3 for the separately gated PFC terminal-receipt and author-claim closeout | Codex |

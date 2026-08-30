@@ -258,8 +258,8 @@ af validate --root .
   validation, and review are complete.
 - **Unexpected side effects:** None observed. Existing fail-open, same-head
   transition, and Stage 1.5 behavior remained green.
-- **Follow-up actions:** Merge and release are operator-controlled and outside
-  this slice.
+- **Follow-up actions:** None for this CHG. PR #295 merged as `d4d18958`, and
+  the change is included in the current Wukong wheel.
 
 ## Review Unit
 
