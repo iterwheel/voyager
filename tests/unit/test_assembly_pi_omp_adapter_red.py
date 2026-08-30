@@ -89,6 +89,16 @@ def _assert_no_secret(value: Any, secret: str = INSTALLATION_TOKEN) -> None:
     assert "ghs_stage2" not in serialized
 
 
+def test_repository_lfs_detection_ignores_commented_attribute_rules(tmp_path: Path) -> None:
+    (tmp_path / ".gitattributes").write_text(
+        "# *.bin filter=lfs diff=lfs merge=lfs -text\n"
+        "   # *.zip filter=lfs diff=lfs merge=lfs -text\n",
+        encoding="utf-8",
+    )
+
+    assert not adapters_module._repository_uses_git_lfs(tmp_path)
+
+
 class _FakeProcess:
     def __init__(self, argv: tuple[str, ...], *, returncode: int, stdout: str, stderr: str):
         self.args = argv

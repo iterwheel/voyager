@@ -831,8 +831,11 @@ def _repository_uses_git_lfs(checkout_dir: Path) -> bool:
             text = attributes.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        if re.search(r"(?:^|\s)filter=lfs(?:\s|$)", text, flags=re.MULTILINE):
-            return True
+        for line in text.splitlines():
+            if line.lstrip().startswith("#"):
+                continue
+            if re.search(r"(?:^|\s)filter=lfs(?:\s|$)", line):
+                return True
     return False
 
 
