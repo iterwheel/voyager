@@ -1,9 +1,9 @@
 # CHG-1820: Bridge — Deployable Wheel Artifact + `vyg` CLI
 
 **Applies to:** VOY project
-**Last updated:** 2026-08-02
-**Last reviewed:** 2026-05-23
-**Status:** Proposed
+**Last updated:** 2026-08-30
+**Last reviewed:** 2026-08-30
+**Status:** Completed
 **Date:** 2026-05-23
 **Scheduled:** After CHG plan-review approval in the active VOY-1811 loop for #75.
 **Requested by:** Frank Xu (via issue #75, 2026-05-23)
@@ -333,3 +333,4 @@ Tooling:
 | 2026-05-23 | Round 2/3 plan-review cleanup (after GLM 9.2 PASS, DeepSeek 9.3 PASS, MiniMax 9.03 PASS): D8 wording fix (was "Step 2 (Launchd Service Setup)" — corrected to match Step 4 → new Step 5 → old Step 5 = Step 6); §Testing build-info isolation paragraph rewritten to canonical `setitem(..., None)` import-poison pattern (was stale `delitem`); §Rollback path 2 example replaced `ln -sfn` with `ln -s tmp && mv -f tmp` (matches D6 / Surface 8); Surface 14 in-place build pattern + `.git/` rationale + `pytest.mark.skipif(not shutil.which("uv"))` (per MM-R2 git-dir gap); D6 / Surface 8 / §Rollback path 2 intermediate name `.venv.new` → `.venv.swap-$$` (PID-suffix uniqueness, per MM-R2 collision finding); Surface 14 restructured to lead with test contract before implementer protocol (per MM-R3 TDD-prose nit). | Claude (via VOY-1811 #75) |
 | 2026-05-23 | Round 1 plan-review remediation (GLM 8.8 FIX, DeepSeek 8.9 FIX, MiniMax 8.75 FIX): **P1 fixes** — Surface 5: added `[tool.hatch.build] artifacts = ["voyager/_build_info.py"]` at the general scope (empirically verified via throwaway hatch project that gitignored package files are excluded from the wheel without this flag); Surface 8 + D6: corrected VOY-1814 step numbering (new step inserts between Step 4 Preflight and Step 5 LaunchAgent install, not between Steps 1 and 2 as originally written); D6 + Surface 8: replaced `ln -sfn` with `ln -s tmp && mv -f tmp ~/.voyager/.venv` for actual `rename(2)` atomicity on APFS; Surface 10 case (e): removed the wrong `no_args_is_help` expectation (`vyg bridge serve` with defaults runs uvicorn; would block tests) — replaced with monkeypatch on `uvicorn.run` to verify default args arrive correctly; Surface 11: replaced `monkeypatch.delitem` with `monkeypatch.setitem(..., None)` import-poison pattern (delitem only clears the cache; the next import re-reads from disk if a wheel-install `_build_info.py` is in `site-packages`). **P2 fixes** — added §AC→Surface Map (issue #75 has 6 ACs; previously implicit); D9: noted `bridge.env` is absolute path so `$PWD` does not matter after `WorkingDirectory` removal; Surface 1: added `--log-level` flag (was hardcoded `"info"`) and signal-handling note (the `exec` keyword in the plist chain is load-bearing for SIGTERM propagation); Surface 5: explicit warning that `uv build` directly bypasses the dirty-tree gate; Surface 7: trap covers `EXIT INT TERM HUP` (not just normal exit); Surface 7: explicit wheel-content assertion catches the hatchling-include regression at build time; Surface 14 (new): wheel-integration smoke test that builds the wheel + asserts `_build_info.py` is inside; §Rollback path 3: explicit `git show HEAD~1:deploy/launchd/...` plist snapshot step + `uv sync` step for the source-checkout flow restoration. | Claude (via VOY-1811 #75) |
 | 2026-08-02 | Applied Ruff 0.16.1 formatting to an embedded code example; no semantic changes. | Codex |
+| 2026-08-30 | Lifecycle closeout: implementation PR #80 merged as `88317e03`; source issue #75 is closed, and VOY-1814 wheel deployment is live. Status changed from Proposed to Completed. | Codex |

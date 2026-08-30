@@ -1,9 +1,9 @@
 # CHG-1842: Countdown In-Process Trigger from Clearance Pipeline
 
 **Applies to:** VOY project
-**Last updated:** 2026-08-12
-**Last reviewed:** 2026-08-12
-**Status:** In Progress
+**Last updated:** 2026-08-30
+**Last reviewed:** 2026-08-30
+**Status:** Completed
 **Date:** 2026-08-12
 **Requested by:** Frank Xu
 **Priority:** Medium
@@ -102,7 +102,7 @@ on the same machine, with zero delivery latency.
 
 ## Approval
 
-- [ ] Approved by: <reviewer> on <date>
+- [x] Approved and implemented via PR #311 on 2026-08-12.
 
 ---
 
@@ -111,3 +111,4 @@ on the same machine, with zero delivery latency.
 | Date | Change | By |
 |------|--------|----|
 | 2026-08-12 | Initial proposal — in-process Countdown trigger from the Clearance pipeline, motivated by GitHub same-app webhook suppression observed on alfred #326 | Claude Code |
+| 2026-08-30 | Lifecycle closeout: implementation PR #311 merged as `e4602d2b`; the in-process trigger is deployed on Wukong. Status changed from In Progress to Completed. | Codex |

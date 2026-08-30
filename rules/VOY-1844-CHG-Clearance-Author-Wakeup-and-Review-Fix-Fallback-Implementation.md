@@ -159,7 +159,10 @@ this state machine.
   notification-time head, advances only through its own verified commits, and
   retains all L3/kill-switch/dry-run/allowlist controls.
 - [x] No author-wakeup path resolves, approves, or merges a PR.
-- [ ] Focused tests, static checks, CI, and the sandbox notification canary pass.
+- [x] Focused tests, static checks, CI, and the sandbox notification-delivery
+  canary pass.
+- [ ] The PFC terminal `author_delivered` receipt and author-claim canary pass
+  after the PFC-2502/D23 receipt contract deploys.
 
 ---
 
@@ -200,7 +203,17 @@ this state machine.
 
 ## Post-Change Review
 
-- Pending implementation, PR merge, and sandbox canary.
+- PR #319 merged the author-wakeup implementation; PR #320 fixed the SQLite
+  connection leak found by the first fail-safe rollout attempt.
+- Wheel `099529928f61afa09401f05ac44b873c7060aa8e` is live on Wukong.
+- Sandbox PR #75 proved one `[voyager-clearance-author-wakeup/v1]` message
+  reached pfc; the rollout then expanded to `frankyxhl/alfred` and
+  `frankyxhl/trinity` with `notify_after_minutes = 10` and
+  `auto_review_fix = false`.
+- PFC retention/`author_delivered` claim telemetry and live review-fix fallback
+  remain gated follow-ups. This CHG stays In Progress until the D23 terminal
+  receipt and author-claim canary passes; review-fix enablement remains a later
+  operational gate.
 
 ---
 
@@ -210,3 +223,4 @@ this state machine.
 |------------|----------------------------------------------------------------------------------|-------|
 | 2026-08-30 | Initial owner-approved implementation contract for VOY-1843                      | Codex |
 | 2026-08-30 | Plan self-review passed against merged VOY-1843 and current implementation seams | Codex |
+| 2026-08-30 | Lifecycle evidence refresh: PR #319 merged as `6734f988`, rollout fix PR #320 merged as `09952992`, sandbox notification delivery passed, and the three-repository notification-only rollout is healthy. Status remains In Progress pending the PFC-2502/D23 terminal-receipt and author-claim canary. | Codex |

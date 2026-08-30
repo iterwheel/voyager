@@ -29,10 +29,10 @@
 | 1814 | SOP | Wukong Bridge Launchd and Rollback | Active |
 | 1815 | SOP | Clearance DeepSeek Profile Policy | Active |
 | 1816 | SOP | Managed Repository Canary Expansion | Active |
-| 1817 | CHG | Assembly Bot MVP Implementation | Proposed |
-| 1818 | CHG | Assembly Actor Authorization Gate | Proposed |
-| 1819 | CHG | Assembly Bot Hardening F1 F6 | Proposed |
-| 1820 | CHG | Bridge Deployable Wheel Artifact | Proposed |
+| 1817 | CHG | Assembly Bot MVP Implementation | Completed |
+| 1818 | CHG | Assembly Actor Authorization Gate | Completed |
+| 1819 | CHG | Assembly Bot Hardening F1 F6 | Completed |
+| 1820 | CHG | Bridge Deployable Wheel Artifact | Completed |
 | 1821 | CHG | Assembly Execution Backend Fake Subprocess and Pi Canary | Completed |
 | 1822 | SOP | Assembly Driven Implementation Loop | Active |
 | 1823 | SOP | Assembly OMP Audit Lookup | Active |
@@ -42,20 +42,20 @@
 | 1827 | REF | Countdown Dedicated PAT Fallback Canary | Deprecated |
 | 1828 | SOP | Countdown Dedicated PAT Wukong Canary | Deprecated |
 | 1829 | CHG | Countdown Dedicated PAT Fallback Production Gate | Rolled Back |
-| 1830 | CHG | Remove Countdown Dedicated PAT and User Token Canary Machinery | Proposed |
+| 1830 | CHG | Remove Countdown Dedicated PAT and User Token Canary Machinery | Completed |
 | 1831 | PRP | Countdown Multi Repo Resolve Loop on Machine Account Resolver | Draft |
 | 1832 | SOP | Codex Review Loop | Active |
 | 1833 | SOP | Voyager Multi Agent Loop Operation | Active |
 | 1834 | ADR | Cargo Dependency Bump Preparation Bot | Proposed |
 | 1835 | SOP | Countdown Resolve Loop Launchd Deployment | Active |
 | 1836 | CHG | Repair CI Baseline Drift | Completed |
-| 1837 | CHG | Clearance Webhook Fan out Dedupe | In Progress |
-| 1838 | CHG | Suppress Stale Clearance Verdict Writeback | In Progress |
+| 1837 | CHG | Clearance Webhook Fan out Dedupe | Completed |
+| 1838 | CHG | Suppress Stale Clearance Verdict Writeback | Completed |
 | 1839 | PRP | Countdown Merge Loop Autonomous Agent PR Merge | Draft |
 | 1840 | SOP | Countdown Merge Loop Launchd Deployment | Active |
-| 1841 | CHG | Countdown Event Driven Trigger from Clearance Resolved Verdicts | In Progress |
-| 1842 | CHG | Countdown In Process Trigger from Clearance Pipeline | In Progress |
-| 1843 | PRP | Clearance Open Threads Reach the PR Author PFC Door Notification and Review Fix Auto Fallback | Proposed |
+| 1841 | CHG | Countdown Event Driven Trigger from Clearance Resolved Verdicts | Completed |
+| 1842 | CHG | Countdown In Process Trigger from Clearance Pipeline | Completed |
+| 1843 | PRP | Clearance Open Threads Reach the PR Author PFC Door Notification and Review Fix Auto Fallback | Implemented |
 | 1844 | CHG | Clearance Author Wakeup and Review Fix Fallback Implementation | In Progress |
 
 ---

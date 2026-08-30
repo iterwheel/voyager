@@ -1,9 +1,9 @@
 # CHG-1838: Suppress Stale Clearance Verdict Writeback
 
 **Applies to:** VOY project
-**Last updated:** 2026-08-02
-**Last reviewed:** 2026-08-02
-**Status:** In Progress
+**Last updated:** 2026-08-30
+**Last reviewed:** 2026-08-30
+**Status:** Completed
 **Date:** 2026-08-02
 **Requested by:** Frank Xu
 **Priority:** High
@@ -258,8 +258,8 @@ af validate --root .
   validation, and review are complete.
 - **Unexpected side effects:** None observed. Existing fail-open, same-head
   transition, and Stage 1.5 behavior remained green.
-- **Follow-up actions:** Merge and release are operator-controlled and outside
-  this slice.
+- **Follow-up actions:** None for this CHG. PR #295 merged as `d4d18958`, and
+  the change is included in the current Wukong wheel.
 
 ## Review Unit
 
@@ -302,3 +302,4 @@ blind: true
 | 2026-08-02 | Marked Approved after plan-review R2 passed 3/3; recorded the refresh-to-write/eventual-consistency boundary and folded remaining advisories into the contract | Codex |
 | 2026-08-02 | Plan-review R1 remediation: pinned actor/cache/log rules, simultaneous evidence, fail-open acceptance, BDD targets, distinct RED/GREEN workers, changelog work, and rollback refresh | Codex |
 | 2026-08-02 | Initial contract from the verified `order_system_django#50` stale-snapshot incident | Codex |
+| 2026-08-30 | Lifecycle closeout: implementation PR #295 merged as `d4d18958`; the stale-verdict writeback guard shipped with its reviewed tests. Status changed from In Progress to Completed. | Codex |
