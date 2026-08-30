@@ -692,6 +692,29 @@ def _issue_comment_login(comment: dict[str, Any]) -> str | None:
     )
 
 
+def _head_advanced_after_thread(
+    thread_dict: dict[str, Any],
+    current_head_updated_at: str | None,
+) -> bool:
+    """Issue #254: independent corroboration that code moved after the review.
+
+    True only when the current head's commit date is known AND is strictly
+    newer than the thread's first comment — the Codex finding. A head that
+    predates the finding means no commits landed after the review, so an
+    investigator RESOLVED derived from author prose is prose-only and must not
+    mutate thread state (legit flow — push the fix, then reply — has the head
+    after the finding and stays corroborated). Unknown head date (None) fails
+    closed. ISO-8601 timestamps compare lexicographically (GitHub emits UTC 'Z').
+    """
+    if not current_head_updated_at:
+        return False
+    comments = _comment_nodes(thread_dict)
+    if not comments:
+        return False
+    finding_created_at = str(comments[0].get("createdAt") or "")
+    return bool(finding_created_at and current_head_updated_at > finding_created_at)
+
+
 def _issue_comment_created_at(comment: dict[str, Any]) -> str:
     return str(comment.get("created_at") or comment.get("createdAt") or "")
 
@@ -1214,9 +1237,24 @@ async def _process_thread(
                     f"investigator returned unknown verdict: {returned.verdict!r}"
                 ) from exc
             llm_decision = returned
+            adopted_verdict = coerced
+            adopted_reason = llm_decision.reason
+            if coerced == Verdict.RESOLVED and not _head_advanced_after_thread(
+                thread_dict, current_head_updated_at
+            ):
+                # Issue #254: the investigator's inputs are untrusted (author
+                # reply, attacker-quotable Codex comments, diff text). A RESOLVED
+                # derived from them may only trigger the resolve mutation when
+                # independent evidence exists — the head advanced after the
+                # thread's last activity. Otherwise cap at human judgment.
+                adopted_verdict = Verdict.NEEDS_HUMAN_JUDGMENT
+                adopted_reason = (
+                    "investigator RESOLVED lacks independent corroboration "
+                    "(head unchanged since the review thread); capped per #254"
+                )
             decision = VerdictDecision(
-                verdict=coerced,
-                reason=llm_decision.reason,
+                verdict=adopted_verdict,
+                reason=adopted_reason,
                 substantive=decision.substantive,
             )
         except InvestigationError as exc:
