@@ -400,6 +400,27 @@ async def test_model_and_verification_subprocesses_receive_only_safe_environment
     )
     for name in ambient_secret_names:
         monkeypatch.setenv(name, f"secret-{name.lower()}")
+    git_transport_input = {
+        "HTTPS_PROXY": "http://proxy.example",
+        "NO_PROXY": "github.com",
+        "GIT_CONFIG_COUNT": "3",
+        "GIT_CONFIG_KEY_0": "http.proxy",
+        "GIT_CONFIG_VALUE_0": "http://git-proxy.example",
+        "GIT_CONFIG_KEY_1": "http.sslCAInfo",
+        "GIT_CONFIG_VALUE_1": "/safe/ca.pem",
+        "GIT_CONFIG_KEY_2": "credential.helper",
+        "GIT_CONFIG_VALUE_2": "!malicious-helper",
+    }
+    for name, value in git_transport_input.items():
+        monkeypatch.setenv(name, value)
+    expected_git_transport_values = {
+        **{name: git_transport_input[name] for name in ("HTTPS_PROXY", "NO_PROXY")},
+        "GIT_CONFIG_COUNT": "2",
+        "GIT_CONFIG_KEY_0": "http.proxy",
+        "GIT_CONFIG_VALUE_0": "http://git-proxy.example",
+        "GIT_CONFIG_KEY_1": "http.sslCAInfo",
+        "GIT_CONFIG_VALUE_1": "/safe/ca.pem",
+    }
 
     recorder = _CommandRecorder(status_porcelain="M voyager/example.py\n")
     _install_command_fakes(monkeypatch, recorder)
@@ -463,6 +484,17 @@ async def test_model_and_verification_subprocesses_receive_only_safe_environment
         assert env.get("ASSEMBLY_GITHUB_TOKEN") != "secret-assembly_github_token"
         if call is not omp_call:
             assert "DEEPSEEK_API_KEY" not in env
+    adapter_git_calls = [
+        call for call in adapter_calls if call["argv"] and Path(call["argv"][0]).name == "git"
+    ]
+    assert adapter_git_calls
+    for call in adapter_git_calls:
+        env = call["kwargs"]["env"]
+        assert {name: env[name] for name in expected_git_transport_values} == (
+            expected_git_transport_values
+        )
+        assert "GIT_CONFIG_KEY_2" not in env
+        assert "GIT_CONFIG_VALUE_2" not in env
 
 
 @pytest.mark.asyncio
