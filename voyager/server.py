@@ -536,6 +536,12 @@ async def _start_author_wakeup_schedule() -> None:
             github=client,
             door=door,
             review_fix=invoke_review_fix,
+            clearance_repository_allowed=lambda repository: _repository_allowed_for_agent(
+                repository,
+                CLEARANCE_AGENT_SLUG,
+                cfg,
+                allow_dry_run_default=False,
+            ),
         )
     except Exception:
         await door.close()
@@ -715,6 +721,10 @@ async def _process_route_writebacks(
     pr_number = _extract_pr_number_from_payload(payload)
     for route in routes:
         route_for_writeback = {**route, "delivery_id": delivery_id}
+        route_validation = route.get("validation") or {}
+        route_pr_number = route_validation.get("pr_number") or pr_number
+        if not isinstance(route_pr_number, int):
+            route_pr_number = pr_number
         try:
             result = await dispatch_route_writeback(
                 client,
@@ -730,7 +740,7 @@ async def _process_route_writebacks(
                     "delivery_id": delivery_id,
                     "event": event,
                     "repository": repository,
-                    "pr_number": pr_number,
+                    "pr_number": route_pr_number,
                     "ts": _utc_now(),
                     "webhook": _webhook_debug_context(event, payload),
                     **result,
@@ -740,7 +750,7 @@ async def _process_route_writebacks(
             _log.exception("writeback failed for route %r", route.get("agent"))
         finally:
             if route.get("agent") == CLEARANCE_AGENT_SLUG:
-                _nudge_author_wakeup(repository, pr_number)
+                _nudge_author_wakeup(repository, route_pr_number)
 
 
 def _extract_pr_number_from_payload(payload: dict[str, Any]) -> int | None:

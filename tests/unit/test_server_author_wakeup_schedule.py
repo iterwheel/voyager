@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 
@@ -133,7 +133,7 @@ async def test_author_wakeup_loop_scans_immediately_and_on_nudge(
     ]
 
 
-async def test_clearance_writeback_completion_nudges_author_wakeup(
+async def test_clearance_writeback_completion_nudges_each_route_target(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     event = asyncio.Event()
@@ -156,19 +156,35 @@ async def test_clearance_writeback_completion_nudges_author_wakeup(
         delivery_id="delivery-1",
         payload={
             "repository": {"full_name": "iterwheel/voyager-sandbox"},
-            "pull_request": {"number": 42},
+            "check_suite": {"pull_requests": [{"number": 42}, {"number": 43}]},
         },
         routes=[
             {
                 "agent": CLEARANCE_AGENT_SLUG,
                 "kind": "clearance",
-                "validation": {"status": "ready", "conclusion": "neutral"},
-            }
+                "validation": {
+                    "status": "ready",
+                    "conclusion": "neutral",
+                    "pr_number": 42,
+                },
+            },
+            {
+                "agent": CLEARANCE_AGENT_SLUG,
+                "kind": "clearance",
+                "validation": {
+                    "status": "ready",
+                    "conclusion": "neutral",
+                    "pr_number": 43,
+                },
+            },
         ],
     )
 
     assert event.is_set()
-    reconciler.nudge.assert_called_once_with("iterwheel/voyager-sandbox", 42)
+    assert reconciler.nudge.call_args_list == [
+        call("iterwheel/voyager-sandbox", 42),
+        call("iterwheel/voyager-sandbox", 43),
+    ]
 
 
 async def test_healthz_reports_safe_author_wakeup_task_state(

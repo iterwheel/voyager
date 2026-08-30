@@ -581,6 +581,7 @@ class AuthorWakeupReconciler:
         door: Any,
         review_fix: Any = None,
         send_id_factory: Callable[[], str] | None = None,
+        clearance_repository_allowed: Callable[[str], bool] | None = None,
     ) -> None:
         self.config = config
         self.clearance_store = clearance_store
@@ -589,6 +590,7 @@ class AuthorWakeupReconciler:
         self.door = door
         self.review_fix = review_fix
         self.send_id_factory = send_id_factory or (lambda: uuid4().hex)
+        self.clearance_repository_allowed = clearance_repository_allowed
         self._poll_cache: dict[tuple[str, int], PollRecord] = {}
         self._poll_cache_bootstrapped = False
         self._dirty_scan_targets: set[tuple[str, int]] = set()
@@ -633,12 +635,11 @@ class AuthorWakeupReconciler:
 
     async def _scan(self, now: datetime) -> tuple[int, int]:
         latest = self._scan_poll_snapshot()
-        allowed = set(self.config.allowed_repositories)
         observed_count = 0
         revalidated_keys: set[ObservationKey] = set()
         terminal_targets: set[tuple[str, int]] = set()
         for (repository, pull_number), poll in latest.items():
-            if repository not in allowed:
+            if not self._repository_in_scope(repository):
                 self.ledger.reconcile_active_observations(
                     repository=repository,
                     pull_number=pull_number,
@@ -732,16 +733,6 @@ class AuthorWakeupReconciler:
                 eligible_keys=eligible_keys,
                 at=now,
             )
-            if not eligible_keys:
-                self.ledger.mark_terminal_scan(
-                    repository=repository,
-                    pull_number=pull_number,
-                    poll_ts=poll.ts,
-                    head_sha=poll.head_sha,
-                    reason="no_live_eligible_threads",
-                    at=now,
-                )
-                terminal_targets.add((repository, pull_number))
         for target in terminal_targets:
             self._poll_cache.pop(target, None)
         started = await self._start_due_notifications(now, revalidated_keys)
@@ -807,7 +798,7 @@ class AuthorWakeupReconciler:
         transport_send_id: str | None = None,
         same_id_repost: bool = False,
     ) -> None:
-        if notification.repository not in set(self.config.allowed_repositories):
+        if not self._repository_in_scope(notification.repository):
             revoked = notification.with_updates(
                 state="notify_scope_revoked",
                 next_delivery_attempt_at=None,
@@ -1021,6 +1012,8 @@ class AuthorWakeupReconciler:
             return "review_fix_invoker_missing"
         if notification.repository not in set(self.config.allowed_repositories):
             return "repository_not_allowlisted"
+        if not self._repository_in_scope(notification.repository):
+            return "clearance_repository_not_allowlisted"
         if str(pull.get("state") or "").lower() != "open":
             return "pull_request_not_open"
         if str((pull.get("head") or {}).get("sha") or "") != notification.head_sha:
@@ -1041,6 +1034,16 @@ class AuthorWakeupReconciler:
         if not _persisted_predicates_hold(self.clearance_store, notification):
             return "clearance_predicates_changed"
         return None
+
+    def _repository_in_scope(self, repository: str) -> bool:
+        if repository not in set(self.config.allowed_repositories):
+            return False
+        if self.clearance_repository_allowed is None:
+            return True
+        try:
+            return self.clearance_repository_allowed(repository)
+        except Exception:
+            return False
 
 
 def _notification_id(
