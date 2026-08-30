@@ -40,6 +40,7 @@ from .constants import (
     ASSEMBLY_FAKE_SUBPROCESS_ALLOW_ENV,
     ASSEMBLY_FAKE_SUBPROCESS_OUTPUT_ENV,
 )
+from .execution_env import scoped_git_env, untrusted_subprocess_env
 from .job_contract import AssemblyJobContract
 from .maturity import GateMaturity
 from .publish import publish_branch
@@ -337,6 +338,69 @@ class PiOhMyPiDeepSeekAdapter:
                     context=context,
                 )
 
+            uses_git_lfs = await _repository_uses_git_lfs(
+                checkout_dir,
+                timeout_seconds=timeout_seconds,
+                env=git_env,
+            )
+            lfs_install = await _run_exec(
+                ["git", "lfs", "install", "--local"],
+                cwd=checkout_dir,
+                timeout_seconds=timeout_seconds,
+                env=git_env,
+            )
+            if lfs_install.returncode != 0 and uses_git_lfs:
+                return _failed_pi_result(
+                    "Git LFS local filter initialization failed for Assembly OMP backend.",
+                    token,
+                    details,
+                    failure_diagnostic=_diagnostic_from_process(
+                        phase="git_lfs_install",
+                        command_category="git",
+                        command="git lfs install --local",
+                        process=lfs_install,
+                        secret=token,
+                    ),
+                    temp_root_path=temp_root_path,
+                    contract=contract,
+                    context=context,
+                )
+            if uses_git_lfs:
+                trusted_lfs_url = _github_lfs_url(repository)
+                lfs_pull = await _run_exec(
+                    [
+                        "git",
+                        "-c",
+                        f"lfs.url={trusted_lfs_url}",
+                        "lfs",
+                        "pull",
+                        "-I",
+                        "",
+                        "-X",
+                        "",
+                        "origin",
+                    ],
+                    cwd=checkout_dir,
+                    timeout_seconds=timeout_seconds,
+                    env=git_auth_env,
+                )
+                if lfs_pull.returncode != 0:
+                    return _failed_pi_result(
+                        "Git LFS pull failed for Assembly OMP backend.",
+                        token,
+                        details,
+                        failure_diagnostic=_diagnostic_from_process(
+                            phase="git_lfs_pull",
+                            command_category="git",
+                            command="git lfs pull origin",
+                            process=lfs_pull,
+                            secret=token,
+                        ),
+                        temp_root_path=temp_root_path,
+                        contract=contract,
+                        context=context,
+                    )
+
             base_sha = await _git_head_sha(checkout_dir, timeout_seconds, git_env)
             if base_sha is None:
                 return _failed_pi_result(
@@ -347,6 +411,21 @@ class PiOhMyPiDeepSeekAdapter:
                         phase="git_rev_parse",
                         command_category="git",
                         command="git rev-parse HEAD",
+                    ),
+                    temp_root_path=temp_root_path,
+                    contract=contract,
+                    context=context,
+                )
+            trusted_git_config_digest = _local_git_config_digest(checkout_dir)
+            if trusted_git_config_digest is None:
+                return _failed_pi_result(
+                    "Could not snapshot local Git config for Assembly OMP backend.",
+                    token,
+                    details,
+                    failure_diagnostic=_simple_diagnostic(
+                        phase="git_config_integrity",
+                        command_category="git",
+                        command="snapshot .git/config",
                     ),
                     temp_root_path=temp_root_path,
                     contract=contract,
@@ -396,6 +475,88 @@ class PiOhMyPiDeepSeekAdapter:
                     contract=contract,
                     context=context,
                 )
+
+            if _local_git_config_digest(checkout_dir) != trusted_git_config_digest:
+                return _failed_pi_result(
+                    "Local Git config changed during Assembly OMP execution.",
+                    token,
+                    details,
+                    failure_diagnostic=_simple_diagnostic(
+                        phase="git_config_integrity",
+                        command_category="git",
+                        command="verify .git/config",
+                    ),
+                    temp_root_path=temp_root_path,
+                    contract=contract,
+                    context=context,
+                )
+
+            uses_git_lfs_after_omp = await _repository_uses_git_lfs(
+                checkout_dir,
+                timeout_seconds=timeout_seconds,
+                env=git_env,
+            )
+            if uses_git_lfs_after_omp and not uses_git_lfs:
+                lfs_install = await _run_exec(
+                    ["git", "lfs", "install", "--local"],
+                    cwd=checkout_dir,
+                    timeout_seconds=timeout_seconds,
+                    env=git_env,
+                )
+                if lfs_install.returncode != 0:
+                    return _failed_pi_result(
+                        "Git LFS local filter initialization failed for Assembly OMP backend.",
+                        token,
+                        details,
+                        failure_diagnostic=_diagnostic_from_process(
+                            phase="git_lfs_install",
+                            command_category="git",
+                            command="git lfs install --local",
+                            process=lfs_install,
+                            secret=token,
+                        ),
+                        temp_root_path=temp_root_path,
+                        contract=contract,
+                        context=context,
+                    )
+                lfs_renormalize = await _run_exec(
+                    ["git", "add", "--renormalize", "."],
+                    cwd=checkout_dir,
+                    timeout_seconds=timeout_seconds,
+                    env=git_env,
+                )
+                if lfs_renormalize.returncode != 0:
+                    return _failed_pi_result(
+                        "Git LFS renormalization failed for Assembly OMP backend.",
+                        token,
+                        details,
+                        failure_diagnostic=_diagnostic_from_process(
+                            phase="git_lfs_renormalize",
+                            command_category="git",
+                            command="git add --renormalize .",
+                            process=lfs_renormalize,
+                            secret=token,
+                        ),
+                        temp_root_path=temp_root_path,
+                        contract=contract,
+                        context=context,
+                    )
+                trusted_git_config_digest = _local_git_config_digest(checkout_dir)
+                if trusted_git_config_digest is None:
+                    return _failed_pi_result(
+                        "Could not snapshot local Git config after Git LFS initialization.",
+                        token,
+                        details,
+                        failure_diagnostic=_simple_diagnostic(
+                            phase="git_config_integrity",
+                            command_category="git",
+                            command="snapshot .git/config",
+                        ),
+                        temp_root_path=temp_root_path,
+                        contract=contract,
+                        context=context,
+                    )
+            uses_git_lfs = uses_git_lfs_after_omp
 
             status = await _run_exec(
                 ["git", "status", "--porcelain"],
@@ -449,6 +610,8 @@ class PiOhMyPiDeepSeekAdapter:
                     [
                         "git",
                         "commit",
+                        "--no-gpg-sign",
+                        "--no-verify",
                         "-m",
                         f"Implement #{contract.issue_number} via Assembly",
                     ],
@@ -517,7 +680,7 @@ class PiOhMyPiDeepSeekAdapter:
                 contract,
                 checkout_dir,
                 timeout_seconds,
-                git_env,
+                untrusted_subprocess_env(),
                 secret=token,
             )
             if verification is not None:
@@ -567,6 +730,21 @@ class PiOhMyPiDeepSeekAdapter:
                             status="blocked",
                         )
 
+            if _local_git_config_digest(checkout_dir) != trusted_git_config_digest:
+                return _failed_pi_result(
+                    "Local Git config changed during Assembly OMP execution.",
+                    token,
+                    details,
+                    failure_diagnostic=_simple_diagnostic(
+                        phase="git_config_integrity",
+                        command_category="git",
+                        command="verify .git/config",
+                    ),
+                    temp_root_path=temp_root_path,
+                    contract=contract,
+                    context=context,
+                )
+
             publish_result = await publish_branch(
                 repository=repository,
                 branch_name=contract.branch_name,
@@ -574,6 +752,8 @@ class PiOhMyPiDeepSeekAdapter:
                 checkout_dir=checkout_dir,
                 timeout_seconds=timeout_seconds,
                 expected_remote_sha=context.expected_remote_sha,
+                source_sha=head_sha,
+                push_lfs=uses_git_lfs,
             )
             if not publish_result.success:
                 return _failed_pi_result(
@@ -641,6 +821,57 @@ def _github_safe_remote(repository: str) -> str:
     return f"https://github.com/{repository}.git"
 
 
+def _github_lfs_url(repository: str) -> str:
+    return f"https://github.com/{repository}.git/info/lfs"
+
+
+def _local_git_config_digest(checkout_dir: Path) -> str | None:
+    try:
+        return hashlib.sha256((checkout_dir / ".git" / "config").read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+async def _repository_uses_git_lfs(
+    checkout_dir: Path,
+    *,
+    timeout_seconds: int = 30,
+    env: dict[str, str] | None = None,
+) -> bool:
+    listed = await _run_exec(
+        [
+            "git",
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+            ".gitattributes",
+            ":(glob)**/.gitattributes",
+        ],
+        cwd=checkout_dir,
+        timeout_seconds=timeout_seconds,
+        env=env or _git_env(),
+    )
+    if listed.returncode != 0:
+        return True
+    for relative_name in listed.stdout.split("\0"):
+        if not relative_name:
+            continue
+        attributes = checkout_dir / relative_name
+        try:
+            text = attributes.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for line in text.splitlines():
+            if line.lstrip().startswith("#"):
+                continue
+            if re.search(r"(?:^|\s)filter=lfs(?:\s|$)", line):
+                return True
+    return False
+
+
 def _write_git_askpass(temp_root: Path) -> Path:
     askpass = temp_root / "git-askpass.sh"
     askpass.write_text(
@@ -657,17 +888,15 @@ def _write_git_askpass(temp_root: Path) -> Path:
 
 
 def _git_env(*, token: str | None = None, askpass: Path | None = None) -> dict[str, str]:
-    env = dict(os.environ)
-    env["GIT_TERMINAL_PROMPT"] = "0"
-    if token and askpass is not None:
-        env["GIT_ASKPASS"] = str(askpass)
-        env["ASSEMBLY_GITHUB_TOKEN"] = token
-    return env
+    return scoped_git_env(token=token, askpass=askpass)
 
 
 def _omp_env() -> dict[str, str]:
-    env = dict(os.environ)
-    env["GIT_TERMINAL_PROMPT"] = "0"
+    """Add only OMP's dedicated model credential to the minimal env."""
+    env = untrusted_subprocess_env()
+    credential = os.environ.get("DEEPSEEK_API_KEY")
+    if credential:
+        env["DEEPSEEK_API_KEY"] = credential
     return env
 
 

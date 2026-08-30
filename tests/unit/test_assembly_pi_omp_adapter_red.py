@@ -89,6 +89,42 @@ def _assert_no_secret(value: Any, secret: str = INSTALLATION_TOKEN) -> None:
     assert "ghs_stage2" not in serialized
 
 
+@pytest.mark.asyncio
+async def test_repository_lfs_detection_ignores_commented_attribute_rules(
+    tmp_path: Path,
+) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / ".gitattributes").write_text(
+        "# *.bin filter=lfs diff=lfs merge=lfs -text\n"
+        "   # *.zip filter=lfs diff=lfs merge=lfs -text\n",
+        encoding="utf-8",
+    )
+
+    assert not await adapters_module._repository_uses_git_lfs(tmp_path)
+
+    (tmp_path / ".gitattributes").write_text(
+        "*.bin filter=lfs diff=lfs merge=lfs -text\n",
+        encoding="utf-8",
+    )
+    assert await adapters_module._repository_uses_git_lfs(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_repository_lfs_detection_ignores_attribute_files_in_ignored_trees(
+    tmp_path: Path,
+) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
+    ignored_tree = tmp_path / "node_modules" / "dependency"
+    ignored_tree.mkdir(parents=True)
+    (ignored_tree / ".gitattributes").write_text(
+        "*.bin filter=lfs diff=lfs merge=lfs -text\n",
+        encoding="utf-8",
+    )
+
+    assert not await adapters_module._repository_uses_git_lfs(tmp_path)
+
+
 class _FakeProcess:
     def __init__(self, argv: tuple[str, ...], *, returncode: int, stdout: str, stderr: str):
         self.args = argv
@@ -113,6 +149,10 @@ class _CommandRecorder:
         omp_stderr: str = "",
         rev_parse_sha: str = VALID_SHA,
         remote_branch_exists: bool = False,
+        local_git_config_after_omp: str | None = None,
+        uses_git_lfs: bool = False,
+        introduces_git_lfs_after_omp: bool = False,
+        omp_installs_git_lfs: bool = False,
     ) -> None:
         self.status_porcelain = status_porcelain
         self.omp_returncode = omp_returncode
@@ -120,6 +160,10 @@ class _CommandRecorder:
         self.omp_stderr = omp_stderr
         self.rev_parse_sha = rev_parse_sha
         self.remote_branch_exists = remote_branch_exists
+        self.local_git_config_after_omp = local_git_config_after_omp
+        self.uses_git_lfs = uses_git_lfs
+        self.introduces_git_lfs_after_omp = introduces_git_lfs_after_omp
+        self.omp_installs_git_lfs = omp_installs_git_lfs
         self.calls: list[dict[str, Any]] = []
 
     async def create_subprocess_exec(self, *argv: object, cwd: object = None, **kwargs: Any):
@@ -173,8 +217,26 @@ class _CommandRecorder:
 
         command_name = Path(argv[0]).name
         if command_name == "git":
-            return self._git_process(argv)
+            return self._git_process(argv, cwd_path=cwd_path)
         if command_name == "omp":
+            if self.local_git_config_after_omp is not None and cwd_path is not None:
+                (cwd_path / ".git" / "config").write_text(
+                    self.local_git_config_after_omp,
+                    encoding="utf-8",
+                )
+            if self.introduces_git_lfs_after_omp and cwd_path is not None:
+                (cwd_path / ".gitattributes").write_text(
+                    "*.bin filter=lfs diff=lfs merge=lfs -text\n",
+                    encoding="utf-8",
+                )
+            if self.omp_installs_git_lfs and cwd_path is not None:
+                config_path = cwd_path / ".git" / "config"
+                config = config_path.read_text(encoding="utf-8")
+                if '[filter "lfs"]' not in config:
+                    config_path.write_text(
+                        f'{config}[filter "lfs"]\n\tclean = git-lfs clean -- %f\n',
+                        encoding="utf-8",
+                    )
             return _FakeProcess(
                 argv,
                 returncode=self.omp_returncode,
@@ -183,9 +245,35 @@ class _CommandRecorder:
             )
         return _FakeProcess(argv, returncode=0, stdout="", stderr="")
 
-    def _git_process(self, argv: tuple[str, ...]) -> _FakeProcess:
+    def _git_process(self, argv: tuple[str, ...], *, cwd_path: Path | None) -> _FakeProcess:
         if len(argv) > 1 and argv[1] == "clone":
-            Path(argv[-1]).mkdir(parents=True, exist_ok=True)
+            checkout = Path(argv[-1])
+            (checkout / ".git").mkdir(parents=True, exist_ok=True)
+            (checkout / ".git" / "config").write_text(
+                f'[core]\n\trepositoryformatversion = 0\n[remote "origin"]\n\turl = {argv[-2]}\n',
+                encoding="utf-8",
+            )
+            if self.uses_git_lfs:
+                (checkout / ".gitattributes").write_text(
+                    "*.bin filter=lfs diff=lfs merge=lfs -text\n",
+                    encoding="utf-8",
+                )
+        if len(argv) > 2 and argv[1:3] == ("lfs", "install"):
+            assert cwd_path is not None
+            config_path = cwd_path / ".git" / "config"
+            with config_path.open("a", encoding="utf-8") as stream:
+                stream.write('[filter "lfs"]\n\tclean = git-lfs clean -- %f\n')
+        if len(argv) > 1 and argv[1] == "ls-files":
+            assert cwd_path is not None
+            attribute_paths = [
+                str(path.relative_to(cwd_path))
+                for path in cwd_path.rglob(".gitattributes")
+                if ".git" not in path.relative_to(cwd_path).parts
+            ]
+            stdout = "\0".join(attribute_paths)
+            if attribute_paths:
+                stdout += "\0"
+            return _FakeProcess(argv, returncode=0, stdout=stdout, stderr="")
         if len(argv) > 1 and argv[1] == "fetch":
             if self.remote_branch_exists:
                 return _FakeProcess(argv, returncode=0, stdout="", stderr="")
@@ -365,16 +453,259 @@ async def test_pi_adapter_executes_omp_in_clone_pushes_branch_and_returns_sha(
             call in recorder.git_calls("clone")
             or call in recorder.git_calls("fetch")
             or call in recorder.git_calls("push")
-            or (
-                call in recorder.git_calls("remote")
-                and len(call["argv"]) > 2
-                and call["argv"][2] == "add"
-            )
         )
         if is_auth_git:
             assert INSTALLATION_TOKEN in env_json
         else:
             assert INSTALLATION_TOKEN not in env_json
+
+
+@pytest.mark.asyncio
+async def test_model_and_verification_subprocesses_receive_only_safe_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    safe_values = {
+        "PATH": "/safe/bin",
+        "HOME": str(tmp_path / "home"),
+        "TMPDIR": str(tmp_path / "tmp"),
+        "LANG": "C.UTF-8",
+    }
+    for name, value in safe_values.items():
+        monkeypatch.setenv(name, value)
+    ambient_secret_names = (
+        "ASSEMBLY_GITHUB_TOKEN",
+        "DEEPSEEK_API_KEY",
+        "GITHUB_WEBHOOK_SECRET_ITERWHEEL_ASSEMBLY",
+        "OPENAI_API_KEY",
+        "VOYAGER_CONFIG_PATH",
+        "VOYAGER_DEEPSEEK_API_KEY",
+    )
+    for name in ambient_secret_names:
+        monkeypatch.setenv(name, f"secret-{name.lower()}")
+    git_transport_input = {
+        "HTTPS_PROXY": "http://proxy.example",
+        "NO_PROXY": "github.com",
+        "GIT_CONFIG_COUNT": "7",
+        "GIT_CONFIG_KEY_0": "http.proxy",
+        "GIT_CONFIG_VALUE_0": "http://git-proxy.example",
+        "GIT_CONFIG_KEY_1": "http.sslCAInfo",
+        "GIT_CONFIG_VALUE_1": "/safe/ca.pem",
+        "GIT_CONFIG_KEY_2": "http.proxySSLCAInfo",
+        "GIT_CONFIG_VALUE_2": "/safe/proxy-ca.pem",
+        "GIT_CONFIG_KEY_3": "http.proxySSLCert",
+        "GIT_CONFIG_VALUE_3": "/safe/proxy-cert.pem",
+        "GIT_CONFIG_KEY_4": "http.proxySSLKey",
+        "GIT_CONFIG_VALUE_4": "/safe/proxy-key.pem",
+        "GIT_CONFIG_KEY_5": "http.sslCAPath",
+        "GIT_CONFIG_VALUE_5": "/safe/ca-directory",
+        "GIT_CONFIG_KEY_6": "credential.helper",
+        "GIT_CONFIG_VALUE_6": "!malicious-helper",
+    }
+    for name, value in git_transport_input.items():
+        monkeypatch.setenv(name, value)
+    expected_git_transport_values = {
+        **{name: git_transport_input[name] for name in ("HTTPS_PROXY", "NO_PROXY")},
+        "GIT_CONFIG_COUNT": "6",
+        "GIT_CONFIG_KEY_0": "http.proxy",
+        "GIT_CONFIG_VALUE_0": "http://git-proxy.example",
+        "GIT_CONFIG_KEY_1": "http.sslCAInfo",
+        "GIT_CONFIG_VALUE_1": "/safe/ca.pem",
+        "GIT_CONFIG_KEY_2": "http.proxySSLCAInfo",
+        "GIT_CONFIG_VALUE_2": "/safe/proxy-ca.pem",
+        "GIT_CONFIG_KEY_3": "http.proxySSLCert",
+        "GIT_CONFIG_VALUE_3": "/safe/proxy-cert.pem",
+        "GIT_CONFIG_KEY_4": "http.proxySSLKey",
+        "GIT_CONFIG_VALUE_4": "/safe/proxy-key.pem",
+        "GIT_CONFIG_KEY_5": "http.sslCAPath",
+        "GIT_CONFIG_VALUE_5": "/safe/ca-directory",
+    }
+
+    recorder = _CommandRecorder(status_porcelain="M voyager/example.py\n")
+    _install_command_fakes(monkeypatch, recorder)
+
+    result = await PiOhMyPiDeepSeekAdapter().execute(_contract(), _context(tmp_path))
+
+    assert result.status == "executed"
+    untrusted_calls = [
+        *recorder.command_calls("omp"),
+        *recorder.command_calls("pytest"),
+        *recorder.command_calls("ruff"),
+        *recorder.command_calls("mypy"),
+    ]
+    assert len(untrusted_calls) == 4
+    allowed_names = {
+        "COLORTERM",
+        "GIT_TERMINAL_PROMPT",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "NO_COLOR",
+        "PATH",
+        "SHELL",
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "TMPDIR",
+        "TZ",
+        "VIRTUAL_ENV",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+    }
+    omp_call = recorder.command_calls("omp")[0]
+    verification_calls = [
+        *recorder.command_calls("pytest"),
+        *recorder.command_calls("ruff"),
+        *recorder.command_calls("mypy"),
+    ]
+    for call in verification_calls:
+        env = call["kwargs"]["env"]
+        assert {name: env[name] for name in safe_values} == safe_values
+        assert set(env) <= allowed_names
+    omp_env = omp_call["kwargs"]["env"]
+    assert {name: omp_env[name] for name in safe_values} == safe_values
+    assert set(omp_env) <= allowed_names | {"DEEPSEEK_API_KEY"}
+    assert omp_env["DEEPSEEK_API_KEY"] == "secret-deepseek_api_key"
+
+    for call in recorder.calls:
+        env = call["kwargs"].get("env") or {}
+        for name in ambient_secret_names[2:]:
+            assert name not in env
+        assert env.get("ASSEMBLY_GITHUB_TOKEN") != "secret-assembly_github_token"
+        if call is not omp_call:
+            assert "DEEPSEEK_API_KEY" not in env
+    adapter_git_calls = [
+        call for call in recorder.calls if call["argv"] and Path(call["argv"][0]).name == "git"
+    ]
+    assert adapter_git_calls
+    commit_calls = recorder.git_calls("commit")
+    assert len(commit_calls) == 1
+    assert "--no-gpg-sign" in commit_calls[0]["argv"]
+    assert "--no-verify" in commit_calls[0]["argv"]
+    for call in adapter_git_calls:
+        env = call["kwargs"]["env"]
+        is_publish_call = any(arg.startswith("assembly-publish-") for arg in call["argv"])
+        expected = dict(expected_git_transport_values)
+        if is_publish_call and "ASSEMBLY_GITHUB_TOKEN" in env:
+            expected.update(
+                {
+                    "GIT_CONFIG_COUNT": "7",
+                    "GIT_CONFIG_KEY_6": "credential.helper",
+                    "GIT_CONFIG_VALUE_6": "",
+                }
+            )
+        assert {name: env[name] for name in expected} == expected
+        if not is_publish_call:
+            assert "GIT_CONFIG_KEY_6" not in env
+            assert "GIT_CONFIG_VALUE_6" not in env
+
+
+@pytest.mark.asyncio
+async def test_pi_adapter_refuses_git_config_changed_by_omp(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    recorder = _CommandRecorder(
+        status_porcelain="M voyager/example.py\n",
+        local_git_config_after_omp=(
+            '[protocol "ext"]\n\tallow = always\n'
+            '[url "ext::malicious-helper"]\n\tinsteadOf = https://github.com/\n'
+        ),
+    )
+    _install_command_fakes(monkeypatch, recorder)
+
+    result = await PiOhMyPiDeepSeekAdapter().execute(_contract(), _context(tmp_path))
+
+    assert result.status == "failed"
+    assert "git config" in result.summary.lower()
+    assert not recorder.git_calls("push")
+
+
+@pytest.mark.asyncio
+async def test_pi_adapter_initializes_local_lfs_before_omp(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    recorder = _CommandRecorder(
+        status_porcelain="M large.bin\n",
+        uses_git_lfs=True,
+    )
+    _install_command_fakes(monkeypatch, recorder)
+
+    result = await PiOhMyPiDeepSeekAdapter().execute(_contract(), _context(tmp_path))
+
+    assert result.status == "executed"
+    install_call = next(
+        call for call in recorder.calls if call["argv"][0:3] == ("git", "lfs", "install")
+    )
+    pull_call = next(
+        call
+        for call in recorder.calls
+        if call["argv"][0] == "git" and call["argv"][3:5] == ("lfs", "pull")
+    )
+    lfs_push_call = next(
+        call
+        for call in recorder.calls
+        if call["argv"][0] == "git" and call["argv"][-4:-2] == ("lfs", "push")
+    )
+    omp_call = recorder.command_calls("omp")[0]
+    branch_push_call = recorder.git_calls("push")[0]
+    trusted_lfs_config = "lfs.url=https://github.com/iterwheel/voyager-sandbox.git/info/lfs"
+    trusted_lfs_push_config = (
+        "lfs.pushurl=https://github.com/iterwheel/voyager-sandbox.git/info/lfs"
+    )
+    assert trusted_lfs_config in pull_call["argv"]
+    assert ("-I", "") in zip(pull_call["argv"], pull_call["argv"][1:], strict=False)
+    assert ("-X", "") in zip(pull_call["argv"], pull_call["argv"][1:], strict=False)
+    assert trusted_lfs_config in lfs_push_call["argv"]
+    assert trusted_lfs_push_config in lfs_push_call["argv"]
+    assert recorder.calls.index(install_call) < recorder.calls.index(pull_call)
+    assert recorder.calls.index(pull_call) < recorder.calls.index(omp_call)
+    assert recorder.calls.index(omp_call) < recorder.calls.index(lfs_push_call)
+    assert recorder.calls.index(lfs_push_call) < recorder.calls.index(branch_push_call)
+
+
+@pytest.mark.asyncio
+async def test_pi_adapter_initializes_and_uploads_lfs_introduced_by_omp(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    recorder = _CommandRecorder(
+        status_porcelain="M .gitattributes\nM large.bin\n",
+        introduces_git_lfs_after_omp=True,
+        omp_installs_git_lfs=True,
+    )
+    _install_command_fakes(monkeypatch, recorder)
+
+    result = await PiOhMyPiDeepSeekAdapter().execute(_contract(), _context(tmp_path))
+
+    assert result.status == "executed"
+    omp_call = recorder.command_calls("omp")[0]
+    omp_idx = recorder.calls.index(omp_call)
+    install_idx = next(
+        index
+        for index, call in enumerate(recorder.calls[omp_idx + 1 :], start=omp_idx + 1)
+        if call["argv"][0:3] == ("git", "lfs", "install")
+    )
+    renormalize_call = next(
+        call for call in recorder.calls if call["argv"][0:3] == ("git", "add", "--renormalize")
+    )
+    add_call = next(call for call in recorder.calls if call["argv"][0:3] == ("git", "add", "-A"))
+    lfs_push_call = next(
+        call
+        for call in recorder.calls
+        if call["argv"][0] == "git" and call["argv"][-4:-2] == ("lfs", "push")
+    )
+    branch_push_call = recorder.git_calls("push")[0]
+    assert omp_idx < install_idx
+    assert install_idx < recorder.calls.index(renormalize_call)
+    assert recorder.calls.index(renormalize_call) < recorder.calls.index(add_call)
+    assert recorder.calls.index(add_call) < recorder.calls.index(lfs_push_call)
+    assert recorder.calls.index(lfs_push_call) < recorder.calls.index(branch_push_call)
 
 
 @pytest.mark.asyncio
