@@ -499,6 +499,7 @@ class PiOhMyPiDeepSeekAdapter:
                     [
                         "git",
                         "commit",
+                        "--no-gpg-sign",
                         "-m",
                         f"Implement #{contract.issue_number} via Assembly",
                     ],
