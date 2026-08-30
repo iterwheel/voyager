@@ -653,6 +653,8 @@ class PiOhMyPiDeepSeekAdapter:
                         "git",
                         "-c",
                         f"lfs.url={_github_lfs_url(repository)}",
+                        "-c",
+                        f"lfs.pushurl={_github_lfs_url(repository)}",
                         "lfs",
                         "push",
                         "origin",
