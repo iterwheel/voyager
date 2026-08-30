@@ -585,6 +585,7 @@ async def test_model_and_verification_subprocesses_receive_only_safe_environment
     commit_calls = recorder.git_calls("commit")
     assert len(commit_calls) == 1
     assert "--no-gpg-sign" in commit_calls[0]["argv"]
+    assert "--no-verify" in commit_calls[0]["argv"]
     for call in adapter_git_calls:
         env = call["kwargs"]["env"]
         is_publish_call = any(arg.startswith("assembly-publish-") for arg in call["argv"])
