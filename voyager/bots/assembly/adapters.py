@@ -338,6 +338,52 @@ class PiOhMyPiDeepSeekAdapter:
                     context=context,
                 )
 
+            if _repository_uses_git_lfs(checkout_dir):
+                lfs_install = await _run_exec(
+                    ["git", "lfs", "install", "--local"],
+                    cwd=checkout_dir,
+                    timeout_seconds=timeout_seconds,
+                    env=git_env,
+                )
+                if lfs_install.returncode != 0:
+                    return _failed_pi_result(
+                        "Git LFS local filter initialization failed for Assembly OMP backend.",
+                        token,
+                        details,
+                        failure_diagnostic=_diagnostic_from_process(
+                            phase="git_lfs_install",
+                            command_category="git",
+                            command="git lfs install --local",
+                            process=lfs_install,
+                            secret=token,
+                        ),
+                        temp_root_path=temp_root_path,
+                        contract=contract,
+                        context=context,
+                    )
+                lfs_pull = await _run_exec(
+                    ["git", "lfs", "pull", "origin"],
+                    cwd=checkout_dir,
+                    timeout_seconds=timeout_seconds,
+                    env=git_auth_env,
+                )
+                if lfs_pull.returncode != 0:
+                    return _failed_pi_result(
+                        "Git LFS pull failed for Assembly OMP backend.",
+                        token,
+                        details,
+                        failure_diagnostic=_diagnostic_from_process(
+                            phase="git_lfs_pull",
+                            command_category="git",
+                            command="git lfs pull origin",
+                            process=lfs_pull,
+                            secret=token,
+                        ),
+                        temp_root_path=temp_root_path,
+                        contract=contract,
+                        context=context,
+                    )
+
             base_sha = await _git_head_sha(checkout_dir, timeout_seconds, git_env)
             if base_sha is None:
                 return _failed_pi_result(
@@ -678,6 +724,19 @@ def _local_git_config_digest(checkout_dir: Path) -> str | None:
         return hashlib.sha256((checkout_dir / ".git" / "config").read_bytes()).hexdigest()
     except OSError:
         return None
+
+
+def _repository_uses_git_lfs(checkout_dir: Path) -> bool:
+    for attributes in checkout_dir.rglob(".gitattributes"):
+        if ".git" in attributes.relative_to(checkout_dir).parts:
+            continue
+        try:
+            text = attributes.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if re.search(r"(?:^|\s)filter=lfs(?:\s|$)", text, flags=re.MULTILINE):
+            return True
+    return False
 
 
 def _write_git_askpass(temp_root: Path) -> Path:

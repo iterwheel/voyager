@@ -114,6 +114,7 @@ class _CommandRecorder:
         rev_parse_sha: str = VALID_SHA,
         remote_branch_exists: bool = False,
         local_git_config_after_omp: str | None = None,
+        uses_git_lfs: bool = False,
     ) -> None:
         self.status_porcelain = status_porcelain
         self.omp_returncode = omp_returncode
@@ -122,6 +123,7 @@ class _CommandRecorder:
         self.rev_parse_sha = rev_parse_sha
         self.remote_branch_exists = remote_branch_exists
         self.local_git_config_after_omp = local_git_config_after_omp
+        self.uses_git_lfs = uses_git_lfs
         self.calls: list[dict[str, Any]] = []
 
     async def create_subprocess_exec(self, *argv: object, cwd: object = None, **kwargs: Any):
@@ -175,7 +177,7 @@ class _CommandRecorder:
 
         command_name = Path(argv[0]).name
         if command_name == "git":
-            return self._git_process(argv)
+            return self._git_process(argv, cwd_path=cwd_path)
         if command_name == "omp":
             if self.local_git_config_after_omp is not None and cwd_path is not None:
                 (cwd_path / ".git" / "config").write_text(
@@ -190,7 +192,7 @@ class _CommandRecorder:
             )
         return _FakeProcess(argv, returncode=0, stdout="", stderr="")
 
-    def _git_process(self, argv: tuple[str, ...]) -> _FakeProcess:
+    def _git_process(self, argv: tuple[str, ...], *, cwd_path: Path | None) -> _FakeProcess:
         if len(argv) > 1 and argv[1] == "clone":
             checkout = Path(argv[-1])
             (checkout / ".git").mkdir(parents=True, exist_ok=True)
@@ -198,6 +200,16 @@ class _CommandRecorder:
                 f'[core]\n\trepositoryformatversion = 0\n[remote "origin"]\n\turl = {argv[-2]}\n',
                 encoding="utf-8",
             )
+            if self.uses_git_lfs:
+                (checkout / ".gitattributes").write_text(
+                    "*.bin filter=lfs diff=lfs merge=lfs -text\n",
+                    encoding="utf-8",
+                )
+        if len(argv) > 2 and argv[1:3] == ("lfs", "install"):
+            assert cwd_path is not None
+            config_path = cwd_path / ".git" / "config"
+            with config_path.open("a", encoding="utf-8") as stream:
+                stream.write('[filter "lfs"]\n\tclean = git-lfs clean -- %f\n')
         if len(argv) > 1 and argv[1] == "fetch":
             if self.remote_branch_exists:
                 return _FakeProcess(argv, returncode=0, stdout="", stderr="")
@@ -535,6 +547,29 @@ async def test_pi_adapter_refuses_git_config_changed_by_omp(
     assert result.status == "failed"
     assert "git config" in result.summary.lower()
     assert not recorder.git_calls("push")
+
+
+@pytest.mark.asyncio
+async def test_pi_adapter_initializes_local_lfs_before_omp(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    recorder = _CommandRecorder(
+        status_porcelain="M large.bin\n",
+        uses_git_lfs=True,
+    )
+    _install_command_fakes(monkeypatch, recorder)
+
+    result = await PiOhMyPiDeepSeekAdapter().execute(_contract(), _context(tmp_path))
+
+    assert result.status == "executed"
+    install_call = next(
+        call for call in recorder.calls if call["argv"][0:3] == ("git", "lfs", "install")
+    )
+    pull_call = next(call for call in recorder.calls if call["argv"][0:3] == ("git", "lfs", "pull"))
+    omp_call = recorder.command_calls("omp")[0]
+    assert recorder.calls.index(install_call) < recorder.calls.index(pull_call)
+    assert recorder.calls.index(pull_call) < recorder.calls.index(omp_call)
 
 
 @pytest.mark.asyncio
