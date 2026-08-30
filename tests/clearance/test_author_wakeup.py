@@ -1247,6 +1247,72 @@ async def test_recovered_notification_revalidates_live_state_before_post(
 
 
 @pytest.mark.asyncio
+async def test_partial_stale_batch_requeues_eligible_survivors(tmp_path: Path) -> None:
+    now = datetime(2026, 8, 30, 0, 2, tzinfo=UTC)
+    repository = "iterwheel/voyager-sandbox"
+    head_sha = "b" * 40
+    thread_ids = ("PRRT_one", "PRRT_two")
+    clearance_store = StateStore(tmp_path / "clearance")
+    clearance_store.append_poll(
+        PollRecord(
+            ts=now - timedelta(minutes=1),
+            repo=repository,
+            pr=42,
+            head_sha=head_sha,
+            status=Status.BLOCKED,
+            threads=[_persisted_thread(id=thread_id) for thread_id in thread_ids],
+        )
+    )
+    ledger = WakeupLedger(tmp_path / "state.db")
+    keys = [ObservationKey(repository, 42, head_sha, thread_id) for thread_id in thread_ids]
+    for key in keys:
+        ledger.observe(key, now - timedelta(minutes=2))
+    notification = NotificationState(
+        notification_id="a" * 32,
+        repository=repository,
+        pull_number=42,
+        head_sha=head_sha,
+        thread_ids=thread_ids,
+        state="notify_intent",
+        created_at=now - timedelta(seconds=1),
+    )
+    ledger.save_notification(notification, event="notify_intent", at=now)
+    ledger.assign_notification(keys, notification.notification_id)
+    github = AsyncMock()
+    github.pull_request.return_value = {
+        "number": 42,
+        "state": "open",
+        "head": {"sha": head_sha},
+        "user": {"login": "ryosaeba1985"},
+    }
+    github.pull_request_review_threads.return_value = [
+        _live_thread(thread_id="PRRT_one"),
+        _live_thread(thread_id="PRRT_two", resolved=True),
+    ]
+    door = AsyncMock()
+    reconciler = AuthorWakeupReconciler(
+        config=AuthorWakeupConfig(
+            enabled=True,
+            allowed_repositories=(repository,),
+        ),
+        clearance_store=clearance_store,
+        ledger=ledger,
+        github=github,
+        door=door,
+    )
+
+    await reconciler.tick(now=now, scan=False)
+
+    door.post.assert_not_awaited()
+    assert ledger.notifications()[0].state == "notify_stale"
+    observations = {item.key.thread_id: item for item in ledger.observations()}
+    assert observations["PRRT_one"].status == "active"
+    assert observations["PRRT_one"].first_seen == now
+    assert observations["PRRT_one"].notification_id is None
+    assert observations["PRRT_two"].status == "notified"
+
+
+@pytest.mark.asyncio
 async def test_reconciler_does_not_repost_inside_retention_margin(tmp_path: Path) -> None:
     now = datetime(2026, 8, 30, 0, 2, tzinfo=UTC)
     ledger = WakeupLedger(tmp_path / "state.db")
@@ -1433,6 +1499,40 @@ async def test_maintainer_reply_does_not_claim_before_deadline(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
+async def test_claim_reads_use_scan_cadence_before_deadline(tmp_path: Path) -> None:
+    now = datetime(2026, 8, 30, 1, 0, tzinfo=UTC)
+    github = AsyncMock()
+    github.pull_request.return_value = {
+        "number": 42,
+        "state": "open",
+        "head": {"sha": "b" * 40},
+        "user": {"login": "ryosaeba1985"},
+    }
+    github.pull_request_review_threads.return_value = [_live_thread(reply_login="ryosaeba1985")]
+    reconciler, ledger, notification = _notified_reconciler(
+        tmp_path,
+        now=now,
+        github=github,
+        auto_review_fix=True,
+        review_fix=AsyncMock(),
+    )
+    ledger.save_notification(
+        notification.with_updates(claim_deadline=now + timedelta(minutes=20)),
+        event="notified",
+        at=now,
+    )
+
+    await reconciler.tick(now=now + timedelta(seconds=2), scan=False)
+
+    github.pull_request.assert_not_awaited()
+
+    await reconciler.tick(now=now + timedelta(minutes=1), scan=True)
+
+    assert github.pull_request.await_count == 2
+    assert ledger.notifications()[0].state == "claimed"
+
+
+@pytest.mark.asyncio
 async def test_disabled_auto_review_fix_records_terminal_refusal(tmp_path: Path) -> None:
     now = datetime(2026, 8, 30, 1, 0, tzinfo=UTC)
     github = AsyncMock()
@@ -1504,7 +1604,7 @@ async def test_claim_graphql_failure_does_not_starve_later_notification(
             state="notified",
             created_at=now - timedelta(minutes=2),
             author_delivered_at=now - timedelta(minutes=1),
-            claim_deadline=now + timedelta(minutes=19),
+            claim_deadline=now,
             recipient_citizen="voyager",
         )
         ledger.save_notification(notification, event="notified", at=now)

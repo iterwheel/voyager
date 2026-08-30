@@ -395,6 +395,72 @@ class WakeupLedger:
                     ),
                 )
 
+    def mark_notification_stale_and_requeue(
+        self,
+        notification: NotificationState,
+        surviving_thread_ids: Sequence[str],
+        *,
+        reason: str,
+        at: datetime,
+    ) -> None:
+        stale = notification.with_updates(
+            state="notify_stale",
+            next_delivery_attempt_at=None,
+            terminal_reason=reason,
+        )
+        data = stale.to_dict()
+        encoded = json.dumps(data, separators=(",", ":"), sort_keys=True)
+        with self._connect() as db:
+            db.execute(
+                """
+                INSERT INTO notifications (notification_id, state, data) VALUES (?, ?, ?)
+                ON CONFLICT(notification_id) DO UPDATE SET
+                    state=excluded.state,
+                    data=excluded.data
+                """,
+                (stale.notification_id, stale.state, encoded),
+            )
+            self._append_event(
+                db,
+                at=at,
+                event=stale.state,
+                notification_id=stale.notification_id,
+                repository=stale.repository,
+                pull_number=stale.pull_number,
+                head_sha=stale.head_sha,
+                payload=data,
+            )
+            for thread_id in surviving_thread_ids:
+                cursor = db.execute(
+                    """
+                    UPDATE observations
+                    SET first_seen=?, status='active', notification_id=NULL
+                    WHERE repository=? AND pull_number=? AND head_sha=? AND thread_id=?
+                      AND notification_id=?
+                    """,
+                    (
+                        at.isoformat(),
+                        stale.repository,
+                        stale.pull_number,
+                        stale.head_sha,
+                        thread_id,
+                        stale.notification_id,
+                    ),
+                )
+                if cursor.rowcount:
+                    self._append_event(
+                        db,
+                        at=at,
+                        event="state_a_observed",
+                        repository=stale.repository,
+                        pull_number=stale.pull_number,
+                        head_sha=stale.head_sha,
+                        payload={
+                            "thread_id": thread_id,
+                            "reactivated_from_notification": stale.notification_id,
+                        },
+                    )
+
     def reconcile_active_observations(
         self,
         *,
@@ -753,7 +819,14 @@ class AuthorWakeupReconciler:
                     fallback_status="restart_after_fallback_started",
                 )
                 self.ledger.save_notification(refused, event=refused.state, at=now)
-            elif notification.state in {"notified", "fallback_intent"}:
+            elif notification.state == "fallback_intent" or (
+                notification.state == "notified"
+                and (
+                    scan
+                    or notification.claim_deadline is None
+                    or now >= notification.claim_deadline
+                )
+            ):
                 await self._check_claim_or_fallback(notification, now)
         return TickSummary(
             observed=observed,
@@ -944,16 +1017,16 @@ class AuthorWakeupReconciler:
             self.ledger.save_notification(revoked, event=revoked.state, at=now)
             return
         if not live_revalidated:
-            eligible, reason = await self._delivery_revalidation(notification)
+            eligible, reason, survivors = await self._delivery_revalidation(notification)
             if eligible is None:
                 return
             if not eligible:
-                stale = notification.with_updates(
-                    state="notify_stale",
-                    next_delivery_attempt_at=None,
-                    terminal_reason=reason,
+                self.ledger.mark_notification_stale_and_requeue(
+                    notification,
+                    survivors,
+                    reason=reason,
+                    at=now,
                 )
-                self.ledger.save_notification(stale, event=stale.state, at=now)
                 return
         self.ledger.assign_notification(
             [
@@ -1026,7 +1099,7 @@ class AuthorWakeupReconciler:
     async def _delivery_revalidation(
         self,
         notification: NotificationState,
-    ) -> tuple[bool | None, str]:
+    ) -> tuple[bool | None, str, tuple[str, ...]]:
         try:
             pull = await self.github.pull_request(
                 CLEARANCE_AGENT_SLUG,
@@ -1043,22 +1116,23 @@ class AuthorWakeupReconciler:
                 notification.pull_number,
             )
         except Exception:
-            return None, "revalidation_unavailable"
+            return None, "revalidation_unavailable", ()
         if str(pull.get("state") or "").lower() != "open":
-            return False, "pull_not_open"
+            return False, "pull_not_open", ()
         if str((pull.get("head") or {}).get("sha") or "") != notification.head_sha:
-            return False, "head_superseded"
+            return False, "head_superseded", ()
         if latest is None or latest.head_sha != notification.head_sha:
-            return False, "clearance_predicates_changed"
+            return False, "clearance_predicates_changed", ()
         author_login = (pull.get("user") or {}).get("login")
         if not isinstance(author_login, str) or not author_login.strip():
-            return False, "missing_pr_author_login"
+            return False, "missing_pr_author_login", ()
         persisted_by_id = {thread.id: thread for thread in latest.threads}
         live_by_id = {str(thread.get("id") or ""): thread for thread in live_threads or []}
+        survivors: list[str] = []
         for thread_id in notification.thread_ids:
             persisted = persisted_by_id.get(thread_id)
             live = live_by_id.get(thread_id)
-            if (
+            if not (
                 persisted is None
                 or live is None
                 or not is_author_wakeup_eligible(
@@ -1067,8 +1141,10 @@ class AuthorWakeupReconciler:
                     pr_author_login=author_login,
                 )
             ):
-                return False, "listed_thread_not_eligible"
-        return True, "eligible"
+                survivors.append(thread_id)
+        if len(survivors) != len(notification.thread_ids):
+            return False, "listed_thread_not_eligible", tuple(survivors)
+        return True, "eligible", tuple(survivors)
 
     async def _check_receipt(self, notification: NotificationState, now: datetime) -> None:
         if not notification.transport_send_id:
