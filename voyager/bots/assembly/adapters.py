@@ -382,7 +382,7 @@ class PiOhMyPiDeepSeekAdapter:
                 omp_argv,
                 cwd=checkout_dir,
                 timeout_seconds=timeout_seconds,
-                env=_untrusted_subprocess_env(),
+                env=_omp_env(),
             )
             details["omp_session_jsonl_path"] = _latest_omp_session_jsonl(checkout_dir)
             if omp.returncode == 0:
@@ -689,6 +689,15 @@ def _untrusted_subprocess_env() -> dict[str, str]:
     """Build the minimal ambient env for model and model-written code."""
     env = {name: os.environ[name] for name in _UNTRUSTED_SUBPROCESS_ENV_KEYS if name in os.environ}
     env["GIT_TERMINAL_PROMPT"] = "0"
+    return env
+
+
+def _omp_env() -> dict[str, str]:
+    """Add only OMP's dedicated model credential to the minimal env."""
+    env = _untrusted_subprocess_env()
+    credential = os.environ.get("DEEPSEEK_API_KEY")
+    if credential:
+        env["DEEPSEEK_API_KEY"] = credential
     return env
 
 

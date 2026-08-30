@@ -436,10 +436,20 @@ async def test_model_and_verification_subprocesses_receive_only_safe_environment
         "XDG_CONFIG_HOME",
         "XDG_DATA_HOME",
     }
-    for call in untrusted_calls:
+    omp_call = recorder.command_calls("omp")[0]
+    verification_calls = [
+        *recorder.command_calls("pytest"),
+        *recorder.command_calls("ruff"),
+        *recorder.command_calls("mypy"),
+    ]
+    for call in verification_calls:
         env = call["kwargs"]["env"]
         assert {name: env[name] for name in safe_values} == safe_values
         assert set(env) <= allowed_names
+    omp_env = omp_call["kwargs"]["env"]
+    assert {name: omp_env[name] for name in safe_values} == safe_values
+    assert set(omp_env) <= allowed_names | {"DEEPSEEK_API_KEY"}
+    assert omp_env["DEEPSEEK_API_KEY"] == "secret-deepseek_api_key"
 
     adapter_calls = [
         call
@@ -448,9 +458,11 @@ async def test_model_and_verification_subprocesses_receive_only_safe_environment
     ]
     for call in adapter_calls:
         env = call["kwargs"].get("env") or {}
-        for name in ambient_secret_names[1:]:
+        for name in ambient_secret_names[2:]:
             assert name not in env
         assert env.get("ASSEMBLY_GITHUB_TOKEN") != "secret-assembly_github_token"
+        if call is not omp_call:
+            assert "DEEPSEEK_API_KEY" not in env
 
 
 @pytest.mark.asyncio
