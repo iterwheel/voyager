@@ -263,7 +263,7 @@ async def test_pfc_client_posts_v1_message_and_derives_receipt_url() -> None:
                     "ok": True,
                     "queued": True,
                     "send_id": "c" * 32,
-                    "idempotency_retention_seconds": 86400,
+                    "idempotency_retention_seconds": 86400.0,
                 },
             )
         return httpx.Response(
