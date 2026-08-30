@@ -1231,6 +1231,81 @@ async def test_recovery_rechecks_current_repository_scope(
 
 
 @pytest.mark.asyncio
+async def test_scope_revocation_reenable_starts_new_window_and_sends(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 8, 30, 0, 2, tzinfo=UTC)
+    repository = "iterwheel/voyager-sandbox"
+    head_sha = "b" * 40
+    clearance_store = StateStore(tmp_path / "clearance")
+    clearance_store.append_poll(
+        PollRecord(
+            ts=now - timedelta(minutes=2),
+            repo=repository,
+            pr=42,
+            head_sha=head_sha,
+            status=Status.BLOCKED,
+            threads=[_persisted_thread()],
+        )
+    )
+    ledger = WakeupLedger(tmp_path / "state.db")
+    key = ObservationKey(repository, 42, head_sha, "PRRT_state_a")
+    ledger.observe(key, now - timedelta(minutes=2))
+    notification = NotificationState(
+        notification_id="a" * 32,
+        repository=repository,
+        pull_number=42,
+        head_sha=head_sha,
+        thread_ids=(key.thread_id,),
+        state="notify_intent",
+        created_at=now - timedelta(seconds=1),
+    )
+    ledger.save_notification(notification, event="notify_intent", at=now)
+    ledger.assign_notification((key,), notification.notification_id)
+    github = AsyncMock()
+    github.pull_request.return_value = {
+        "number": 42,
+        "state": "open",
+        "head": {"sha": head_sha},
+        "user": {"login": "ryosaeba1985"},
+    }
+    github.pull_request_review_threads.return_value = [_live_thread()]
+    door = AsyncMock()
+    door.post.return_value = DoorAck("c" * 32, 86400)
+    door.receipt.return_value = DoorReceipt(state="pending")
+    reconciler = AuthorWakeupReconciler(
+        config=AuthorWakeupConfig(enabled=True, allowed_repositories=()),
+        clearance_store=clearance_store,
+        ledger=ledger,
+        github=github,
+        door=door,
+        send_id_factory=lambda: "c" * 32,
+    )
+
+    await reconciler.tick(now=now, scan=False)
+
+    assert ledger.notifications()[0].state == "notify_scope_revoked"
+    assert ledger.observations()[0].status == "cleared"
+
+    reconciler.config = AuthorWakeupConfig(
+        enabled=True,
+        notify_after_minutes=1,
+        allowed_repositories=(repository,),
+    )
+    reenabled_at = now + timedelta(seconds=1)
+    await reconciler.tick(now=reenabled_at, scan=True)
+
+    reactivated = ledger.observations()[0]
+    assert reactivated.status == "active"
+    assert reactivated.first_seen == reenabled_at
+    door.post.assert_not_awaited()
+
+    await reconciler.tick(now=reenabled_at + timedelta(minutes=1), scan=True)
+
+    door.post.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_tick_does_not_load_terminal_notification_history(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

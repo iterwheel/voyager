@@ -403,8 +403,39 @@ class WakeupLedger:
         reason: str,
         at: datetime,
     ) -> None:
+        self._terminalize_notification_and_requeue(
+            notification,
+            surviving_thread_ids,
+            terminal_state="notify_stale",
+            reason=reason,
+            at=at,
+        )
+
+    def mark_notification_scope_revoked(
+        self,
+        notification: NotificationState,
+        *,
+        at: datetime,
+    ) -> None:
+        self._terminalize_notification_and_requeue(
+            notification,
+            (),
+            terminal_state="notify_scope_revoked",
+            reason="repository_scope_revoked",
+            at=at,
+        )
+
+    def _terminalize_notification_and_requeue(
+        self,
+        notification: NotificationState,
+        surviving_thread_ids: Sequence[str],
+        *,
+        terminal_state: str,
+        reason: str,
+        at: datetime,
+    ) -> None:
         stale = notification.with_updates(
-            state="notify_stale",
+            state=terminal_state,
             next_delivery_attempt_at=None,
             terminal_reason=reason,
         )
@@ -1045,11 +1076,10 @@ class AuthorWakeupReconciler:
         live_revalidated: bool = False,
     ) -> None:
         if not self._repository_in_scope(notification.repository):
-            revoked = notification.with_updates(
-                state="notify_scope_revoked",
-                next_delivery_attempt_at=None,
+            self.ledger.mark_notification_scope_revoked(
+                notification,
+                at=now,
             )
-            self.ledger.save_notification(revoked, event=revoked.state, at=now)
             return
         if not live_revalidated:
             eligible, reason, survivors = await self._delivery_revalidation(notification)
