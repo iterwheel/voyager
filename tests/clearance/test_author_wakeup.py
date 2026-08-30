@@ -152,6 +152,32 @@ def test_wakeup_ledger_survives_restart_and_keeps_event_history(tmp_path) -> Non
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
+def test_cleared_observation_reactivates_with_a_new_continuous_window(tmp_path: Path) -> None:
+    ledger = WakeupLedger(tmp_path / "state.db")
+    key = ObservationKey("iterwheel/voyager-sandbox", 42, "b" * 40, "PRRT_one")
+    first = datetime(2026, 8, 30, 0, 0, tzinfo=UTC)
+    reactivated = first + timedelta(minutes=2)
+
+    ledger.observe(key, first)
+    ledger.reconcile_active_observations(
+        repository=key.repository,
+        pull_number=key.pull_number,
+        current_head_sha=key.head_sha,
+        eligible_keys=set(),
+        at=first + timedelta(seconds=30),
+    )
+    current = ledger.observe(key, reactivated)
+
+    assert current.status == "active"
+    assert current.first_seen == reactivated
+    assert current.notification_id is None
+    assert [event["event"] for event in ledger.events()] == [
+        "state_a_observed",
+        "state_a_cleared",
+        "state_a_observed",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_pfc_client_posts_v1_message_and_derives_receipt_url() -> None:
     requests: list[httpx.Request] = []
@@ -432,6 +458,105 @@ async def test_new_head_supersedes_old_observation(tmp_path: Path) -> None:
 
     assert ledger.observations()[0].status == "superseded"
     assert [event["event"] for event in ledger.events()][-1] == "state_a_superseded"
+
+
+@pytest.mark.asyncio
+async def test_due_observation_waits_for_a_successful_current_scan(tmp_path: Path) -> None:
+    now = datetime(2026, 8, 30, 0, 0, tzinfo=UTC)
+    repository = "iterwheel/voyager-sandbox"
+    head_sha = "b" * 40
+    clearance_store = StateStore(tmp_path / "clearance")
+    clearance_store.append_poll(
+        PollRecord(
+            ts=now,
+            repo=repository,
+            pr=42,
+            head_sha=head_sha,
+            status=Status.BLOCKED,
+            threads=[_persisted_thread()],
+        )
+    )
+    github = AsyncMock()
+    github.pull_request.return_value = {
+        "number": 42,
+        "state": "open",
+        "head": {"sha": head_sha},
+        "user": {"login": "ryosaeba1985"},
+    }
+    github.pull_request_review_threads.side_effect = [
+        [_live_thread()],
+        RuntimeError("temporary read failure"),
+        [_live_thread()],
+    ]
+    door = AsyncMock()
+    door.post.return_value = DoorAck("c" * 32, 86400)
+    door.receipt.return_value = DoorReceipt(state="pending")
+    reconciler = AuthorWakeupReconciler(
+        config=AuthorWakeupConfig(
+            enabled=True,
+            notify_after_minutes=1,
+            allowed_repositories=(repository,),
+        ),
+        clearance_store=clearance_store,
+        ledger=WakeupLedger(tmp_path / "wakeup" / "state.db"),
+        github=github,
+        door=door,
+    )
+
+    await reconciler.tick(now=now, scan=True)
+    await reconciler.tick(now=now + timedelta(minutes=1), scan=True)
+
+    door.post.assert_not_awaited()
+
+    await reconciler.tick(now=now + timedelta(minutes=1, seconds=1), scan=True)
+
+    door.post.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_repo_removal_clears_due_observation_without_notifying(tmp_path: Path) -> None:
+    now = datetime(2026, 8, 30, 0, 0, tzinfo=UTC)
+    repository = "iterwheel/voyager-sandbox"
+    head_sha = "b" * 40
+    clearance_store = StateStore(tmp_path / "clearance")
+    clearance_store.append_poll(
+        PollRecord(
+            ts=now,
+            repo=repository,
+            pr=42,
+            head_sha=head_sha,
+            status=Status.BLOCKED,
+            threads=[_persisted_thread()],
+        )
+    )
+    github = AsyncMock()
+    github.pull_request.return_value = {
+        "number": 42,
+        "state": "open",
+        "head": {"sha": head_sha},
+        "user": {"login": "ryosaeba1985"},
+    }
+    github.pull_request_review_threads.return_value = [_live_thread()]
+    door = AsyncMock()
+    ledger = WakeupLedger(tmp_path / "wakeup" / "state.db")
+    reconciler = AuthorWakeupReconciler(
+        config=AuthorWakeupConfig(
+            enabled=True,
+            notify_after_minutes=1,
+            allowed_repositories=(repository,),
+        ),
+        clearance_store=clearance_store,
+        ledger=ledger,
+        github=github,
+        door=door,
+    )
+
+    await reconciler.tick(now=now, scan=True)
+    reconciler.config = AuthorWakeupConfig(enabled=True, allowed_repositories=())
+    await reconciler.tick(now=now + timedelta(minutes=1), scan=True)
+
+    door.post.assert_not_awaited()
+    assert ledger.observations()[0].status == "cleared"
 
 
 @pytest.mark.asyncio

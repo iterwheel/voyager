@@ -164,6 +164,32 @@ class WakeupLedger:
                     head_sha=key.head_sha,
                     payload={"thread_id": key.thread_id},
                 )
+            else:
+                reactivated = db.execute(
+                    """
+                    UPDATE observations
+                    SET first_seen=?, status='active', notification_id=NULL
+                    WHERE repository=? AND pull_number=? AND head_sha=? AND thread_id=?
+                      AND status='cleared'
+                    """,
+                    (
+                        at.isoformat(),
+                        key.repository,
+                        key.pull_number,
+                        key.head_sha,
+                        key.thread_id,
+                    ),
+                )
+                if reactivated.rowcount:
+                    self._append_event(
+                        db,
+                        at=at,
+                        event="state_a_observed",
+                        repository=key.repository,
+                        pull_number=key.pull_number,
+                        head_sha=key.head_sha,
+                        payload={"thread_id": key.thread_id, "reactivated": True},
+                    )
             row = db.execute(
                 """
                 SELECT first_seen, status, notification_id FROM observations
@@ -545,8 +571,16 @@ class AuthorWakeupReconciler:
             latest[(poll.repo.lower(), poll.pr)] = poll
         allowed = set(self.config.allowed_repositories)
         observed_count = 0
+        revalidated_keys: set[ObservationKey] = set()
         for (repository, pull_number), poll in latest.items():
             if repository not in allowed:
+                self.ledger.reconcile_active_observations(
+                    repository=repository,
+                    pull_number=pull_number,
+                    current_head_sha=poll.head_sha,
+                    eligible_keys=set(),
+                    at=now,
+                )
                 continue
             try:
                 pull = await self.github.pull_request(CLEARANCE_AGENT_SLUG, repository, pull_number)
@@ -567,7 +601,7 @@ class AuthorWakeupReconciler:
                 continue
             author_login = ((pull.get("user") or {}).get("login")) or None
             live_by_id = {str(thread.get("id") or ""): thread for thread in live_threads or []}
-            before = {item.key for item in self.ledger.observations()}
+            before = {item.key for item in self.ledger.observations() if item.status == "active"}
             eligible_keys: set[ObservationKey] = set()
             for persisted in poll.threads:
                 live = live_by_id.get(persisted.id)
@@ -577,6 +611,7 @@ class AuthorWakeupReconciler:
                     continue
                 key = ObservationKey(repository, pull_number, head_sha, persisted.id)
                 eligible_keys.add(key)
+                revalidated_keys.add(key)
                 self.ledger.observe(key, now)
                 if key not in before:
                     observed_count += 1
@@ -587,10 +622,14 @@ class AuthorWakeupReconciler:
                 eligible_keys=eligible_keys,
                 at=now,
             )
-        started = await self._start_due_notifications(now)
+        started = await self._start_due_notifications(now, revalidated_keys)
         return observed_count, started
 
-    async def _start_due_notifications(self, now: datetime) -> int:
+    async def _start_due_notifications(
+        self,
+        now: datetime,
+        revalidated_keys: set[ObservationKey],
+    ) -> int:
         cutoff = now - timedelta(minutes=self.config.notify_after_minutes)
         due_groups: dict[tuple[str, int, str], list[ObservationState]] = {}
         for observation in self.ledger.observations():
@@ -598,6 +637,7 @@ class AuthorWakeupReconciler:
                 observation.status != "active"
                 or observation.notification_id is not None
                 or observation.first_seen > cutoff
+                or observation.key not in revalidated_keys
             ):
                 continue
             group = (
