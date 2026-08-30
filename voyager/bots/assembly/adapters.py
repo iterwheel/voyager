@@ -364,7 +364,18 @@ class PiOhMyPiDeepSeekAdapter:
                         context=context,
                     )
                 lfs_pull = await _run_exec(
-                    ["git", "-c", f"lfs.url={trusted_lfs_url}", "lfs", "pull", "origin"],
+                    [
+                        "git",
+                        "-c",
+                        f"lfs.url={trusted_lfs_url}",
+                        "lfs",
+                        "pull",
+                        "-I",
+                        "",
+                        "-X",
+                        "",
+                        "origin",
+                    ],
                     cwd=checkout_dir,
                     timeout_seconds=timeout_seconds,
                     env=git_auth_env,

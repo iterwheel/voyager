@@ -601,6 +601,8 @@ async def test_pi_adapter_initializes_local_lfs_before_omp(
         "lfs.pushurl=https://github.com/iterwheel/voyager-sandbox.git/info/lfs"
     )
     assert trusted_lfs_config in pull_call["argv"]
+    assert ("-I", "") in zip(pull_call["argv"], pull_call["argv"][1:], strict=False)
+    assert ("-X", "") in zip(pull_call["argv"], pull_call["argv"][1:], strict=False)
     assert trusted_lfs_config in lfs_push_call["argv"]
     assert trusted_lfs_push_config in lfs_push_call["argv"]
     assert recorder.calls.index(install_call) < recorder.calls.index(pull_call)
