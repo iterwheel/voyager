@@ -24,10 +24,11 @@ Feature: SWM judge — verdict assignment per SWM-1101 decision tree
   # State C — author replied
   # ---------------------------------------------------------------------------
 
-  Scenario: State C with substantive reply resolves the thread
+  Scenario: State C with substantive reply alone defers to human judgment (issue #253)
     Given a state C thread with a substantive author reply
     When the thread is judged
-    Then the verdict is "RESOLVED"
+    Then the verdict is "NEEDS_HUMAN_JUDGMENT"
+    And the reason mentions "uncorroborated"
     And the decision substantive flag is true
 
   Scenario: State C with short ack reply leaves thread open

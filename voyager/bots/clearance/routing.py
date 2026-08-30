@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+from voyager.bots.assembly.actor import evaluate_actor_authorization
 
 from .constants import (
     CHECK_SUITE_ACTIONS,
@@ -17,6 +20,8 @@ from .constants import (
     REACTION_ACTIONS,
     is_codex_login,
 )
+
+_log = logging.getLogger(__name__)
 
 
 def payload_actor_login(event: str, payload: dict[str, Any]) -> str | None:
@@ -59,7 +64,33 @@ def is_codex_pr_body_reaction(payload: dict[str, Any]) -> bool:
     )
 
 
-def should_run_clearance(event: str, payload: dict[str, Any]) -> bool:
+def clearance_command_actor_authorized(payload: dict[str, Any], cfg: Any | None = None) -> bool:
+    """Issue #253: ``/clearance`` is a privileged command.
+
+    It re-runs the readiness pipeline and can apply ready-for-merge labels,
+    so it gets the same actor authorization gate as Assembly and
+    ``/review-fix`` (VOY-1818): allow-list or trusted author association;
+    bots are always refused. Returns True when the comment author may
+    invoke the command.
+    """
+    actor = evaluate_actor_authorization(payload, cfg)
+    if not actor.ok:
+        _log.warning(
+            "clearance_command_denied: actor=%r association=%r sender=%r reason=%s",
+            actor.actor_login,
+            actor.actor_association,
+            actor.actor_sender_login,
+            actor.reason,
+        )
+    return actor.ok
+
+
+def should_run_clearance(
+    event: str,
+    payload: dict[str, Any],
+    *,
+    cfg: Any | None = None,
+) -> bool:
     if payload_actor_login(event, payload) == CLEARANCE_BOT_LOGIN:
         return False
 
@@ -72,10 +103,18 @@ def should_run_clearance(event: str, payload: dict[str, Any]) -> bool:
         return (payload.get("comment") or {}).get("in_reply_to_id") is not None
     if event == "issue_comment" and action == "created":
         issue = payload.get("issue") or {}
+        if not issue.get("pull_request"):
+            return False
+        # Codex review-result comments are a system signal, not a command —
+        # they stay ungated.
+        if is_codex_review_result_comment(payload):
+            return True
         body = str((payload.get("comment") or {}).get("body") or "")
-        return bool(issue.get("pull_request")) and (
-            "/clearance" in body.lower() or is_codex_review_result_comment(payload)
-        )
+        if "/clearance" not in body.lower():
+            return False
+        # Issue #253: the explicit /clearance command requires an authorized
+        # actor (same gate as Assembly / VOY-1818).
+        return clearance_command_actor_authorized(payload, cfg)
     if event == "check_suite" and action in CHECK_SUITE_ACTIONS:
         check_suite = payload.get("check_suite") or {}
         return bool(check_suite.get("pull_requests"))
@@ -164,8 +203,13 @@ def build_clearance_route(
     }
 
 
-def route_clearance_event(event: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
-    if not should_run_clearance(event, payload):
+def route_clearance_event(
+    event: str,
+    payload: dict[str, Any],
+    *,
+    cfg: Any | None = None,
+) -> list[dict[str, Any]]:
+    if not should_run_clearance(event, payload, cfg=cfg):
         return []
 
     targets = clearance_targets_from_payload(event, payload)

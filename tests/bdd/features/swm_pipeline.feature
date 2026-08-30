@@ -82,6 +82,8 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
   Scenario: Maintainer reply does NOT trigger Clearance auto-resolution (P1 author-filter)
     Given the stub PR "iterwheel/sandbox" #49 author is "ryosaeba1985"
     And the stub PR has 1 Codex thread with a substantive reply from "some-maintainer" and isResolved false
+    And a fake investigator returning verdict "RESOLVED" confidence 0.95 reason "Fix corroborated in diff"
+    And the stub client returns a sample diff for "app.py"
     When compute_clearance_automation runs with DRY_RUN true
     Then the automation status is "blocked"
     And the sync actions count is 0
@@ -151,13 +153,26 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     And the thread llm_verdict is None
     And the pipeline trigger is "webhook"
 
-  Scenario: State C thread + investigator configured — investigator NOT called
-    Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with substantive author reply and isResolved false
+  Scenario: State C thread + investigator configured — investigator IS called to corroborate (issue #253)
+    Given the stub PR "iterwheel/sandbox" #49 author is "pr-author"
+    And the stub PR has 1 Codex thread with a substantive reply from "pr-author" and isResolved false
+    And a fake investigator returning verdict "RESOLVED" confidence 0.95 reason "Fix corroborated in diff"
+    And the stub client returns a sample diff for "app.py"
     And a fake investigator returning verdict "RESOLVED" confidence 0.99 reason "Would fire if called"
     And the stub client returns a sample diff for "app.py"
     When compute_clearance_automation runs with investigator
-    Then the investigator was never called
-    And the thread llm_verdict is None
+    Then the thread llm_verdict is "RESOLVED"
+    And the thread verdict is "RESOLVED"
+
+  Scenario: Substantive author reply without corroboration never auto-resolves (issue #253)
+    Given the stub PR "iterwheel/sandbox" #49 author is "pr-author"
+    And the stub PR has 1 Codex thread with a substantive reply from "pr-author" and isResolved false
+    And a fake investigator returning verdict "RESOLVED" confidence 0.95 reason "Fix corroborated in diff"
+    And the stub client returns a sample diff for "app.py"
+    And no investigator is configured
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "pending"
+    And no resolveReviewThread mutation was invoked
 
   Scenario: State B + InvestigationError — falls back to deterministic OPEN with no llm_verdict
     Given the stub PR "iterwheel/sandbox" #49 has 1 outdated Codex thread at path "app.py" line 10
@@ -645,6 +660,8 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
   Scenario: Issue #131 Assembly-authored PR uses Assembly App resolver fallback
     Given the stub PR "iterwheel/sandbox" #49 author is "iterwheel-assembly[bot]"
     And the stub PR has 1 Codex thread with a substantive reply from "iterwheel-assembly[bot]" and isResolved false
+    And a fake investigator returning verdict "RESOLVED" confidence 0.95 reason "Fix corroborated in diff"
+    And the stub client returns a sample diff for "app.py"
     And the thread viewerCanResolve is false
     And the authorized resolver app "iterwheel-assembly" can resolve the thread
     When compute_clearance_automation runs with DRY_RUN false
@@ -659,6 +676,8 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
   Scenario: Issue #131 non-authorized PR author does not use resolver fallback
     Given the stub PR "iterwheel/sandbox" #49 author is "random-contributor"
     And the stub PR has 1 Codex thread with a substantive reply from "random-contributor" and isResolved false
+    And a fake investigator returning verdict "RESOLVED" confidence 0.95 reason "Fix corroborated in diff"
+    And the stub client returns a sample diff for "app.py"
     And the thread viewerCanResolve is false
     And the authorized resolver app "iterwheel-assembly" can resolve the thread
     When compute_clearance_automation runs with DRY_RUN false
@@ -670,6 +689,8 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
   Scenario: Issue #131 Assembly-authored PR without resolver capability uses manual-close path
     Given the stub PR "iterwheel/sandbox" #49 author is "iterwheel-assembly[bot]"
     And the stub PR has 1 Codex thread with a substantive reply from "iterwheel-assembly[bot]" and isResolved false
+    And a fake investigator returning verdict "RESOLVED" confidence 0.95 reason "Fix corroborated in diff"
+    And the stub client returns a sample diff for "app.py"
     And the thread viewerCanResolve is false
     And the authorized resolver app "iterwheel-assembly" cannot resolve the thread
     When compute_clearance_automation runs with DRY_RUN false
@@ -684,6 +705,8 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
   Scenario: Issue #131 Assembly fallback does not duplicate an existing current-head close-reason reply
     Given the stub PR "iterwheel/sandbox" #49 author is "iterwheel-assembly[bot]"
     And the stub PR has 1 Codex thread with a substantive reply from "iterwheel-assembly[bot]" and isResolved false
+    And a fake investigator returning verdict "RESOLVED" confidence 0.95 reason "Fix corroborated in diff"
+    And the stub client returns a sample diff for "app.py"
     And the thread viewerCanResolve is false
     And the thread already has a Clearance close-reason reply for the current head
     And the authorized resolver app "iterwheel-assembly" can resolve the thread
@@ -696,6 +719,8 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
   Scenario: Issue #131 Assembly fallback respects inaccessible fork head repos
     Given the stub PR "iterwheel/sandbox" #49 author is "iterwheel-assembly[bot]"
     And the stub PR has 1 Codex thread with a substantive reply from "iterwheel-assembly[bot]" and isResolved false
+    And a fake investigator returning verdict "RESOLVED" confidence 0.95 reason "Fix corroborated in diff"
+    And the stub client returns a sample diff for "app.py"
     And the stub PR is from fork "ryosaeba1985/voyager"
     And the fork head repo is not accessible
     And the thread viewerCanResolve is false
@@ -796,6 +821,8 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
   Scenario: Issue #141 Assembly App GraphQL reply matches REST PR author login
     Given the stub PR "iterwheel/sandbox" #49 author is "iterwheel-assembly[bot]"
     And the stub PR has 1 Codex thread with a substantive reply from "iterwheel-assembly" and isResolved false
+    And a fake investigator returning verdict "RESOLVED" confidence 0.95 reason "Fix corroborated in diff"
+    And the stub client returns a sample diff for "app.py"
     When compute_clearance_automation runs with DRY_RUN false
     Then the automation status is "ready"
     And the thread verdict is "RESOLVED"
@@ -901,6 +928,8 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
   Scenario: Issue #146 existing resolved conclusion suppresses manual-close-required output
     Given the stub PR "iterwheel/sandbox" #49 author is "iterwheel-assembly[bot]"
     And the stub PR has 1 Codex thread with a substantive reply from "iterwheel-assembly[bot]" and isResolved false
+    And a fake investigator returning verdict "RESOLVED" confidence 0.95 reason "Fix corroborated in diff"
+    And the stub client returns a sample diff for "app.py"
     And the thread viewerCanResolve is false
     And the thread already has a Clearance close-reason reply for the current head
     And the authorized resolver app "iterwheel-assembly" cannot resolve the thread

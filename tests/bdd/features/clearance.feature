@@ -106,10 +106,24 @@ Feature: Clearance bot — PR review readiness verification and routing
     Then no clearance routes are produced
 
   Scenario: /clearance command in issue comment triggers evaluation
-    Given a webhook payload "clearance_issue_comment_clearance_command"
+    Given the Clearance command actor gate trusts OWNER associations
+    And a webhook payload "clearance_issue_comment_clearance_command"
     When Clearance receives the "issue_comment" event
     Then exactly one clearance route is produced
     And the clearance route targets the Clearance agent
+
+  # Issue #253: /clearance is a privileged command — same actor gate as
+  # Assembly (VOY-1818). Unauthorized actors and bots are refused.
+
+  Scenario: /clearance from a NONE-association contributor is refused (issue #253)
+    Given a webhook payload "clearance_issue_comment_clearance_command_unauthorized"
+    When Clearance receives the "issue_comment" event
+    Then no clearance routes are produced
+
+  Scenario: /clearance from a bot account is refused (issue #253)
+    Given a webhook payload "clearance_issue_comment_clearance_command_bot"
+    When Clearance receives the "issue_comment" event
+    Then no clearance routes are produced
 
   Scenario: issue_comment edited action is ignored even with Codex body
     Given a webhook payload "clearance_issue_comment_codex_edited"

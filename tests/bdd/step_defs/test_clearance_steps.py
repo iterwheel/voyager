@@ -26,6 +26,15 @@ def webhook_payload(webhook_fixture, name: str) -> dict:
     return webhook_fixture(name)
 
 
+@given("the Clearance command actor gate trusts OWNER associations")
+def trust_owner_associations(monkeypatch) -> None:
+    """Issue #253: set-but-empty associations env → the VOY-1818 default trust
+    set (OWNER, MEMBER, COLLABORATOR) — same semantics as Assembly tests."""
+    from voyager.bots.assembly.constants import AUTHORIZED_ASSOCIATIONS_ENV
+
+    monkeypatch.setenv(AUTHORIZED_ASSOCIATIONS_ENV, "")
+
+
 # ---------------------------------------------------------------------------
 # When — event routing
 # ---------------------------------------------------------------------------
