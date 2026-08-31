@@ -115,6 +115,12 @@ def should_run_clearance(
         # Issue #253: the explicit /clearance command requires an authorized
         # actor (same gate as Assembly / VOY-1818).
         return clearance_command_actor_authorized(payload, cfg)
+    # Issue #339: a manual thread resolve/unresolve emits no other event
+    # Clearance watches — without this trigger the stage label (e.g.
+    # clearance-1-pending) goes stale while GitHub's merge box is already
+    # clean. Refresh the readiness evaluation on thread state changes.
+    if event == "pull_request_review_thread" and action in {"resolved", "unresolved"}:
+        return bool(payload.get("pull_request"))
     if event == "check_suite" and action in CHECK_SUITE_ACTIONS:
         check_suite = payload.get("check_suite") or {}
         return bool(check_suite.get("pull_requests"))
@@ -148,7 +154,12 @@ def check_targets_from_payload(
 
 
 def clearance_targets_from_payload(event: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
-    if event in {"pull_request", "pull_request_review", "pull_request_review_comment"}:
+    if event in {
+        "pull_request",
+        "pull_request_review",
+        "pull_request_review_comment",
+        "pull_request_review_thread",
+    }:
         pull_request = dict(payload.get("pull_request") or {})
         if not pull_request:
             return []
