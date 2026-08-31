@@ -127,3 +127,23 @@ def test_indented_code_after_heading_is_stripped():
     assert "/assembly" not in visible_comment_text("# Usage\n    /assembly --dry-run")
     # Document-start behavior deliberately unchanged (parser contract).
     assert "/assembly" in visible_comment_text("    /assembly")
+
+
+def test_unterminated_html_comment_strips_to_end():
+    assert "/assembly" not in visible_comment_text("intro <!-- hidden\n/assembly --dry-run")
+
+
+def test_malformed_hash_line_continues_quote():
+    assert "/assembly" not in visible_comment_text("> quoted\n#tag /assembly")
+
+
+def test_fence_close_rearms_indented_code():
+    assert "/assembly" not in visible_comment_text("```\ninside\n```\n    /assembly --dry-run")
+
+
+def test_deep_indented_hash_is_indented_code_not_heading():
+    # After a blank-line boundary, a deep-indented '#' line is indented code.
+    assert "# note" not in visible_comment_text("intro\n\n    # note inside indented block")
+    # Document-start indented lines stay visible (standing parser contract),
+    # and a deep-indented '#' does NOT arm the heading block-boundary rule.
+    assert "/assembly" in visible_comment_text("    # note\n/assembly --dry-run")
