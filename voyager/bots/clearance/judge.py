@@ -75,11 +75,6 @@ def codex_followup_reaction(followup_body: str | None) -> str | None:
             "still not",
             "still has",
             "concern remains",
-            "unaddressed",
-            "unresolved",
-            "unfixed",
-            "persists",
-            "persist.",
             "still present",
             "still occurs",
             "still happens",
@@ -95,6 +90,14 @@ def codex_followup_reaction(followup_body: str | None) -> str | None:
             "still triggers",
             "still triggered",
             "still recurs",
+            "is still incorrect",
+            "still incorrect",
+            "still wrong",
+            "behavior is incorrect",
+            "remains incorrect",
+            "remains wrong",
+            "result is incorrect",
+            "output is wrong",
             "no regression test",
             "no test covers",
             "no tests cover",
@@ -112,7 +115,7 @@ def codex_followup_reaction(followup_body: str | None) -> str | None:
             "partially",
             "👎",
         ]
-    ):
+    ) or _NEGATIVE_WORDS_RE.search(text):
         return "negative"
     # "fixed" is negation-only (Codex P1 on #335): bare "fixed" is too weak to
     # approve on its own, but "hasn't been fixed" must still classify negative.
@@ -162,7 +165,10 @@ _NEGATOR_RE = re.compile(
 _NEGATION_WINDOW = 48
 # Affirmative regression statement vs negated regression (an approval).
 # Every common inflection (Codex P1 round 15: 'regresses' read as approval).
-_REGRESSION_RE = re.compile(r"\bregress(?:ed|es|ing|ion|ions)?\b(?!\s+tests?\b)")
+# Standalone negative words (word-bounded — identifiers like
+# `unresolved_threads` stay neutral, Codex P2 round 19).
+_NEGATIVE_WORDS_RE = re.compile(r"\b(?:unaddressed|unresolved|unfixed|persists?)\b")
+_REGRESSION_RE = re.compile(r"\bregress(?:ed|es|ing|ion|ions)?\b(?!\s+(?:tests?|coverage|suite)\b)")
 _NEGATED_REGRESSION_RE = re.compile(
     r"\b(?:not|no|never|isn['\u2019]?t|aren['\u2019]?t|wasn['\u2019]?t|weren['\u2019]?t|"
     r"hasn['\u2019]?t|haven['\u2019]?t|didn['\u2019]?t)\s+"
@@ -241,6 +247,7 @@ def _positive_is_negated(text: str, pos: int, token_len: int) -> bool:
 _AFTER_NEGATOR_RE = re.compile(
     r"^[\s,.!?;:]{0,6}(?:but|however|though|yet)?[^.!?]{0,44}?"
     r"(?:not|never|nor|remains?|persists?|reproduces?|recurs?|"
+    r"incorrect|wrong|broken|fails?|failing|"
     r"isn['\u2019]?t|aren['\u2019]?t|wasn['\u2019]?t|"
     r"won['\u2019]?t|don['\u2019]?t|doesn['\u2019]?t|didn['\u2019]?t|"
     r"hasn['\u2019]?t|haven['\u2019]?t|can['\u2019]?t|cannot)\b"

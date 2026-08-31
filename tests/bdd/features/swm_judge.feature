@@ -302,6 +302,21 @@ Feature: SWM judge — verdict assignment per SWM-1101 decision tree
     When codex_followup_reaction is called
     Then the followup reaction is "negative"
 
+  Scenario: Regression coverage added is approval (Codex round 19)
+    Given a Codex follow-up body "Regression coverage was added, looks good"
+    When codex_followup_reaction is called
+    Then the followup reaction is "positive"
+
+  Scenario: Still-incorrect behavior rejects (Codex round 19)
+    Given a Codex follow-up body "The concern is addressed, but the behavior is still incorrect."
+    When codex_followup_reaction is called
+    Then the followup reaction is "negative"
+
+  Scenario: Negative words inside identifiers stay neutral (Codex round 19)
+    Given a Codex follow-up body "The `unresolved_threads` list is now empty; looks good."
+    When codex_followup_reaction is called
+    Then the followup reaction is "positive"
+
   Scenario: Empty Codex follow-up returns None
     Given a None Codex follow-up body
     When codex_followup_reaction is called
