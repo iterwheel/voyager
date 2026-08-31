@@ -21,7 +21,46 @@ from markdown_it import MarkdownIt
 
 # GFM tables are containers on GitHub: enable the table rule so table rows
 # never reach the command surface (P1 round 10).
-_HTML_CONTAINER_TAGS = frozenset({"details", "summary", "blockquote", "figure", "center", "table"})
+# Standard HTML/GFM block containers (P1 round 12: the complete supported set,
+# not a partial allowlist).
+_HTML_CONTAINER_TAGS = frozenset(
+    {
+        "details",
+        "summary",
+        "blockquote",
+        "figure",
+        "figcaption",
+        "center",
+        "table",
+        "thead",
+        "tbody",
+        "tfoot",
+        "tr",
+        "td",
+        "th",
+        "div",
+        "section",
+        "article",
+        "aside",
+        "header",
+        "footer",
+        "main",
+        "nav",
+        "form",
+        "fieldset",
+        "dl",
+        "ol",
+        "ul",
+        "li",
+        "dd",
+        "dt",
+        "address",
+        "pre",
+        "canvas",
+        "template",
+    }
+)
+_HTML_COMMENT_BLOCK_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 
 _md = MarkdownIt("commonmark").enable("table")
 
@@ -53,7 +92,10 @@ def visible_comment_text(body: str | None) -> str:
             # tags ('<table>...</table>' on one token) — process EVERY tag
             # occurrence and apply the net balance (P2 round 11).
             net = 0
-            for tag in re.finditer(r"</?([a-zA-Z][a-zA-Z0-9-]*)", token.content or ""):
+            # Ignore HTML comments inside the block: a commented-out
+            # '</details>' is not a real closer (P1 round 12).
+            content = _HTML_COMMENT_BLOCK_RE.sub(" ", token.content or "")
+            for tag in re.finditer(r"</?([a-zA-Z][a-zA-Z0-9-]*)", content):
                 if tag.group(1).lower() not in _HTML_CONTAINER_TAGS:
                     continue
                 if tag.group(0).startswith("</"):
