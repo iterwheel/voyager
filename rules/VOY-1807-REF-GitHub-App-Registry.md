@@ -1,7 +1,7 @@
 # REF-1807: GitHub App Registry
 
 **Applies to:** VOY project
-**Last updated:** 2026-06-28
+**Last updated:** 2026-08-31
 **Last reviewed:** 2026-06-25
 **Status:** Active
 **Related:** VOY-1805, VOY-1806, VOY-1808
@@ -30,8 +30,8 @@ Current repository event source:
 
 | Repository | Webhook ID | URL | Active | Events | Last delivery state |
 |------------|------------|-----|--------|--------|---------------------|
-| `iterwheel/voyager-sandbox` | `619824421` | `https://gh.iterwheel.com/github/webhook` | Yes | `check_run`, `check_suite`, `issues`, `issue_comment`, `label`, `pull_request`, `pull_request_review`, `pull_request_review_comment`, `status`, `workflow_run` | `200 OK` |
-| `iterwheel/voyager` | `619976821` | `https://gh.iterwheel.com/github/webhook` | Yes | `issues`, `issue_comment`, `pull_request`, `pull_request_review`, `pull_request_review_comment` | `200 OK` |
+| `iterwheel/voyager-sandbox` | `619824421` | `https://gh.iterwheel.com/github/webhook` | Yes | `check_run`, `check_suite`, `issues`, `issue_comment`, `label`, `pull_request`, `pull_request_review`, `pull_request_review_comment`, `pull_request_review_thread`, `status`, `workflow_run` | `200 OK` |
+| `iterwheel/voyager` | `619976821` | `https://gh.iterwheel.com/github/webhook` | Yes | `issues`, `issue_comment`, `pull_request`, `pull_request_review`, `pull_request_review_comment`, `pull_request_review_thread` | `200 OK` |
 | `frankyxhl/alfred` | `619961538` | `https://gh.iterwheel.com/github/webhook` | Yes | `issues`, `issue_comment` | `200 OK` |
 | `frankyxhl/babs` | `619961554` | `https://gh.iterwheel.com/github/webhook` | Yes | `issues`, `issue_comment` | `200 OK` |
 | `frankyxhl/fx_bin` | `619961564` | `https://gh.iterwheel.com/github/webhook` | Yes | `issues`, `issue_comment` | `200 OK` |
