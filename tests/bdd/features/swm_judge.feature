@@ -297,6 +297,11 @@ Feature: SWM judge — verdict assignment per SWM-1101 decision tree
     When codex_followup_reaction is called
     Then the followup reaction is "positive"
 
+  Scenario: Missing regression-test coverage is a rejection (Codex round 17)
+    Given a Codex follow-up body "The implementation is addressed, but no regression test covers it."
+    When codex_followup_reaction is called
+    Then the followup reaction is "negative"
+
   Scenario: Empty Codex follow-up returns None
     Given a None Codex follow-up body
     When codex_followup_reaction is called
