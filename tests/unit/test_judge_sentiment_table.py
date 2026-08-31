@@ -23,8 +23,10 @@ import pytest
 from voyager.bots.clearance.judge import codex_followup_reaction
 
 TABLE: list[tuple[str, str | None]] = [
-    # 1. structured signal
-    ("Ack with a 👍 reaction", "positive"),
+    # 1. structured signal — reaction FIELD only; a 👍 glyph in prose is an
+    # ordinary character (scope ruling counter-example) and never approves.
+    ("Nice work 👍 but the race persists", "negative"),
+    ("I 👍 the effort", None),
     # 2. concessive still-occurrence
     ("The issue is addressed, although the race can still occur", "negative"),
     ("The symptom may still reproduce under load", "negative"),

@@ -26,9 +26,11 @@ from dataclasses import dataclass
 from voyager.bots.clearance.classify import ThreadState
 from voyager.bots.clearance.models import Verdict
 
-# The GitHub thumbs-up reaction, used as an approval signal — NOT a credential
-# (bandit B105 false-positives on inline comparisons; a named constant makes
-# the intent explicit and keeps the security gate green).
+# The GitHub thumbs-up reaction VALUE, consumed ONLY from the structured
+# reaction field on the comment object (routing's reaction events and the
+# clean-signal path) — never detected inside prose bodies, where a 👍 glyph
+# is an ordinary character (scope ruling on #334). Also NOT a credential
+# (bandit B105 false-positived on inline comparisons).
 APPROVAL_REACTION = "\U0001f44d"
 
 _COMMIT_SHA_RE = re.compile(r"\b[0-9a-f]{7,40}\b")
@@ -83,7 +85,8 @@ def _decisive_approval(text: str) -> bool:
             if not _AFTER_NEGATOR_RE.match(after):
                 return True
             start = idx + len(phrase)
-    return APPROVAL_REACTION in text
+    return False  # the 👍 reaction is a structured signal read from the
+    # reaction field (routing/clean-signal paths) — never from prose bodies
 
 
 def codex_followup_reaction(followup_body: str | None) -> str | None:
@@ -110,8 +113,8 @@ def codex_followup_reaction(followup_body: str | None) -> str | None:
     # Ruling ladder (class-closing, #334 + #335): structured signal >
     # concessive still-occurrence > approval words > negative keywords >
     # token attachment.
-    if APPROVAL_REACTION in text:  # 1. structured signal
-        return "positive"
+    # 1. structured signal (👍 reaction) is NOT detectable from prose — it is
+    # read from the reaction field in routing and the clean-signal path.
     if _CONCESSIVE_STILL_RE.search(text):  # 2. concessive still-occurrence
         return "negative"
     if _decisive_approval(text):  # 3. approval words
@@ -174,18 +177,14 @@ def codex_followup_reaction(followup_body: str | None) -> str | None:
         return "negative"
     # "fixed" is negation-only (Codex P1 on #335): bare "fixed" is too weak to
     # approve on its own, but "hasn't been fixed" must still classify negative.
-    positives = ["looks good", "no new issues", "addressed", "resolved", APPROVAL_REACTION]
+    positives = ["looks good", "no new issues", "addressed", "resolved"]
     negation_only_tokens = ["fixed"]
     any_positive = False
     any_negated_positive = False
     for token in positives + negation_only_tokens:
         # Single WORDS match on word boundaries: identifiers stay neutral
         # ('addressed_threads' contains neither an approval nor a rejection).
-        token_re = (
-            re.compile(rf"\b{re.escape(token)}\b")
-            if " " not in token and token != APPROVAL_REACTION
-            else None
-        )
+        token_re = re.compile(rf"\b{re.escape(token)}\b") if " " not in token else None
         start = 0
         while True:
             if token_re is not None:
