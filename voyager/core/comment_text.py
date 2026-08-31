@@ -12,9 +12,36 @@ from __future__ import annotations
 
 import re
 
-_FENCE_OPEN_RE = re.compile(r"^\s*(`{3,}|~{3,})")
+# A fence opener: optionally inside a list item (marker + indent — GFM keeps
+# fences as the first block of a list item, Codex P1 round 7).
+_FENCE_OPEN_RE = re.compile(r"^(?:[-*+] |[0-9]+[.)] )?\s{0,3}(?:\t ?)?(`{3,}|~{3,})")
 _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+_ATX_HEADING_RE = re.compile(r"^ {0,3}#{1,6}\s")
 _NEW_BLOCK_RE = re.compile(r"^(?:#{1,6}\s|[-*+]\s|\d+[.)]\s)")
+
+
+_INLINE_CODE_RE = re.compile(r"`[^`\n]+`")
+
+
+def _mask_inline_code(text: str) -> str:
+    """Replace inline code spans with same-length fillers."""
+    return _INLINE_CODE_RE.sub(lambda m: "\u0000" * len(m.group(0)), text)
+
+
+def _strip_terminated_html_comments(body: str) -> str:
+    """Remove <!-- ... --> regions while leaving inline-code spans intact."""
+    masked = _mask_inline_code(body)
+    out: list[str] = []
+    i = 0
+    while i < len(body):
+        if masked.startswith("<!--", i):
+            end = masked.find("-->", i + 4)
+            if end >= 0:
+                i = end + 3  # drop the whole terminated comment
+                continue
+        out.append(body[i])
+        i += 1
+    return "".join(out)
 
 
 def visible_comment_text(body: str | None) -> str:
@@ -33,10 +60,13 @@ def visible_comment_text(body: str | None) -> str:
     """
     if not body:
         return ""
-    body = _HTML_COMMENT_RE.sub("", body)
-    # Unterminated comment: everything after the opener is hidden (GFM).
-    if "<!--" in body:
-        body = body.split("<!--", 1)[0]
+    body = _strip_terminated_html_comments(body)
+    # Unterminated comment: everything after the opener is hidden (GFM) —
+    # but an opener inside an inline code span is literal text, not a
+    # comment start (Codex P2 round 7).
+    masked = _mask_inline_code(body)
+    if "<!--" in masked:
+        body = body[: masked.index("<!--")]
     visible: list[str] = []
     fence_marker = ""
     in_quote = False
@@ -96,7 +126,7 @@ def visible_comment_text(body: str | None) -> str:
                 else:
                     continue
             # a real heading exits the quote and falls through
-        if line.lstrip().startswith("#") and len(line) - len(line.lstrip()) <= 3:
+        if _ATX_HEADING_RE.match(line):
             # A heading is a block boundary: an indented line after it is an
             # indented code block (Codex P1 round 3). A deeper-indented '#'
             # line is indented code, not a heading (Codex P2 round 5 on #337).

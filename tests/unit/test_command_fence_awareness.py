@@ -147,3 +147,26 @@ def test_deep_indented_hash_is_indented_code_not_heading():
     # Document-start indented lines stay visible (standing parser contract),
     # and a deep-indented '#' does NOT arm the heading block-boundary rule.
     assert "/assembly" in visible_comment_text("    # note\n/assembly --dry-run")
+
+
+def test_fences_nested_in_list_items_are_stripped():
+    """Codex P1 round 7: a fenced sample as the first block of a list item
+    is a code block — documentation in lists cannot carry commands."""
+    body = "- ```bash\n  /assembly --dry-run\n  ```"
+    assert "/assembly" not in visible_comment_text(body)
+
+
+def test_html_opener_inside_inline_code_is_literal():
+    """Codex P2 round 7: a literal `<!--` in an inline code span does not
+    start a comment — the following command stays visible."""
+    body = "Literal `<!--` marker.\n/assembly --dry-run"
+    assert "/assembly" in visible_comment_text(body)
+    # A real unterminated comment still hides the rest.
+    assert "/assembly" not in visible_comment_text("<!-- hidden\n/assembly --dry-run")
+
+
+def test_malformed_hash_paragraph_does_not_arm_indented_code():
+    """Codex P2 round 7: '#tag' is paragraph text, not an ATX heading — the
+    indented continuation stays visible."""
+    assert "/assembly" in visible_comment_text("#tag\n    /assembly --dry-run")
+    assert "/assembly" not in visible_comment_text("## Usage\n    /assembly --dry-run")
