@@ -120,6 +120,17 @@ def _iter_html_tags(raw: str) -> Iterator[tuple[bool, str]]:
         i += 1
 
 
+def _is_container_only(fragment: str) -> bool:
+    """True when an inline-HTML fragment consists solely of container tags.
+
+    '<details>' / '</details>' drive the stack; mixed or formatting tags
+    ('<em>') are preserved as markup instead.
+    """
+    return all(
+        name.lower() in _HTML_CONTAINER_TAGS for _close, name in _iter_html_tags(fragment)
+    ) and bool(list(_iter_html_tags(fragment)))
+
+
 def _apply_container_tags(raw: str, stack: list[str]) -> None:
     """Apply an HTML fragment's container tags to an open-tag stack.
 
@@ -195,7 +206,13 @@ def visible_comment_text(body: str | None) -> str:
             visible_spans: list[str] = []
             for child in token.children:
                 if child.type == "html_inline":
-                    _apply_container_tags(child.content, html_containers)
+                    # Non-container inline HTML (<em>, <b>, …) is preserved
+                    # verbatim — dropping it could turn enclosed text into a
+                    # line-start command (P2 round 16).
+                    if _is_container_only(child.content):
+                        _apply_container_tags(child.content, html_containers)
+                        continue
+                    visible_spans.append(child.content)
                     continue
                 if html_containers:
                     continue  # inside a container: text is hidden
@@ -214,4 +231,27 @@ def visible_comment_text(body: str | None) -> str:
             if visible_spans:
                 parts.append("".join(visible_spans))
         # fences, code blocks, html blocks emit no inline tokens — dropped
-    return "\n".join(parts)
+    result = "\n".join(parts)
+    # P2 round 16: the parser resolves source escapes ('\\/assembly' becomes
+    # '/assembly' in text content). A reconstructed line only counts as a live
+    # command when the SOURCE body really contains that line-start command.
+    for line in result.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith(("/",)):
+            command = stripped.split()[0]
+            if command in _COMMAND_WORDS and not _source_has_live_command(body, command):
+                result = result.replace(line, f"\\{line}", 1)
+    return result
+
+
+_COMMAND_WORDS = ("/assembly", "/implement", "/stack", "/blueprint")
+
+
+def _source_has_live_command(body: str, command: str) -> bool:
+    """True when the raw source has a line whose first token IS the command
+    (not an escaped '\\/command')."""
+    for raw_line in body.splitlines():
+        stripped2 = raw_line.lstrip()
+        if stripped2.startswith(command) and not stripped2.startswith("\\" + command):
+            return True
+    return False
