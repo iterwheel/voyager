@@ -597,10 +597,11 @@ def test_duplicate_no_changes_preserves_existing_pr_progress_context(monkeypatch
     client = _mock_client_for_writes()
     client.find_pull_request_by_head = AsyncMock(
         side_effect=[
-            # #257: each dispatch now consumes one find_pull_request_by_head at
-            # issue-branch resolution time; the remaining entries feed the same
-            # consumers as before (ensure-PR in run 1, no-changes preserve in
-            # run 2 — whose resolution call also takes a None first).
+            # #257 + Codex P1 on #337: issue-branch resolution runs pre-lock
+            # AND inside the lock per dispatch (run 1: 2 misses + ensure-PR;
+            # run 2 no-changes: 2 misses + preserve lookup).
+            None,
+            None,
             None,
             None,
             None,
@@ -687,7 +688,11 @@ def test_resume_request_uses_compatible_stored_session(monkeypatch, tmp_path) ->
     client = _mock_client_for_writes()
     client.find_pull_request_by_head = AsyncMock(
         side_effect=[
-            # #257: dispatch-time issue-branch resolution consumes the first.
+            # #257: issue-branch resolution runs pre-lock AND inside the lock
+            # (Codex P1 on #337) — each dispatch can consume two entries.
+            _existing_same_repo_pr(number=1234, sha=previous_sha),
+            _existing_same_repo_pr(number=1234, sha=previous_sha),
+            _existing_same_repo_pr(number=1234, sha=previous_sha),
             _existing_same_repo_pr(number=1234, sha=previous_sha),
             _existing_same_repo_pr(number=1234, sha=previous_sha),
             _existing_same_repo_pr(number=1234, sha=previous_sha),
@@ -808,7 +813,11 @@ def test_resume_request_falls_back_when_stored_head_is_stale(monkeypatch) -> Non
     client = _mock_client_for_writes()
     client.find_pull_request_by_head = AsyncMock(
         side_effect=[
-            # #257: dispatch-time issue-branch resolution consumes the first.
+            # #257: issue-branch resolution runs pre-lock AND inside the lock
+            # (Codex P1 on #337) — each dispatch can consume two entries.
+            _existing_same_repo_pr(number=1234, sha="c" * 40),
+            _existing_same_repo_pr(number=1234, sha="c" * 40),
+            _existing_same_repo_pr(number=1234, sha="c" * 40),
             _existing_same_repo_pr(number=1234, sha="c" * 40),
             _existing_same_repo_pr(number=1234, sha="c" * 40),
             _existing_same_repo_pr(number=1234, sha="c" * 40),

@@ -41,10 +41,16 @@ def _pr(head_ref: str, number: int, body: str) -> dict[str, Any]:
     }
 
 
-def _client(*, direct: Any = None, search: list | None = None) -> Any:
+def _client(*, direct: Any = None, search: list | None = None, pr_head: str = "69-x") -> Any:
     client = AsyncMock()
     client.find_pull_request_by_head = AsyncMock(return_value=direct)
     client.find_open_prs_referencing_issue = AsyncMock(return_value=search or [])
+
+    async def _pull_request(_slug: str, _repo: str, number: int) -> dict[str, Any]:
+        # Search items are issue-shaped; the resolution fetches the PR detail.
+        return _pr(pr_head, number, "Closes #69")
+
+    client.pull_request = AsyncMock(side_effect=_pull_request)
     return client
 
 
@@ -57,7 +63,14 @@ async def test_title_edit_reuses_existing_branch_from_open_pr() -> None:
 
     client = _client(
         direct=None,  # no PR for the freshly computed (edited) branch
-        search=[_pr(original, 1234, f"Closes #69 via {original}")],
+        pr_head=original,
+        search=[
+            {  # issue-shaped search result: no head, PR URL only
+                "number": 1234,
+                "body": f"Closes #69 via {original}",
+                "pull_request": {"url": "https://api.example.com/o/r/pulls/1234"},
+            }
+        ],
     )
 
     resolved = await _existing_branch_for_issue(client, "o/r", 69, edited)
