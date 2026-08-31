@@ -316,7 +316,9 @@ def visible_comment_text(body: str | None) -> str:
             nl = span_text.find("\n", match.start())
             cmd_line = span_text[match.start() : nl if nl > 0 else len(span_text)].rstrip()
             flag_tokens = [
-                tok for tok in cmd_line.split()[1:] if tok.startswith("--") and tok in _KNOWN_FLAGS
+                tok
+                for tok in cmd_line.split()[1:]
+                if tok.startswith("--") and tok.lower() in _KNOWN_FLAGS
             ]
             # Verify the command word and each flag INDEPENDENTLY against this
             # occurrence's own source line (softbreak-position mapping) —
