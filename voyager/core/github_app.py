@@ -379,6 +379,7 @@ class GitHubAppClient:
                       body
                       url
                       createdAt
+                      lastEditedAt
                       replyTo { databaseId }
                     }
                   }

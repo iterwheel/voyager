@@ -147,6 +147,16 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     Then the thread verdict is "NEEDS_HUMAN_JUDGMENT"
     And no resolveReviewThread mutation was invoked
 
+  Scenario: Edited reply cannot ride a pre-edit head transition (issue #335 security P1)
+    Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with substantive author reply and isResolved false
+    And the recorded poll history shows an earlier head before the Codex review
+    And the latest author reply was edited at "2026-05-11T14:30:00Z"
+    And a fake investigator returning verdict "RESOLVED" confidence 0.99 reason "edited-in verdict adopted"
+    And the stub client returns a sample diff for "app.py"
+    When compute_clearance_automation runs with investigator and DRY_RUN false
+    Then the thread verdict is "NEEDS_HUMAN_JUDGMENT"
+    And no resolveReviewThread mutation was invoked
+
   Scenario: Investigator RESOLVED with a recorded head transition resolves (issue #254 corroboration)
     Given the stub PR "iterwheel/sandbox" #49 has 1 outdated Codex thread at path "app.py" line 10
     And the recorded poll history shows an earlier head before the Codex review

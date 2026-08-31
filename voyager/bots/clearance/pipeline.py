@@ -1285,16 +1285,24 @@ async def _process_thread(
             # Clearance's own writeback comments (close-reason markers,
             # conclusion replies) are bookkeeping, not claims — exclude them
             # from the claim boundary.
-            claim_created_at = max(
-                (
-                    str(c.get("createdAt") or "")
-                    for c in comments_for_claim
-                    if not logins_equivalent(
-                        str(((c.get("author") or {}).get("login")) or ""), CLEARANCE_BOT_LOGIN
-                    )
-                ),
-                default="",
-            )
+            # Issue #335 (security P1): a reply EDITED after a recorded head
+            # transition keeps its original createdAt, so pre-transition text
+            # could be swapped for investigator-influencing content while the
+            # cutoff stays pre-transition. The boundary is the LATEST of
+            # createdAt and lastEditedAt per comment (fail closed when an
+            # edit time is present but unreadable).
+            claim_stamps: list[str] = []
+            for c in comments_for_claim:
+                if logins_equivalent(
+                    str(((c.get("author") or {}).get("login")) or ""), CLEARANCE_BOT_LOGIN
+                ):
+                    continue
+                created = str(c.get("createdAt") or "")
+                edited = str(c.get("lastEditedAt") or "") or str(c.get("updatedAt") or "")
+                if created and edited and edited < created:
+                    edited = created  # server inconsistency — fail toward created
+                claim_stamps.append(max(created, edited))
+            claim_created_at = max(claim_stamps, default="")
             if coerced == Verdict.RESOLVED and not _head_sha_advanced_after_thread(
                 store, repo, pr, head_sha, claim_created_at
             ):

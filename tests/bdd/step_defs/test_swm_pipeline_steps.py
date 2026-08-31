@@ -2206,6 +2206,16 @@ def given_fork_pr(ctx, head_repo: str) -> None:
     # base repo stays as iterwheel/sandbox (the default)
 
 
+@given(parsers.parse('the latest author reply was edited at "{edited_at}"'))
+def given_reply_edited(ctx, edited_at: str) -> None:
+    """Issue #335 security P1: an edited reply keeps createdAt but carries
+    lastEditedAt — the corroboration boundary must use the edit time."""
+    comments = ctx["client"].threads[0].get("comments", {}).get("nodes", [])
+    for c in comments:
+        if c.get("author", {}).get("login") == "ryosaeba1985":
+            c["lastEditedAt"] = edited_at
+
+
 @given("the stub PR head repository is deleted (head.repo is null)")
 def given_fork_head_repo_deleted(ctx) -> None:
     """Issue #267: PR from a deleted/renamed fork — REST head.repo is null."""
