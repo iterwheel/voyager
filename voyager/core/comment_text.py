@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 
 _FENCE_OPEN_RE = re.compile(r"^\s*(`{3,}|~{3,})")
+_NEW_BLOCK_RE = re.compile(r"^(?:#{1,6}\s|[-*+]\s|\d+[.)]\s)")
 
 
 def visible_comment_text(body: str | None) -> str:
@@ -38,14 +39,16 @@ def visible_comment_text(body: str | None) -> str:
     awaiting_code_block = False  # set on blank line; cleared by prose
     for line in body.splitlines():
         if fence_marker:
-            # Inside a fence: only a BARE closing marker of the same character
-            # and at least the same length ends it — no info string allowed.
+            # Inside a fence: only a BARE closing marker of the same character,
+            # at least the same length, indented at most three spaces (GFM),
+            # ends it — no info string allowed.
             close = _FENCE_OPEN_RE.match(line)
             if (
                 close
                 and close.group(1)[0] == fence_marker[0]
                 and len(close.group(1)) >= len(fence_marker)
                 and line.strip() == close.group(1)
+                and len(line) - len(line.lstrip()) <= 3
             ):
                 fence_marker = ""
             continue
@@ -67,8 +70,13 @@ def visible_comment_text(body: str | None) -> str:
             in_indented_code = False
             continue
         if in_quote:
-            # Lazy continuation of the preceding block quote.
-            continue
+            # Lazy continuation only applies to paragraph text: a line that
+            # starts a new block construct (heading, list, fence) after the
+            # quote is its own content and stays visible (Codex P1 round 2).
+            if _NEW_BLOCK_RE.match(line) or _FENCE_OPEN_RE.match(line):
+                in_quote = False
+            else:
+                continue
         if line.startswith("    ") or line.startswith("\t"):
             # Indented code block — but only when a blank line separates it
             # from preceding prose (GFM). A document-start indented command or
