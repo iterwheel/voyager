@@ -361,6 +361,7 @@ class GitHubAppClient:
                   id
                   isResolved
                   isOutdated
+                  originalCommit { oid }
                   viewerCanResolve
                   viewerCanReply
                   path

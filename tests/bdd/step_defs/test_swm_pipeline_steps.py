@@ -470,9 +470,13 @@ def _fresh_codex_thread(
     *,
     thread_id: str = THREAD_ID,
     path: str = "app.py",
+    original_commit: str | None = None,
 ) -> dict[str, Any]:
-    """A State A (not outdated, no replies) Codex thread."""
-    return {
+    """A State A (not outdated, no replies) Codex thread.
+
+    ``original_commit`` anchors the finding to the head it was reviewed on
+    (final ruling on #335: staleness is a SHA comparison, never a clock)."""
+    thread = {
         "id": thread_id,
         "isResolved": False,
         "isOutdated": False,
@@ -491,6 +495,9 @@ def _fresh_codex_thread(
             ]
         },
     }
+    if original_commit is not None:
+        thread["originalCommit"] = {"oid": original_commit}
+    return thread
 
 
 # Minimal unified diff that contains app.py at line 10. Used by 7B-3 investigator
@@ -692,7 +699,7 @@ def given_poll_history_no_head_change(ctx) -> None:
     ctx["store"] = StateStore(_fresh_state_dir())
     ctx["store"].append_poll(
         PollRecord(
-            ts=_datetime(2026, 5, 11, 11, 0, 0, tzinfo=_UTC),
+            ts=_datetime(2026, 5, 11, 12, 45, 0, tzinfo=_UTC),
             repo=REPO,
             pr=PR,
             head_sha="head-sha-abc1234",
@@ -2183,56 +2190,27 @@ def given_backdated_commit_date(ctx, date: str) -> None:
 
 @given("the PR was pushed after the Codex review")
 def given_pr_pushed_after_codex(ctx) -> None:
-    """Voyager FIRST observed the current head AFTER the finding (12:00).
+    """The finding was reviewed on an OLDER head than the current PR head.
 
-    Scope ruling on #335: staleness sources from the poll ledger's first
-    observation of the current head (timestamp-integrity family).
+    Final ruling on #335: staleness is a SHA comparison (the thread's
+    originalCommit vs the current head) — clocks are logging-only, so this
+    fixture anchors the thread and needs no ledger records.
     """
-    from datetime import UTC as _UTC
-    from datetime import datetime as _datetime
-
-    from voyager.bots.clearance.models import PollRecord, Status
-
     ctx["client"].head_updated_at = "2026-05-12T00:00:00Z"
-    # A real transition: an older DIFFERENT head, then the current head.
-    ctx["store"].append_poll(
-        PollRecord(
-            ts=_datetime(2026, 5, 11, 8, 0, 0, tzinfo=_UTC),
-            repo=REPO,
-            pr=PR,
-            head_sha="old-sha-0000000000000000000000000000000000000000",
-            status=Status.BLOCKED,
-        )
-    )
-    ctx["store"].append_poll(
-        PollRecord(
-            ts=_datetime(2026, 5, 12, 0, 0, 0, tzinfo=_UTC),
-            repo=REPO,
-            pr=PR,
-            head_sha="head-sha-abc1234",
-            status=Status.BLOCKED,
-        )
-    )
+    old = {"oid": "old-sha-0000000000000000000000000000000000000000"}
+    for thread in ctx["client"].threads or []:
+        if thread is not None:
+            thread["originalCommit"] = old
 
 
 @given("the PR was not pushed after the Codex review")
 def given_pr_not_pushed_after_codex(ctx) -> None:
-    """Voyager first observed the current head BEFORE the finding (12:00)."""
-    from datetime import UTC as _UTC
-    from datetime import datetime as _datetime
-
-    from voyager.bots.clearance.models import PollRecord, Status
-
+    """The finding was reviewed on the CURRENT head (fresh — not stale)."""
     ctx["client"].head_updated_at = "2026-05-10T00:00:00Z"
-    ctx["store"].append_poll(
-        PollRecord(
-            ts=_datetime(2026, 5, 10, 0, 0, 0, tzinfo=_UTC),
-            repo=REPO,
-            pr=PR,
-            head_sha="head-sha-abc1234",
-            status=Status.BLOCKED,
-        )
-    )
+    head = {"oid": ctx["client"].pr_payload["head"]["sha"]}
+    for thread in ctx["client"].threads or []:
+        if thread is not None:
+            thread["originalCommit"] = head
 
 
 # Issue #62: fork PR head-repo accessibility (UnsupportedContext)

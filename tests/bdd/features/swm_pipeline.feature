@@ -613,6 +613,7 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
   Scenario: Backdated committer date cannot mask staleness (issue #335 ruling)
     Given the stub PR "iterwheel/sandbox" #49 has 1 fresh Codex thread (State A) at path "app.py"
     And the PR was pushed after the Codex review
+    And the recorded poll history shows an earlier head before the Codex review
     And the stub client records a backdated head commit date "2026-05-01T00:00:00Z"
     And a fake investigator returning verdict "RESOLVED" confidence 0.92 reason "diff confirms the null-guard was added" for each thread
     When compute_clearance_automation runs with DRY_RUN false

@@ -980,7 +980,6 @@ async def _process_thread(
     get_diff: Callable[[], Awaitable[str]] | None = None,
     failures: list[tuple[str, str]] | None = None,
     profile_name: str | None = None,
-    pr_pushed_at: str | None = None,
     current_head_updated_at: str | None = None,
     store: Any | None = None,
     known_limitation_store: KnownLimitationStore | None = None,
@@ -1202,17 +1201,17 @@ async def _process_thread(
     path = thread_dict.get("path") or "unknown"
     line = thread_dict.get("line")
 
-    # Issue #63: State A threads where the Codex comment predates the most
-    # recent push may have been addressed in a newer commit, even though
-    # GitHub didn't mark the thread outdated.  Compare the first comment's
-    # createdAt against pr_pushed_at to determine staleness.
+    # Issue #63 + final ruling on #335: a State-A thread is STALE iff the
+    # head it was REVIEWED ON (the thread's originalCommit) is not the
+    # current PR head — a SHA comparison with no timestamps at all. Clocks
+    # (created/edited/observed) are logging-only; observation lag can no
+    # longer invert the order, and no author-controlled or observed time
+    # feeds this decision. Unknown reviewed SHA (field absent) fails safe:
+    # not stale.
     codex_review_stale = False
-    if state == ThreadState.A and pr_pushed_at:
-        comments = _comment_nodes(thread_dict)
-        codex_created = (comments[0].get("createdAt") if comments else None) or ""
-        # ISO-8601 timestamps are lexicographically comparable when in the
-        # same timezone (GitHub always emits UTC with trailing 'Z').
-        codex_review_stale = bool(codex_created and codex_created < pr_pushed_at)
+    if state == ThreadState.A:
+        reviewed_sha = str(((thread_dict.get("originalCommit") or {}).get("oid")) or "")
+        codex_review_stale = bool(reviewed_sha and head_sha and reviewed_sha != head_sha)
 
     # AUGMENT invariant: gate skips when judge() already returned RESOLVED.
     # Together with `state == ThreadState.B` this preserves *every* deterministic
@@ -2387,46 +2386,6 @@ async def _compute_clearance_automation_unlocked(
     # (GIT_COMMITTER_DATE is attacker-controllable; a force-push to a
     # backdated commit would fake staleness or mask it). First run with no
     # recorded observation fails safe (stale routing does not fire).
-    pr_pushed_at: str | None = None
-    if head_sha and store is not None:
-        try:
-            # The staleness time is the LATEST transition into the current
-            # head: the first ledger record of the current head that follows
-            # a DIFFERENT observed SHA. Re-observing the same SHA later does
-            # not advance it (revert-to-A uses A's latest entry point), and
-            # the very first observed SHA of a PR is not a transition at all
-            # (Voyager starting to poll late must not fabricate staleness).
-            # Walk the append-only ledger and keep the timestamp of the
-            # ENTRY into the current CONTIGUOUS head run — the first
-            # current-head record that follows a different SHA. Later
-            # unchanged polls of the same head do NOT advance it, and a
-            # head that was never preceded by a different SHA is not a
-            # transition at all.
-            saw_other = False
-            for record in store.read_polls(repository, pr_number):
-                ts = (
-                    record.ts.isoformat().replace("+00:00", "Z")
-                    if hasattr(record.ts, "isoformat")
-                    else str(record.ts)
-                )
-                if record.head_sha == head_sha:
-                    if saw_other and pr_pushed_at is None:
-                        pr_pushed_at = ts  # entry into the contiguous run
-                else:
-                    saw_other = True
-                    pr_pushed_at = None  # a later different SHA resets the run
-        except Exception as exc:
-            safe = _safe_exception_fields(exc)
-            _log.warning(
-                "poll-history staleness read failed for %s#%s head=%s "
-                "(stale-thread routing fails safe / off): class=%s status=%s",
-                repository,
-                pr_number,
-                head_sha,
-                safe["error_class"],
-                safe["status"],
-            )
-            pr_pushed_at = None
     # Issue #62: detect fork PRs. The REST API always includes head.repo.full_name
     # and base.repo.full_name; when they differ the PR is from a fork.
     head_obj = pr_data.get("head") or {}
@@ -2493,7 +2452,6 @@ async def _compute_clearance_automation_unlocked(
             get_diff=get_diff,
             failures=investigator_failures,
             profile_name=default_profile_name,
-            pr_pushed_at=pr_pushed_at,
             current_head_updated_at=current_head_updated_at,
             store=store,
             known_limitation_store=known_limitation_store,
