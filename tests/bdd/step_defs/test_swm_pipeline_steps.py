@@ -719,6 +719,17 @@ def given_poll_history_head_change(ctx) -> None:
             status=Status.BLOCKED,
         )
     )
+    # Post-finding poll on the CURRENT head — the recorded transition that
+    # FOLLOWS the finding (thread comments sit at 2026-05-11T12:00/12:30).
+    ctx["store"].append_poll(
+        PollRecord(
+            ts=_datetime(2026, 5, 11, 12, 45, 0, tzinfo=_UTC),
+            repo=REPO,
+            pr=PR,
+            head_sha="head-sha-abc1234",
+            status=Status.BLOCKED,
+        )
+    )
 
 
 @given("the stub PR has 1 Codex thread with an injection-style author reply and isResolved false")

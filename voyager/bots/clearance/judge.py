@@ -105,8 +105,9 @@ def codex_followup_reaction(followup_body: str | None) -> str | None:
 _NEGATOR_RE = re.compile(
     r"\b(?:"
     r"not|never|no|"
-    r"isn'?t|aren'?t|wasn'?t|weren'?t|won'?t|don'?t|doesn'?t|didn'?t|"
-    r"hasn'?t|haven'?t|can'?t|cannot|cant|dont|doesnt|didnt|hasnt|havent|"
+    r"isn['\u2019]?t|aren['\u2019]?t|wasn['\u2019]?t|weren['\u2019]?t|won['\u2019]?t|"
+    r"don['\u2019]?t|doesn['\u2019]?t|didn['\u2019]?t|hasn['\u2019]?t|haven['\u2019]?t|"
+    r"can['\u2019]?t|cannot|cant|dont|doesnt|didnt|hasnt|havent|"
     r"remains?|still|yet|without|lack(?:s|ing|ed)?|missing"
     r")\b"
 )

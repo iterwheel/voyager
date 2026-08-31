@@ -280,7 +280,7 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
   Scenario: Pipeline appends a PollRecord per webhook trigger
     Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with substantive author reply and isResolved false
     When compute_clearance_automation runs with DRY_RUN true
-    Then the store has 2 poll for "iterwheel/sandbox" PR 49
+    Then the store has 3 poll for "iterwheel/sandbox" PR 49
     And the latest poll status is "ready"
 
   Scenario: Pipeline persists one ThreadSnapshot per Codex thread

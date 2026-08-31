@@ -715,16 +715,29 @@ def _head_sha_advanced_after_thread(
     """
     if not finding_created_at or not current_head_sha or store is None:
         return False
-    saw_pre_finding_head = False
     try:
+        latest_pre_finding_sha: str | None = None
+        latest_pre_finding_ts = ""
+        post_finding_change = False
         for record in store.read_polls(repo, pr):
             ts = (
                 record.ts.isoformat().replace("+00:00", "Z")
                 if hasattr(record.ts, "isoformat")
                 else str(record.ts)
             )
-            if ts <= finding_created_at and record.head_sha and record.head_sha != current_head_sha:
-                saw_pre_finding_head = True
+            if not record.head_sha:
+                continue
+            if ts <= finding_created_at:
+                # Latest poll at/before the finding is the reviewed baseline.
+                if ts >= latest_pre_finding_ts:
+                    latest_pre_finding_ts = ts
+                    latest_pre_finding_sha = record.head_sha
+            elif latest_pre_finding_sha is not None and record.head_sha != latest_pre_finding_sha:
+                # A RECORDED post-finding poll on a different head — the
+                # transition follows the finding (Codex P1: motion between two
+                # pre-finding polls must not corroborate).
+                post_finding_change = True
+        return bool(latest_pre_finding_sha and post_finding_change)
     except Exception:
         _log.warning(
             "corroboration poll-history read failed for %s#%s; failing closed",
@@ -733,7 +746,6 @@ def _head_sha_advanced_after_thread(
             exc_info=True,
         )
         return False
-    return saw_pre_finding_head
 
 
 def _issue_comment_created_at(comment: dict[str, Any]) -> str:
