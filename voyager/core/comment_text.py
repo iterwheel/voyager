@@ -95,6 +95,13 @@ def _iter_html_tags(raw: str) -> Iterator[tuple[bool, str]]:
             end = raw.find("]]>", i + 9)
             i = n if end < 0 else end + 3
             continue
+        # Raw-text elements: everything until the matching close tag is text,
+        # not markup — a tag-shaped string inside <script> never counts.
+        rt = re.match(r"<(script|style|textarea|title)\b", raw[i:], re.I)
+        if rt:
+            close = re.compile(rf"</{rt.group(1)}\s*>", re.I).search(raw, i)
+            i = n if not close else close.end()
+            continue
         if raw[i] == "<":
             j = i + 1
             is_close = j < n and raw[j] == "/"
@@ -246,6 +253,16 @@ def visible_comment_text(body: str | None) -> str:
             command = stripped.split()[0].lower()
             if command in _COMMAND_WORDS and not _source_has_live_line(body, stripped):
                 result = result.replace(line, f"\\{line}", 1)
+                continue
+        # Substring triggers (/stack, /blueprint) mid-line: an escape-resolved
+        # token must not reach the substring matchers either — re-escape any
+        # command token whose escaped spelling appears in the source.
+        for word in _COMMAND_WORDS:
+            token = word.lstrip("/")
+            if re.search(rf"(?<![\w`/]){word}\b", line) and (
+                f"\\{word}" in body or f"\\/{token}" in body
+            ):
+                result = result.replace(line, line.replace(word, f"\\{word}"), 1)
     return result
 
 
