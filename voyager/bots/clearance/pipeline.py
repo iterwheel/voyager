@@ -2396,6 +2396,12 @@ async def _compute_clearance_automation_unlocked(
             # not advance it (revert-to-A uses A's latest entry point), and
             # the very first observed SHA of a PR is not a transition at all
             # (Voyager starting to poll late must not fabricate staleness).
+            # Walk the append-only ledger and keep the timestamp of the
+            # ENTRY into the current CONTIGUOUS head run — the first
+            # current-head record that follows a different SHA. Later
+            # unchanged polls of the same head do NOT advance it, and a
+            # head that was never preceded by a different SHA is not a
+            # transition at all.
             saw_other = False
             for record in store.read_polls(repository, pr_number):
                 ts = (
@@ -2404,14 +2410,11 @@ async def _compute_clearance_automation_unlocked(
                     else str(record.ts)
                 )
                 if record.head_sha == head_sha:
-                    if saw_other:
-                        pr_pushed_at = ts  # keep the LATEST transition entry
-                    # else: first-ever observation of this head — not a
-                    # transition; keep scanning (an older different SHA may
-                    # still follow... ledger is append-order, so nothing
-                    # earlier exists once we saw this SHA first).
+                    if saw_other and pr_pushed_at is None:
+                        pr_pushed_at = ts  # entry into the contiguous run
                 else:
                     saw_other = True
+                    pr_pushed_at = None  # a later different SHA resets the run
         except Exception as exc:
             safe = _safe_exception_fields(exc)
             _log.warning(
