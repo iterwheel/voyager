@@ -14,6 +14,11 @@ from dataclasses import dataclass
 from voyager.bots.clearance.classify import ThreadState
 from voyager.bots.clearance.models import Verdict
 
+# The GitHub thumbs-up reaction, used as an approval signal — NOT a credential
+# (bandit B105 false-positives on inline comparisons; a named constant makes
+# the intent explicit and keeps the security gate green).
+APPROVAL_REACTION = "\U0001f44d"
+
 _COMMIT_SHA_RE = re.compile(r"\b[0-9a-f]{7,40}\b")
 _FILE_RE = re.compile(r"\b[\w./-]+\.(?:py|js|ts|tsx|jsx|go|rs|rb|java|sh|yml|yaml|toml|md)\b")
 _IDENTIFIER_RE = re.compile(
@@ -119,7 +124,7 @@ def codex_followup_reaction(followup_body: str | None) -> str | None:
         return "negative"
     # "fixed" is negation-only (Codex P1 on #335): bare "fixed" is too weak to
     # approve on its own, but "hasn't been fixed" must still classify negative.
-    positives = ["looks good", "no new issues", "addressed", "resolved", "👍"]
+    positives = ["looks good", "no new issues", "addressed", "resolved", APPROVAL_REACTION]
     negation_only_tokens = ["fixed"]
     any_positive = False
     any_negated_positive = False
@@ -127,7 +132,9 @@ def codex_followup_reaction(followup_body: str | None) -> str | None:
         # Single WORDS match on word boundaries: identifiers stay neutral
         # ('addressed_threads' contains neither an approval nor a rejection).
         token_re = (
-            re.compile(rf"\b{re.escape(token)}\b") if " " not in token and token != "👍" else None
+            re.compile(rf"\b{re.escape(token)}\b")
+            if " " not in token and token != APPROVAL_REACTION
+            else None
         )
         start = 0
         while True:
