@@ -68,6 +68,12 @@ _HTML_CONTAINER_TAGS = frozenset(
         "template",
     }
 )
+# Elements whose end tag may be implied (unclosed <li>/<p>/<td>/... are closed
+# by their parent's closer, as browsers do).
+_IMPLIED_END_TAGS = frozenset(
+    {"li", "p", "td", "th", "tr", "dt", "dd", "option", "thead", "tbody", "tfoot", "summary"}
+)
+
 _HTML_COMMENT_BLOCK_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 
 
@@ -127,8 +133,16 @@ def _apply_container_tags(raw: str, stack: list[str]) -> None:
         if tag not in _HTML_CONTAINER_TAGS:
             continue
         if is_close:
-            if stack and stack[-1] == tag:
-                stack.pop()
+            # A closer pops its OWN open tag; any unclosed IMPLIED-end
+            # elements above it ('<ul><li>x</ul>') are implicitly closed
+            # first, exactly as browsers do.
+            if tag in stack:
+                while stack and stack[-1] != tag:
+                    if stack[-1] not in _IMPLIED_END_TAGS:
+                        break  # mismatched non-optional inner: ignore closer
+                    stack.pop()
+                if stack and stack[-1] == tag:
+                    stack.pop()
         else:
             stack.append(tag)
 
@@ -143,7 +157,6 @@ def visible_comment_text(body: str | None) -> str:
     if not body:
         return ""
     parts: list[str] = []
-    paragraph: list[str] = []
     depth = 0
     in_heading = False
     html_containers: list[str] = []  # open containers; matched closers pop
@@ -165,13 +178,7 @@ def visible_comment_text(body: str | None) -> str:
             depth += 1
         elif token.type in _CONTAINER_CLOSE:
             depth -= 1
-        elif (
-            token.type == "inline"
-            and depth == 1
-            and token.children
-            and not in_heading
-            and not html_containers
-        ):
+        elif token.type == "inline" and depth == 1 and token.children and not in_heading:
             # An inline token follows its paragraph_open/heading_open; it is
             # top-level prose only when the enclosing depth is exactly the
             # block's own level (1). Heading content is NOT a command surface
@@ -180,17 +187,31 @@ def visible_comment_text(body: str | None) -> str:
             # Inline container tags inside the paragraph ('intro <details>…')
             # hide GitHub-rendered content: drop such paragraphs entirely
             # (P1 round 13) — their text is inside the HTML construct.
+            # Walk children IN ORDER (P1/P2 round 15): inline tags are
+            # always applied to the stack; text is emitted only while the
+            # stack is empty; emphasis markers are preserved so formatted
+            # documentation ('**/assembly**') never becomes a line-start
+            # command.
+            visible_spans: list[str] = []
             for child in token.children:
                 if child.type == "html_inline":
                     _apply_container_tags(child.content, html_containers)
-            if html_containers:
-                continue
-            paragraph = []
-            for child in token.children:
+                    continue
+                if html_containers:
+                    continue  # inside a container: text is hidden
                 if child.type in ("softbreak", "hardbreak"):
-                    paragraph.append("\n")
-                elif child.type in ("text", "code_inline"):
-                    paragraph.append(child.content)
-            parts.append("".join(paragraph))
+                    visible_spans.append("\n")
+                elif child.type == "text":
+                    visible_spans.append(child.content)
+                elif child.type == "code_inline":
+                    visible_spans.append(f"`{child.content}`")
+                elif child.type in ("em_open", "em_close", "strong_open", "strong_close"):
+                    visible_spans.append(child.markup or "**")
+                elif child.type == "link_open":
+                    visible_spans.append("[")
+                elif child.type == "link_close":
+                    visible_spans.append("](")
+            if visible_spans:
+                parts.append("".join(visible_spans))
         # fences, code blocks, html blocks emit no inline tokens — dropped
     return "\n".join(parts)
