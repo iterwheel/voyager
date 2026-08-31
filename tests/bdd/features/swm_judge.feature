@@ -197,6 +197,21 @@ Feature: SWM judge — verdict assignment per SWM-1101 decision tree
     When codex_followup_reaction is called
     Then the followup reaction is "negative"
 
+  Scenario: Trailing rejection clause is negative (Codex round 6)
+    Given a Codex follow-up body "No new issues were introduced, but the original race persists."
+    When codex_followup_reaction is called
+    Then the followup reaction is "negative"
+
+  Scenario: Still-occurs phrasing is negative (Codex round 6)
+    Given a Codex follow-up body "The race still occurs at HEAD."
+    When codex_followup_reaction is called
+    Then the followup reaction is "negative"
+
+  Scenario: Plain no-new-issues approval stays positive
+    Given a Codex follow-up body "No new issues. Nice work!"
+    When codex_followup_reaction is called
+    Then the followup reaction is "positive"
+
   Scenario: Empty Codex follow-up returns None
     Given a None Codex follow-up body
     When codex_followup_reaction is called

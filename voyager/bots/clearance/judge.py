@@ -74,6 +74,18 @@ def codex_followup_reaction(followup_body: str | None) -> str | None:
             "unaddressed",
             "unresolved",
             "unfixed",
+            "persists",
+            "persist.",
+            "still present",
+            "still occurs",
+            "still happens",
+            "still broken",
+            "still fails",
+            "still failing",
+            "still missing",
+            "still open",
+            "regressed",
+            "regression remains",
             "👎",
         ]
     ):
