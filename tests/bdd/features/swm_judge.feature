@@ -55,10 +55,15 @@ Feature: SWM judge — verdict assignment per SWM-1101 decision tree
   # Codex follow-up overrides
   # ---------------------------------------------------------------------------
 
-  Scenario: Positive Codex follow-up overrides non-substantive reply to RESOLVED
-    Given a state C thread with a short reply and a positive Codex follow-up
+  Scenario: Formal clean-verdict follow-up overrides non-substantive reply to RESOLVED
+    Given a state C thread with a short reply and a formal clean-verdict follow-up
     When the thread is judged
     Then the verdict is "RESOLVED"
+
+  Scenario: Approval-sounding prose no longer auto-resolves (final contract)
+    Given a state C thread with a short reply and a positive Codex follow-up
+    When the thread is judged
+    Then the verdict is "OPEN"
 
   Scenario: Negative Codex follow-up overrides substantive reply to OPEN
     Given a state C thread with a substantive reply and a negative Codex follow-up
@@ -106,7 +111,7 @@ Feature: SWM judge — verdict assignment per SWM-1101 decision tree
   Scenario: "Looks good" in Codex follow-up is positive
     Given a Codex follow-up body "Looks good, no new issues."
     When codex_followup_reaction is called
-    Then the followup reaction is "positive"
+    Then the followup reaction is None
 
   Scenario: "Concern remains" in Codex follow-up is negative
     Given a Codex follow-up body "Concern remains: migration path still missing."
@@ -148,7 +153,7 @@ Feature: SWM judge — verdict assignment per SWM-1101 decision tree
   Scenario: unnegated positive still classifies positive (issue #249)
     Given a Codex follow-up body "Addressed in commit abc1234, the guard is in place."
     When codex_followup_reaction is called
-    Then the followup reaction is "positive"
+    Then the followup reaction is None
 
   Scenario: Sentiment-free follow-up returns None (issue #249)
     Given a Codex follow-up body "I re-ran the analysis on the current head."
@@ -165,7 +170,7 @@ Feature: SWM judge — verdict assignment per SWM-1101 decision tree
   Scenario: Bare "no further action" after a positive stays positive
     Given a Codex follow-up body "The leak is addressed. No further action needed."
     When codex_followup_reaction is called
-    Then the followup reaction is "positive"
+    Then the followup reaction is None
 
   Scenario: Negative pronoun "none" negates a positive
     Given a Codex follow-up body "None of the findings were addressed by this patch."
@@ -190,7 +195,7 @@ Feature: SWM judge — verdict assignment per SWM-1101 decision tree
   Scenario: Distant "no new issues" before a positive stays positive
     Given a Codex follow-up body "no new issues introduced, looks good"
     When codex_followup_reaction is called
-    Then the followup reaction is "positive"
+    Then the followup reaction is None
 
   Scenario: Close "no" before a token negates it
     Given a Codex follow-up body "no issues were addressed here"
@@ -210,7 +215,7 @@ Feature: SWM judge — verdict assignment per SWM-1101 decision tree
   Scenario: Plain no-new-issues approval stays positive
     Given a Codex follow-up body "No new issues. Nice work!"
     When codex_followup_reaction is called
-    Then the followup reaction is "positive"
+    Then the followup reaction is None
 
   Scenario: Partial-resolution qualifiers are negative (Codex round 9)
     Given a Codex follow-up body "The concern is only partially addressed by this patch"
@@ -225,12 +230,12 @@ Feature: SWM judge — verdict assignment per SWM-1101 decision tree
   Scenario: Still-looks-good approval stays positive (Codex round 10)
     Given a Codex follow-up body "This still looks good after retesting."
     When codex_followup_reaction is called
-    Then the followup reaction is "positive"
+    Then the followup reaction is None
 
   Scenario: Negator in a completed sentence does not negate later positives
     Given a Codex follow-up body "This isn't a regression. The concern is resolved."
     When codex_followup_reaction is called
-    Then the followup reaction is "positive"
+    Then the followup reaction is None
 
   Scenario: Adversative clause after a token negates it (Codex round 11)
     Given a Codex follow-up body "The symptom is addressed, but not the root cause."
@@ -260,12 +265,12 @@ Feature: SWM judge — verdict assignment per SWM-1101 decision tree
   Scenario: Negated regression is an approval (Codex round 14)
     Given a Codex follow-up body "This has not regressed. The concern is resolved."
     When codex_followup_reaction is called
-    Then the followup reaction is "positive"
+    Then the followup reaction is None
 
   Scenario: No-regression-introduced stays positive (Codex round 14)
     Given a Codex follow-up body "No regression introduced, looks good"
     When codex_followup_reaction is called
-    Then the followup reaction is "positive"
+    Then the followup reaction is None
 
   Scenario: Present-tense regression verb is a rejection (Codex round 15)
     Given a Codex follow-up body "The concern is resolved, but this regresses error handling."
@@ -275,7 +280,7 @@ Feature: SWM judge — verdict assignment per SWM-1101 decision tree
   Scenario: After-token scan stops at sentence boundaries (Codex round 15)
     Given a Codex follow-up body "The concern is resolved. It is not a regression."
     When codex_followup_reaction is called
-    Then the followup reaction is "positive"
+    Then the followup reaction is None
 
   Scenario: Mixed negated and affirmative regressions reject (Codex round 15)
     Given a Codex follow-up body "This has not regressed on Linux. The concern is resolved, but the Windows path regressed."
@@ -285,17 +290,17 @@ Feature: SWM judge — verdict assignment per SWM-1101 decision tree
   Scenario: Fixing or preventing a regression is approval (Codex round 16)
     Given a Codex follow-up body "This fixes the regression and looks good"
     When codex_followup_reaction is called
-    Then the followup reaction is "positive"
+    Then the followup reaction is None
 
   Scenario: Preventing a regression is approval (Codex round 16)
     Given a Codex follow-up body "This prevents a regression and looks good"
     When codex_followup_reaction is called
-    Then the followup reaction is "positive"
+    Then the followup reaction is None
 
   Scenario: Referencing a regression test is approval (Codex round 16)
     Given a Codex follow-up body "The regression test covers it, looks good"
     When codex_followup_reaction is called
-    Then the followup reaction is "positive"
+    Then the followup reaction is None
 
   Scenario: Missing regression-test coverage is a rejection (Codex round 17)
     Given a Codex follow-up body "The implementation is addressed, but no regression test covers it."
@@ -305,7 +310,7 @@ Feature: SWM judge — verdict assignment per SWM-1101 decision tree
   Scenario: Regression coverage added is approval (Codex round 19)
     Given a Codex follow-up body "Regression coverage was added, looks good"
     When codex_followup_reaction is called
-    Then the followup reaction is "positive"
+    Then the followup reaction is None
 
   Scenario: Still-incorrect behavior rejects (Codex round 19)
     Given a Codex follow-up body "The concern is addressed, but the behavior is still incorrect."
@@ -315,7 +320,7 @@ Feature: SWM judge — verdict assignment per SWM-1101 decision tree
   Scenario: Negative words inside identifiers stay neutral (Codex round 19)
     Given a Codex follow-up body "The `unresolved_threads` list is now empty; looks good."
     When codex_followup_reaction is called
-    Then the followup reaction is "positive"
+    Then the followup reaction is None
 
   Scenario: Empty Codex follow-up returns None
     Given a None Codex follow-up body

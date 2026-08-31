@@ -62,67 +62,87 @@ def is_substantive_reply(body: str | None) -> bool:
 
 # Decisive approval phrases (precedence 1). "addressed"/"resolved"/"fixed"
 # are NOT here — they are weaker tokens analyzed at precedence 3.
-_APPROVAL_PHRASES = ("looks good", "no new issues", "nice work", "lgtm")
 # Concessive still-occurrence: "the race can still occur" — outranks approval
 # words because the reviewer explicitly says the failure mode remains.
+# Formal Codex verdict comment ("Codex Review: Didn't find any major issues").
+# Prefix-anchored whole-remainder match — the same family the pipeline's
+# clean-signal path accepts, matched here as the FULL verdict form.
+_CLEAN_VERDICTS = (
+    "didn't find any major issues",
+    "did not find any major issues",
+    "no major issues found",
+    "found no major issues",
+    "no major issues found in this pr",
+)
+_CLEAN_VERDICT_SUFFIXES = ("", ". nice work", "! nice work", "nice work")
+
+
+def _normalized_verdict_body(body: str) -> str:
+    cleaned = body.split("<details", 1)[0]
+    return " ".join(cleaned.split()).replace("\u2019", "'").lower()
+
+
+def _formal_clean_verdict(body: str) -> bool:
+    """True only when the body IS a formal clean-verdict comment."""
+    from .constants import CODEX_REVIEW_RESULT_PREFIX
+
+    normalized = _normalized_verdict_body(body)
+    prefix = CODEX_REVIEW_RESULT_PREFIX.lower()
+    if not normalized.startswith(prefix):
+        return False
+    verdict = normalized[len(prefix) :].strip().rstrip(".!").strip()
+    return any(
+        verdict == f"{clean}{suffix}"
+        for clean in _CLEAN_VERDICTS
+        for suffix in _CLEAN_VERDICT_SUFFIXES
+    )
+
+
+# "no longer unresolved" is a double negative (an approval-sounding form) —
+# strip it before the negative-word scan so it falls through to None.
+_WITHOUT_NO_LONGER = re.compile(
+    r"\b(?:no longer|not)\s+(?:unaddressed|unresolved|unfixed)\b"
+    r"|\b(?:unaddressed|unresolved|unfixed)\s+(?:anymore|now)\b",
+    re.I,
+)
+# Standalone rejection answers ("No.", "LGTM? No.") reject.
+_BARE_REJECTION_RE = re.compile(r"^\s*(?:no|nah|nope)[.!?]?\s*$|[a-z ]{0,16}\?\s*no[.!,\s]")
+
+
 _CONCESSIVE_STILL_RE = re.compile(
     r"\b(?:can|could|may|might|will|would|does|do)\s+still\s+"
     r"(?:occur|reproduce|happen|persist|remain|be\s+(?:present|seen|triggered|hit))\b"
 )
 
 
-def _decisive_approval(text: str) -> bool:
-    """True when an explicit approval phrase stands without an attached
-    hard negator (``looks good, but not verified`` is not decisive)."""
-    for phrase in _APPROVAL_PHRASES:
-        start = 0
-        while True:
-            idx = text.find(phrase, start)
-            if idx < 0:
-                break
-            after = text[idx + len(phrase) : idx + len(phrase) + 48]
-            after = re.split(r"[.!?]", after)[0]
-            if not _AFTER_NEGATOR_RE.match(after):
-                return True
-            start = idx + len(phrase)
-    return False  # the 👍 reaction is a structured signal read from the
-    # reaction field (routing/clean-signal paths) — never from prose bodies
-
-
 def codex_followup_reaction(followup_body: str | None) -> str | None:
-    """Detect 👍 / 👎 / textual approval signals in a Codex follow-up. Returns
-    'positive' / 'negative' / None.
+    """Classify a Codex follow-up under the FINAL auto-resolve contract.
 
-    Negative phrases are checked **first** because positive substrings would
-    otherwise match inside an explicit negation: ``"not addressed"`` contains
-    the substring ``"addressed"``, ``"still not resolved"`` contains the
-    substring ``"resolved"``. Codex automated review on PR #8 flagged this
-    misclassification — a Codex follow-up rejecting the fix was treated as
-    approval and would have produced a wrong RESOLVED verdict downstream.
+    Fail-safe asymmetry (scope ruling, #334): a false OPEN costs one human
+    click; a false RESOLVED closes an unfixed defect. Auto-resolve therefore
+    accepts EXACTLY two signals —
 
-    Issue #249: the fixed token list missed phrasings like ``"has not been
-    addressed"``, ``"remains unresolved"`` and ``"unaddressed"`` — the
-    negated positive then classified as approval. Positive tokens now only
-    count when no negator (``not``, ``n't`` forms, ``never``, ``no``, ``un-``,
-    ``remains``, ``still`` …) precedes them within a word window; a negated
-    positive is itself a negative signal.
+    1. the 👍 reaction from the comment's reaction FIELD (consumed by the
+       routing reaction events and the clean-signal path, never by this
+       prose function), and
+    2. the FORMAL Codex verdict comment ("Codex Review: Didn't find any
+       major issues[. / — Nice work!]"), matched as the full verdict form
+       (prefix-anchored, whole remainder), never as a prose fragment.
+
+    ALL other text — approval-sounding or not — returns None and leaves the
+    thread OPEN for a human. Negative/concessive detection remains only in
+    the fail-safe direction (negative → the thread stays OPEN / labels),
+    never to close anything.
     """
     if not followup_body:
         return None
     text = followup_body.lower()
-    # Ruling ladder (class-closing, #334 + #335): structured signal >
-    # concessive still-occurrence > approval words > negative keywords >
-    # token attachment.
-    # 1. structured signal (👍 reaction) is NOT detectable from prose — it is
-    # read from the reaction field in routing and the clean-signal path.
-    if _CONCESSIVE_STILL_RE.search(text):  # 2. concessive still-occurrence
-        return "negative"
-    if _decisive_approval(text):  # 3. approval words
+    if _formal_clean_verdict(text):
         return "positive"
-
-    # Codex P2 round 14: a NEGATED regression ('has not regressed', 'No
-    # regression introduced') is an approval, not a rejection — only
-    # affirmative regression statements reject.
+    if _BARE_REJECTION_RE.search(text):
+        return "negative"
+    if _CONCESSIVE_STILL_RE.search(text):
+        return "negative"
     if _has_affirmative_regression(text):
         return "negative"
     if any(
@@ -168,44 +188,28 @@ def codex_followup_reaction(followup_body: str | None) -> str | None:
             "partially fixed",
             "only partially",
             "not fully",
-            "partially fixed",
             "incomplete",
             "partially",
             "👎",
         ]
-    ) or _NEGATIVE_WORDS_RE.search(text):
+    ) or _NEGATIVE_WORDS_RE.search(_WITHOUT_NO_LONGER.sub(" ", text)):
         return "negative"
-    # "fixed" is negation-only (Codex P1 on #335): bare "fixed" is too weak to
-    # approve on its own, but "hasn't been fixed" must still classify negative.
-    positives = ["looks good", "no new issues", "addressed", "resolved"]
-    negation_only_tokens = ["fixed"]
-    any_positive = False
-    any_negated_positive = False
-    for token in positives + negation_only_tokens:
-        # Single WORDS match on word boundaries: identifiers stay neutral
-        # ('addressed_threads' contains neither an approval nor a rejection).
-        token_re = re.compile(rf"\b{re.escape(token)}\b") if " " not in token else None
-        start = 0
+    # Negated approval tokens reject (fail-safe direction); unnegated
+    # approval-sounding prose returns None — a human decides.
+    any_negated = False
+    for token in ("addressed", "resolved", "fixed"):
+        token_re = re.compile(rf"\b{re.escape(token)}\b")
+        start_pos = 0
         while True:
-            if token_re is not None:
-                m = token_re.search(text, start)
-                pos = m.start() if m else -1
-            else:
-                pos = text.find(token, start)
-            if pos < 0:
+            m = token_re.search(text, start_pos)
+            if not m:
                 break
-            if _positive_is_negated(text, pos, len(token)):
-                any_negated_positive = True
-            elif token not in negation_only_tokens:
-                any_positive = True
-            start = pos + len(token)
-    # Codex P1 on #254/#334: an explicit negation anywhere in the follow-up is
-    # stronger evidence than an unnegated positive — "the leak is fixed but
-    # the race is not addressed" rejects the fix. Negative wins.
-    if any_negated_positive:
+            if _positive_is_negated(text, m.start(), len(token)):
+                any_negated = True
+                break
+            start_pos = m.end()
+    if any_negated:
         return "negative"
-    if any_positive:
-        return "positive"
     return None
 
 
@@ -227,6 +231,7 @@ _NEGATIVE_WORDS_RE = re.compile(r"\b(?:unaddressed|unresolved|unfixed|persists?)
 _REGRESSION_RE = re.compile(r"\bregress(?:ed|es|ing|ion|ions)?\b(?!\s+(?:tests?|coverage|suite)\b)")
 _NEGATED_REGRESSION_RE = re.compile(
     r"\b(?:not|no|never|isn['\u2019]?t|aren['\u2019]?t|wasn['\u2019]?t|weren['\u2019]?t|"
+    r"doesn['\u2019]?t|don['\u2019]?t|"
     r"hasn['\u2019]?t|haven['\u2019]?t|didn['\u2019]?t)\s+"
     r"(?:\w+\s+){0,2}regress(?:ed|es|ing|ion|ions)?\b"
 )
@@ -277,7 +282,8 @@ _REGRESSION_HANDLING_LEAD_RE = re.compile(
 
 _NEGATED_REGRESSION_LEAD_RE = re.compile(
     r"(?:not|no|never|isn['\u2019]?t|aren['\u2019]?t|wasn['\u2019]?t|weren['\u2019]?t|"
-    r"hasn['\u2019]?t|haven['\u2019]?t|didn['\u2019]?t)\s+(?:\w+\s+){0,2}$"
+    r"doesn['\u2019]?t|don['\u2019]?t|hasn['\u2019]?t|haven['\u2019]?t|didn['\u2019]?t)"
+    r"\s+(?:\w+\s+){0,2}$"
 )
 
 
