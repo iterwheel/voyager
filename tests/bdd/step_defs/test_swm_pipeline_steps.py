@@ -2174,25 +2174,55 @@ def then_pipeline_stale_verdict_skip_log(ctx, expected_sha: str, actual_sha: str
 # ---------------------------------------------------------------------------
 
 
+@given(parsers.parse('the stub client records a backdated head commit date "{date}"'))
+def given_backdated_commit_date(ctx, date: str) -> None:
+    """Issue #335 ruling fixture: attacker-controlled committer metadata must
+    not affect staleness — the poll-ledger observation wins."""
+    ctx["client"].head_commit_date = date
+
+
 @given("the PR was pushed after the Codex review")
 def given_pr_pushed_after_codex(ctx) -> None:
-    """Head-observation timestamp newer than _fresh_codex_thread's createdAt.
+    """Voyager FIRST observed the current head AFTER the finding (12:00).
 
-    Issue #250: staleness sources from the PR head commit's committed date
-    (bound to the reviewed head), so the stub drives that — plus the other
-    head timestamps for consistency.
+    Scope ruling on #335: staleness sources from the poll ledger's first
+    observation of the current head (timestamp-integrity family).
     """
+    from datetime import UTC as _UTC
+    from datetime import datetime as _datetime
+
+    from voyager.bots.clearance.models import PollRecord, Status
+
     ctx["client"].head_updated_at = "2026-05-12T00:00:00Z"
-    ctx["client"].head_commit_date = "2026-05-12T00:00:00Z"
-    ctx["client"].head_check_suite_at = "2026-05-12T00:00:00Z"
+    ctx["store"].append_poll(
+        PollRecord(
+            ts=_datetime(2026, 5, 12, 0, 0, 0, tzinfo=_UTC),
+            repo=REPO,
+            pr=PR,
+            head_sha="head-sha-abc1234",
+            status=Status.BLOCKED,
+        )
+    )
 
 
 @given("the PR was not pushed after the Codex review")
 def given_pr_not_pushed_after_codex(ctx) -> None:
-    """Head timestamps older than _fresh_codex_thread's createdAt."""
+    """Voyager first observed the current head BEFORE the finding (12:00)."""
+    from datetime import UTC as _UTC
+    from datetime import datetime as _datetime
+
+    from voyager.bots.clearance.models import PollRecord, Status
+
     ctx["client"].head_updated_at = "2026-05-10T00:00:00Z"
-    ctx["client"].head_commit_date = "2026-05-10T00:00:00Z"
-    ctx["client"].head_check_suite_at = "2026-05-10T00:00:00Z"
+    ctx["store"].append_poll(
+        PollRecord(
+            ts=_datetime(2026, 5, 10, 0, 0, 0, tzinfo=_UTC),
+            repo=REPO,
+            pr=PR,
+            head_sha="head-sha-abc1234",
+            status=Status.BLOCKED,
+        )
+    )
 
 
 # Issue #62: fork PR head-repo accessibility (UnsupportedContext)

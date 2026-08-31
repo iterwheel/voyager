@@ -2376,39 +2376,40 @@ async def _compute_clearance_automation_unlocked(
             safe["status"],
         )
         current_head_updated_at = None
-    # Issue #254 (Codex P1): head-motion signals must be bound to the reviewed
-    # PR's head — repository-level push timestamps (the head-observation
-    # fallback above) advance on pushes to ANY branch, which a fork author
-    # could use to fake code motion. Fetch the head commit's own committed
-    # date; None (fetch failure) fails closed.
-    head_commit_committed_at: str | None = None
-    if head_sha:
+    # Issue #63: staleness timestamp for stale-thread detection. A Codex
+    # thread whose first comment predates the most recent push may have been
+    # addressed in a newer commit even though GitHub didn't mark it outdated.
+    # Issue #250: the REST "Get a pull request" object has NO top-level
+    # pushed_at field — the stale-thread routing was dead in production.
+    # Scope ruling on #335 (timestamp-integrity family): the staleness time
+    # must be an OBSERVED event time — the moment Voyager's own append-only
+    # poll ledger FIRST recorded the current head — never commit metadata
+    # (GIT_COMMITTER_DATE is attacker-controllable; a force-push to a
+    # backdated commit would fake staleness or mask it). First run with no
+    # recorded observation fails safe (stale routing does not fire).
+    pr_pushed_at: str | None = None
+    if head_sha and store is not None:
         try:
-            head_commit_committed_at = await client.commit_committed_date(
-                CLEARANCE_AGENT_SLUG, repository, head_sha
-            )
+            for record in store.read_polls(repository, pr_number):
+                if record.head_sha == head_sha:
+                    pr_pushed_at = (
+                        record.ts.isoformat().replace("+00:00", "Z")
+                        if hasattr(record.ts, "isoformat")
+                        else str(record.ts)
+                    )
+                    break
         except Exception as exc:
             safe = _safe_exception_fields(exc)
             _log.warning(
-                "head commit date fetch failed for %s#%s head=%s "
-                "(stale-thread routing + corroboration will fail closed): class=%s status=%s",
+                "poll-history staleness read failed for %s#%s head=%s "
+                "(stale-thread routing fails safe / off): class=%s status=%s",
                 repository,
                 pr_number,
                 head_sha,
                 safe["error_class"],
                 safe["status"],
             )
-            head_commit_committed_at = None
-    # Issue #63: staleness timestamp for stale-thread detection. A Codex
-    # thread whose first comment predates the most recent push may have been
-    # addressed in a newer commit even though GitHub didn't mark it outdated.
-    # Issue #250: the REST "Get a pull request" object has NO top-level
-    # pushed_at field — reading pr_data["pushed_at"] always yielded None and
-    # the stale-thread routing was dead in production. Codex P1 on #334:
-    # source it from the PR head commit's committed date (bound to the
-    # reviewed head, not the repository-wide push fallback); None fails safe
-    # (stale routing simply does not fire — pre-#250 production behavior).
-    pr_pushed_at: str | None = head_commit_committed_at
+            pr_pushed_at = None
     # Issue #62: detect fork PRs. The REST API always includes head.repo.full_name
     # and base.repo.full_name; when they differ the PR is from a fork.
     head_obj = pr_data.get("head") or {}
