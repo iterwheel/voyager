@@ -34,6 +34,9 @@ def visible_comment_text(body: str | None) -> str:
     if not body:
         return ""
     body = _HTML_COMMENT_RE.sub("", body)
+    # Unterminated comment: everything after the opener is hidden (GFM).
+    if "<!--" in body:
+        body = body.split("<!--", 1)[0]
     visible: list[str] = []
     fence_marker = ""
     in_quote = False
@@ -53,6 +56,9 @@ def visible_comment_text(body: str | None) -> str:
                 and len(line) - len(line.lstrip()) <= 3
             ):
                 fence_marker = ""
+                # A closing fence is a block boundary: an indented line after
+                # it is an indented code block (Codex P2 round 5 on #337).
+                awaiting_code_block = True
             continue
         open_ = _FENCE_OPEN_RE.match(line)
         if open_:
@@ -71,22 +77,34 @@ def visible_comment_text(body: str | None) -> str:
             awaiting_code_block = False
             in_indented_code = False
             continue
-        if line.lstrip().startswith("#"):
+        if in_quote:
+            # Lazy continuation only applies to paragraph text: a line that
+            # starts a new block construct (heading, list, fence) after the
+            # quote is its own content and stays visible (Codex P1 round 2).
+            # A MALFORMED hash line ("#tag" without space, or deep-indented
+            # "# x") is paragraph text, not a heading — it continues the quote.
+            stripped = line.lstrip()
+            is_heading = (
+                stripped.startswith("#")
+                and len(line) - len(line.lstrip()) <= 3
+                and len(stripped) > 1
+                and stripped[1] in " #"
+            )
+            if (is_heading and not stripped.startswith("# ")) or not is_heading:
+                if _NEW_BLOCK_RE.match(line) or _FENCE_OPEN_RE.match(line):
+                    in_quote = False
+                else:
+                    continue
+            # a real heading exits the quote and falls through
+        if line.lstrip().startswith("#") and len(line) - len(line.lstrip()) <= 3:
             # A heading is a block boundary: an indented line after it is an
-            # indented code block (Codex P1 round 3).
+            # indented code block (Codex P1 round 3). A deeper-indented '#'
+            # line is indented code, not a heading (Codex P2 round 5 on #337).
             visible.append(line)
             awaiting_code_block = True
             in_indented_code = False
             in_quote = False
             continue
-        if in_quote:
-            # Lazy continuation only applies to paragraph text: a line that
-            # starts a new block construct (heading, list, fence) after the
-            # quote is its own content and stays visible (Codex P1 round 2).
-            if _NEW_BLOCK_RE.match(line) or _FENCE_OPEN_RE.match(line):
-                in_quote = False
-            else:
-                continue
         if line.startswith("    ") or line.startswith("\t"):
             # Indented code block — but only when a blank line separates it
             # from preceding prose (GFM). A document-start indented command or
