@@ -167,7 +167,8 @@ def _positive_is_negated(text: str, pos: int, token_len: int) -> bool:
 
 
 _AFTER_NEGATOR_RE = re.compile(
-    r"^[\s,.!?;:]{0,6}(?:not|never|nor|isn['\u2019]?t|aren['\u2019]?t|wasn['\u2019]?t|"
+    r"^[\s,.!?;:]{0,6}(?:but|however|though|yet)?[\s,.!?;:]{0,6}"
+    r"(?:not|never|nor|isn['\u2019]?t|aren['\u2019]?t|wasn['\u2019]?t|"
     r"won['\u2019]?t|don['\u2019]?t|doesn['\u2019]?t|didn['\u2019]?t|"
     r"hasn['\u2019]?t|haven['\u2019]?t|can['\u2019]?t|cannot)\b"
     r"|^[?\s]{0,4}no[\s\u2014\u2013-]"  # "Fixed? No—the race persists."

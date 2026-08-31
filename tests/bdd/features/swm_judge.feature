@@ -232,6 +232,11 @@ Feature: SWM judge — verdict assignment per SWM-1101 decision tree
     When codex_followup_reaction is called
     Then the followup reaction is "positive"
 
+  Scenario: Adversative clause after a token negates it (Codex round 11)
+    Given a Codex follow-up body "The symptom is addressed, but not the root cause."
+    When codex_followup_reaction is called
+    Then the followup reaction is "negative"
+
   Scenario: Empty Codex follow-up returns None
     Given a None Codex follow-up body
     When codex_followup_reaction is called
