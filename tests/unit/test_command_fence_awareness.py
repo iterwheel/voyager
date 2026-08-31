@@ -37,6 +37,30 @@ def test_tilde_fences_and_longer_markers():
     assert "/stack" not in visible_comment_text("````\n``` \n/stack\n```\n````")
 
 
+def test_closing_fence_must_be_bare():
+    """Codex P1: a same-length marker with an info string does NOT close a
+    fence - the rest of the block stays invisible."""
+    body = "```\n/assembly --dry-run\n```python\nstill inside the fence\n```"
+    visible = visible_comment_text(body)
+    assert "/assembly" not in visible
+    assert "still inside the fence" not in visible
+
+
+def test_indented_code_blocks_are_stripped():
+    """Codex P1: 4-space-indented documentation blocks cannot fire."""
+    assert "/assembly" not in visible_comment_text("Usage:\n\n    /assembly --dry-run\n")
+
+
+def test_lazy_quote_continuation_is_stripped():
+    """Codex P1: Markdown lazy continuation - the un-prefixed line after a
+    quote line renders inside the same quoted paragraph."""
+    body = "> the docs say run this\n/assembly --dry-run"
+    assert "/assembly" not in visible_comment_text(body)
+    # A blank line separates: the following prose is visible again.
+    body2 = "> quoted\n\n/assembly --dry-run"
+    assert "/assembly" in visible_comment_text(body2)
+
+
 def test_block_quotes_are_stripped():
     assert "/blueprint" not in visible_comment_text("> /blueprint\n> more quote")
     assert "/blueprint" in visible_comment_text("please run /blueprint")
