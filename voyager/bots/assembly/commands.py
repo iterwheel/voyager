@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from voyager.core.comment_text import visible_comment_text
+
 from .constants import ASSEMBLY_COMMANDS
 
 # Match a leading slash-command on a line, optionally with whitespace
@@ -59,7 +61,9 @@ def parse_assembly_command(body: str | None) -> AssemblyCommand | None:
     """
     if not body:
         return None
-    match = _COMMAND_RE.search(body)
+    # Issue #256: never match inside fenced code blocks (documentation,
+    # pasted logs) or block quotes — only prose a human actually wrote.
+    match = _COMMAND_RE.search(visible_comment_text(body))
     if not match:
         return None
     command = match.group(1).lower()

@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from voyager.core.comment_text import visible_comment_text
+
 BLUEPRINT_AGENT_SLUG = "iterwheel-blueprint"
 BLUEPRINT_AGENT_ID = "github-blueprint-agent"
 BLUEPRINT_COMMENT_MARKER = "<!-- iterwheel:blueprint-intake -->"
@@ -307,8 +309,10 @@ def should_run_blueprint(event: str, payload: dict[str, Any]) -> bool:
     if event == "issues" and action in {"opened", "edited", "reopened"}:
         return True
     if event == "issue_comment" and action == "created":
+        # Issue #256: match only against visible prose — fenced code blocks
+        # (docs, pasted logs) and block quotes cannot trigger a run.
         body = str((payload.get("comment") or {}).get("body") or "")
-        return "/blueprint" in body.lower()
+        return "/blueprint" in visible_comment_text(body).lower()
     return False
 
 
