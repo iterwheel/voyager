@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -21,13 +23,20 @@ import pytest
 # OMP LFS fixtures) inherits that state and operates on the wrong repository
 # or against a nonexistent quarantine.
 #
-# Codex P2: only scrub the object-store variables as part of a quarantine
-# context — without GIT_QUARANTINE_PATH, GIT_OBJECT_DIRECTORY /
+# Codex P2 (round 1): only scrub the object-store variables as part of a
+# quarantine context — without GIT_QUARANTINE_PATH, GIT_OBJECT_DIRECTORY /
 # GIT_ALTERNATE_OBJECT_DIRECTORIES can be an intentional configuration (e.g.
 # a CI checkout with a relocated or shared object store) and must survive.
-# The repo pointers (GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE) are scrubbed
-# whenever set: in the suite's context they always describe the OUTER repo,
-# never the throwaway repositories the tests build.
+#
+# Codex P2 (round 2, discussion_r3890533687): the repo pointers
+# (GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE) are ALSO legitimate intentional
+# configuration — a CI workspace with the git directory mounted elsewhere
+# and NO local .git entry supplies the checkout location ONLY through them,
+# and tests that invoke git against the real checkout (e.g.
+# tests/test_release_readiness_ci.py) fail with "not a git repository" when
+# they are dropped. Scrub each pointer only when it actually points at THIS
+# outer repository (the repo containing conftest.py) — that distinguishes
+# hook leakage (scrub) from intentional external pointers (keep).
 _QUARANTINE_VARS = (
     "GIT_QUARANTINE_PATH",
     "GIT_OBJECT_DIRECTORY",
@@ -39,11 +48,97 @@ _REPO_POINTER_VARS = (
     "GIT_INDEX_FILE",
 )
 
+_REPO_ROOT = Path(__file__).resolve().parent
+
+
+def _outer_repo_git_dir() -> Path | None:
+    """Absolute git dir of THIS checkout, discovered WITHOUT the pointer env.
+
+    Returns None when git is unavailable or this checkout has no discoverable
+    git dir (callers then fail toward the previous unconditional scrub).
+    """
+    env = {k: v for k, v in os.environ.items() if k not in _REPO_POINTER_VARS}
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--absolute-git-dir"],
+            cwd=str(_REPO_ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode != 0:
+        return None
+    resolved = Path(out.stdout.strip())
+    return resolved if str(resolved) else None
+
+
+def _pointer_targets_this_repo(name: str, own_git_dir: Path | None) -> bool:
+    """True when the pointer variable points at THIS outer repository."""
+    raw = os.environ.get(name)
+    if not raw:
+        return False
+    if own_git_dir is None:
+        # Cannot identify the outer repo — fail toward the historically safe
+        # behavior (scrub) rather than letting hook leakage through.
+        return True
+    path = Path(raw)
+    if not path.is_absolute():
+        # Git resolves relative GIT_DIR/GIT_WORK_TREE against the cwd; the
+        # suite's cwd is the repository root.
+        path = _REPO_ROOT / path
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return True
+    if name == "GIT_WORK_TREE":
+        return resolved == _REPO_ROOT
+    if name == "GIT_INDEX_FILE":
+        # The hook's index lives inside this repo's git dir.
+        return resolved.parent == own_git_dir
+    return resolved == own_git_dir
+
+
+def isolated_git_env() -> dict[str, str]:
+    """Env for git subprocesses that operate on THROWAWAY repositories.
+
+    Strips hook/quarantine state and repo pointers regardless of the session
+    scrub decision: an intentional external pointer is correct for the suite
+    (it describes the checkout) but catastrophic for a subprocess git cwd'd
+    into a temp repo (Codex P2 on #338 — isolation is the tests' job here).
+    """
+    env = dict(os.environ)
+    for name in (*_REPO_POINTER_VARS, *_QUARANTINE_VARS):
+        env.pop(name, None)
+    return env
+
+
+def _decide_pointer_scrub(own_git_dir: Path | None, has_local_git_entry: bool) -> list[str]:
+    """Which repo-pointer variables to scrub (pure decision, unit-tested).
+
+    - Pointer-only checkout (no local .git entry, discovery without the
+      pointers fails): the env pointers ARE this checkout's metadata — keep
+      them all (Codex P2 on #338).
+    - Unresolvable otherwise: fail toward the historically safe scrub.
+    - Normal checkout: scrub exactly the pointers that target THIS repo.
+    """
+    if own_git_dir is None and not has_local_git_entry:
+        return []
+    if own_git_dir is None:
+        return list(_REPO_POINTER_VARS)
+    return [name for name in _REPO_POINTER_VARS if _pointer_targets_this_repo(name, own_git_dir)]
+
 
 @pytest.fixture(scope="session", autouse=True)
 def _scrub_git_hook_env():
     in_quarantine = "GIT_QUARANTINE_PATH" in os.environ
-    scrub = list(_REPO_POINTER_VARS) + (list(_QUARANTINE_VARS) if in_quarantine else [])
+    own_git_dir = _outer_repo_git_dir()
+    scrub = _decide_pointer_scrub(own_git_dir, (_REPO_ROOT / ".git").exists())
+    if in_quarantine:
+        scrub += list(_QUARANTINE_VARS)
     removed = {name: os.environ.pop(name) for name in scrub if name in os.environ}
     yield removed
     os.environ.update(removed)
