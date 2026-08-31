@@ -1765,13 +1765,21 @@ async def _maybe_sync_stage_15(
                     thread_id=thread.id,
                     cache=resolver_thread_cache,
                 )
-                if resolver_can_resolve and is_fork_pr and head_repo and head_repo != repository:
-                    resolver_head_repo_accessible = await _app_head_repo_accessible(
-                        client=client,
-                        app_slug=resolver_app_slug,
-                        head_repo=head_repo,
-                        cache=resolver_head_repo_access_cache,
-                    )
+                if resolver_can_resolve and is_fork_pr:
+                    # Issue #267 (Codex P2): gate the resolver fallback on a
+                    # KNOWN, accessible head repo. A deleted/renamed fork
+                    # (head.repo null) has no head repo to probe — fail closed
+                    # and take the manual-close path instead of resolving via
+                    # the fallback against a missing repository.
+                    if not head_repo:
+                        resolver_head_repo_accessible = False
+                    elif head_repo != repository:
+                        resolver_head_repo_accessible = await _app_head_repo_accessible(
+                            client=client,
+                            app_slug=resolver_app_slug,
+                            head_repo=head_repo,
+                            cache=resolver_head_repo_access_cache,
+                        )
 
             if resolver_can_resolve and resolver_head_repo_accessible:
                 assert resolver_app_slug is not None

@@ -625,6 +625,28 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
   # Issue #62: fork PR head-repo accessibility (UnsupportedContext)
   # ---------------------------------------------------------------------------
 
+  Scenario: Issue #267 deleted-fork PR (head.repo null) fails closed with UnsupportedContext
+    Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with substantive author reply and isResolved false
+    And the stub PR head repository is deleted (head.repo is null)
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "error"
+    And exactly 0 resolveReviewThread mutations were invoked
+    And the Stage 1.5 action result error_class is "UnsupportedContext"
+    And the Stage 1.5 action suggested_action mentions the missing head repository
+
+  Scenario: Issue #267 deleted-fork PR skips the resolver fallback and takes the manual-close path (Codex P2)
+    Given the stub PR "iterwheel/sandbox" #49 author is "iterwheel-assembly[bot]"
+    And the stub PR has 1 Codex thread with a substantive reply from "iterwheel-assembly[bot]" and isResolved false
+    And the stub PR head repository is deleted (head.repo is null)
+    And the thread viewerCanResolve is false
+    And the authorized resolver app "iterwheel-assembly" can resolve the thread
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "ready"
+    And exactly 0 resolveReviewThread mutations were invoked
+    And the Stage 1.5 action has a skipped action
+    And the Stage 1.5 skipped action reason is "viewerCanResolve is false"
+    And exactly 1 in-thread reply was posted under the Codex review comment
+
   Scenario: Issue #62 fork PR with inaccessible head repo — resolveReviewThread skipped with UnsupportedContext
     Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with substantive author reply and isResolved false
     And the stub PR is from fork "ryosaeba1985/voyager"
