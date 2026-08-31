@@ -16,11 +16,19 @@ unreachable, definitionally.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 
 from markdown_it import MarkdownIt
 
 # GFM tables are containers on GitHub: enable the table rule so table rows
 # never reach the command surface (P1 round 10).
+_md = MarkdownIt("commonmark").enable("table")
+
+_CONTAINER_OPEN = frozenset({"blockquote_open", "list_open", "list_item_open", "paragraph_open"})
+_CONTAINER_CLOSE = frozenset(
+    {"blockquote_close", "list_close", "list_item_close", "paragraph_close"}
+)
+
 # Standard HTML/GFM block containers (P1 round 12: the complete supported set,
 # not a partial allowlist).
 _HTML_CONTAINER_TAGS = frozenset(
@@ -63,10 +71,7 @@ _HTML_CONTAINER_TAGS = frozenset(
 _HTML_COMMENT_BLOCK_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 
 
-# A full tag token: name capture only, attributes excluded from the match so
-# tag-shaped ATTRIBUTE VALUES ('</details>' inside title="...") are never
-# counted (P2 round 13).
-def _iter_html_tags(raw: str):
+def _iter_html_tags(raw: str) -> Iterator[tuple[bool, str]]:
     """Yield (is_close, tag_name) for each real tag token in an HTML fragment.
 
     A tiny state machine that skips quoted attribute values, so tag-shaped
@@ -109,29 +114,25 @@ def _iter_html_tags(raw: str):
         i += 1
 
 
-def _net_container_balance(raw: str) -> int:
-    """Net open/close balance of container tags in an HTML fragment.
+def _apply_container_tags(raw: str, stack: list[str]) -> None:
+    """Apply an HTML fragment's container tags to an open-tag stack.
 
-    HTML comments are skipped and only real tag tokens count — attribute
-    text never does (P1/P2 round 13).
+    Closers only pop when they MATCH the innermost open container — a
+    mismatched closer ('</div>' inside '<details>') is ignored, exactly as
+    browsers do (P2 round 14). HTML comments are skipped and only real tag
+    tokens count — attribute text never does.
     """
-    net = 0
     for is_close, name in _iter_html_tags(raw):
-        if name.lower() not in _HTML_CONTAINER_TAGS:
+        tag = name.lower()
+        if tag not in _HTML_CONTAINER_TAGS:
             continue
-        net += -1 if is_close else 1
-    return net
+        if is_close:
+            if stack and stack[-1] == tag:
+                stack.pop()
+        else:
+            stack.append(tag)
 
 
-_md = MarkdownIt("commonmark").enable("table")
-
-_CONTAINER_OPEN = frozenset({"blockquote_open", "list_open", "list_item_open", "paragraph_open"})
-_CONTAINER_CLOSE = frozenset(
-    {"blockquote_close", "list_close", "list_item_close", "paragraph_close"}
-)
-
-
-# Inline children whose content is kept (prose, inline code, line breaks).
 def visible_comment_text(body: str | None) -> str:
     """Return the inline text of top-level paragraphs/headings only.
 
@@ -145,15 +146,14 @@ def visible_comment_text(body: str | None) -> str:
     paragraph: list[str] = []
     depth = 0
     in_heading = False
-    html_container_depth = 0  # >0 while inside a raw-HTML container block
+    html_containers: list[str] = []  # open containers; matched closers pop
     for token in _md.parse(body):
         if token.type == "html_block":
             # Raw-HTML CONTAINER tags hide the Markdown blocks they enclose.
             # A single html_block may contain BOTH the opening and closing
             # tags ('<table>...</table>' on one token) — process EVERY tag
             # occurrence and apply the net balance (P2 round 11).
-            net = _net_container_balance(token.content or "")
-            html_container_depth = max(0, html_container_depth + net)
+            _apply_container_tags(token.content or "", html_containers)
             continue
         if token.type == "heading_open":
             in_heading = True
@@ -170,7 +170,7 @@ def visible_comment_text(body: str | None) -> str:
             and depth == 1
             and token.children
             and not in_heading
-            and html_container_depth == 0
+            and not html_containers
         ):
             # An inline token follows its paragraph_open/heading_open; it is
             # top-level prose only when the enclosing depth is exactly the
@@ -180,11 +180,10 @@ def visible_comment_text(body: str | None) -> str:
             # Inline container tags inside the paragraph ('intro <details>…')
             # hide GitHub-rendered content: drop such paragraphs entirely
             # (P1 round 13) — their text is inside the HTML construct.
-            has_inline_container = any(
-                child.type == "html_inline" and _net_container_balance(child.content) != 0
-                for child in token.children
-            )
-            if has_inline_container:
+            for child in token.children:
+                if child.type == "html_inline":
+                    _apply_container_tags(child.content, html_containers)
+            if html_containers:
                 continue
             paragraph = []
             for child in token.children:
