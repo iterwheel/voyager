@@ -276,7 +276,7 @@ def visible_comment_text(body: str | None) -> str:
             if live_budget > 0:
                 live_budget -= 1
                 continue
-            line = re.sub(rf"(?<![\w`/]){re.escape(token)}\b", "", line)
+            line = re.sub(rf"(?<![\w`/]){re.escape(cmd)}\b", "", line)
         sanitized.append(line)
     return "\n".join(sanitized)
 
