@@ -980,7 +980,6 @@ async def _process_thread(
     get_diff: Callable[[], Awaitable[str]] | None = None,
     failures: list[tuple[str, str]] | None = None,
     profile_name: str | None = None,
-    pr_pushed_at: str | None = None,
     current_head_updated_at: str | None = None,
     store: Any | None = None,
     known_limitation_store: KnownLimitationStore | None = None,
@@ -1202,17 +1201,19 @@ async def _process_thread(
     path = thread_dict.get("path") or "unknown"
     line = thread_dict.get("line")
 
-    # Issue #63: State A threads where the Codex comment predates the most
-    # recent push may have been addressed in a newer commit, even though
-    # GitHub didn't mark the thread outdated.  Compare the first comment's
-    # createdAt against pr_pushed_at to determine staleness.
+    # Issue #63 + final ruling on #335: a State-A thread is STALE iff the
+    # head it was REVIEWED ON (the thread's originalCommit) is not the
+    # current PR head — a SHA comparison with no timestamps at all. Clocks
+    # (created/edited/observed) are logging-only; observation lag can no
+    # longer invert the order, and no author-controlled or observed time
+    # feeds this decision. Unknown reviewed SHA (field absent) fails safe:
+    # not stale.
     codex_review_stale = False
-    if state == ThreadState.A and pr_pushed_at:
-        comments = _comment_nodes(thread_dict)
-        codex_created = (comments[0].get("createdAt") if comments else None) or ""
-        # ISO-8601 timestamps are lexicographically comparable when in the
-        # same timezone (GitHub always emits UTC with trailing 'Z').
-        codex_review_stale = bool(codex_created and codex_created < pr_pushed_at)
+    if state == ThreadState.A:
+        # originalCommit lives on the review COMMENT (not the thread node).
+        first_comment = (_comment_nodes(thread_dict) or [{}])[0]
+        reviewed_sha = str(((first_comment.get("originalCommit") or {}).get("oid")) or "")
+        codex_review_stale = bool(reviewed_sha and head_sha and reviewed_sha != head_sha)
 
     # AUGMENT invariant: gate skips when judge() already returned RESOLVED.
     # Together with `state == ThreadState.B` this preserves *every* deterministic
@@ -1285,16 +1286,24 @@ async def _process_thread(
             # Clearance's own writeback comments (close-reason markers,
             # conclusion replies) are bookkeeping, not claims — exclude them
             # from the claim boundary.
-            claim_created_at = max(
-                (
-                    str(c.get("createdAt") or "")
-                    for c in comments_for_claim
-                    if not logins_equivalent(
-                        str(((c.get("author") or {}).get("login")) or ""), CLEARANCE_BOT_LOGIN
-                    )
-                ),
-                default="",
-            )
+            # Issue #335 (security P1): a reply EDITED after a recorded head
+            # transition keeps its original createdAt, so pre-transition text
+            # could be swapped for investigator-influencing content while the
+            # cutoff stays pre-transition. The boundary is the LATEST of
+            # createdAt and lastEditedAt per comment (fail closed when an
+            # edit time is present but unreadable).
+            claim_stamps: list[str] = []
+            for c in comments_for_claim:
+                if logins_equivalent(
+                    str(((c.get("author") or {}).get("login")) or ""), CLEARANCE_BOT_LOGIN
+                ):
+                    continue
+                created = str(c.get("createdAt") or "")
+                edited = str(c.get("lastEditedAt") or "") or str(c.get("updatedAt") or "")
+                if created and edited and edited < created:
+                    edited = created  # server inconsistency — fail toward created
+                claim_stamps.append(max(created, edited))
+            claim_created_at = max(claim_stamps, default="")
             if coerced == Verdict.RESOLVED and not _head_sha_advanced_after_thread(
                 store, repo, pr, head_sha, claim_created_at
             ):
@@ -1765,13 +1774,21 @@ async def _maybe_sync_stage_15(
                     thread_id=thread.id,
                     cache=resolver_thread_cache,
                 )
-                if resolver_can_resolve and is_fork_pr and head_repo and head_repo != repository:
-                    resolver_head_repo_accessible = await _app_head_repo_accessible(
-                        client=client,
-                        app_slug=resolver_app_slug,
-                        head_repo=head_repo,
-                        cache=resolver_head_repo_access_cache,
-                    )
+                if resolver_can_resolve and is_fork_pr:
+                    # Issue #267 (Codex P2): gate the resolver fallback on a
+                    # KNOWN, accessible head repo. A deleted/renamed fork
+                    # (head.repo null) has no head repo to probe — fail closed
+                    # and take the manual-close path instead of resolving via
+                    # the fallback against a missing repository.
+                    if not head_repo:
+                        resolver_head_repo_accessible = False
+                    elif head_repo != repository:
+                        resolver_head_repo_accessible = await _app_head_repo_accessible(
+                            client=client,
+                            app_slug=resolver_app_slug,
+                            head_repo=head_repo,
+                            cache=resolver_head_repo_access_cache,
+                        )
 
             if resolver_can_resolve and resolver_head_repo_accessible:
                 assert resolver_app_slug is not None
@@ -2001,20 +2018,25 @@ async def _maybe_sync_stage_15(
 
         # Lazy head-repo accessibility check for fork PRs — runs only when
         # we encounter the first thread that actually needs a mutation.
-        if fork_head_blocked is None and is_fork_pr and head_repo and head_repo != repository:
-            if not dry_run:
-                accessible = await client.check_head_repo_accessible(
-                    CLEARANCE_AGENT_SLUG, head_repo
-                )
-                fork_head_blocked = not accessible
-            else:
-                try:
+        if fork_head_blocked is None and is_fork_pr:
+            if not head_repo:
+                # Issue #267: deleted/renamed fork (head.repo null) — fail
+                # closed into the fork-safety skip.
+                fork_head_blocked = True
+            elif head_repo != repository:
+                if not dry_run:
                     accessible = await client.check_head_repo_accessible(
                         CLEARANCE_AGENT_SLUG, head_repo
                     )
-                except Exception:
-                    accessible = False
-                fork_head_blocked = not accessible
+                    fork_head_blocked = not accessible
+                else:
+                    try:
+                        accessible = await client.check_head_repo_accessible(
+                            CLEARANCE_AGENT_SLUG, head_repo
+                        )
+                    except Exception:
+                        accessible = False
+                    fork_head_blocked = not accessible
 
         # Issue #62: skip resolveReviewThread on fork PRs where the head repo
         # is not accessible. This produces a specific unsupported-context action
@@ -2022,11 +2044,18 @@ async def _maybe_sync_stage_15(
         # Must run before the dry_run gate so dry-run output also surfaces the
         # UnsupportedContext result instead of a misleading resolvable path.
         if fork_head_blocked:
-            skip_reason = (
-                f"Unsupported context: PR #{pr} is from fork {head_repo}. "
-                f"Install {CLEARANCE_AGENT_SLUG} on {head_repo} to enable "
-                f"auto-resolve, or resolve thread {thread.id} manually."
-            )
+            if head_repo:
+                skip_reason = (
+                    f"Unsupported context: PR #{pr} is from fork {head_repo}. "
+                    f"Install {CLEARANCE_AGENT_SLUG} on {head_repo} to enable "
+                    f"auto-resolve, or resolve thread {thread.id} manually."
+                )
+            else:
+                skip_reason = (
+                    f"Unsupported context: PR #{pr} head repository is missing "
+                    f"(deleted or renamed fork). Resolve thread {thread.id} "
+                    f"manually; auto-resolve cannot target a missing repository."
+                )
             _log.warning(skip_reason)
             actions.append(
                 Stage15Action(
@@ -2348,44 +2377,27 @@ async def _compute_clearance_automation_unlocked(
             safe["status"],
         )
         current_head_updated_at = None
-    # Issue #254 (Codex P1): head-motion signals must be bound to the reviewed
-    # PR's head — repository-level push timestamps (the head-observation
-    # fallback above) advance on pushes to ANY branch, which a fork author
-    # could use to fake code motion. Fetch the head commit's own committed
-    # date; None (fetch failure) fails closed.
-    head_commit_committed_at: str | None = None
-    if head_sha:
-        try:
-            head_commit_committed_at = await client.commit_committed_date(
-                CLEARANCE_AGENT_SLUG, repository, head_sha
-            )
-        except Exception as exc:
-            safe = _safe_exception_fields(exc)
-            _log.warning(
-                "head commit date fetch failed for %s#%s head=%s "
-                "(stale-thread routing + corroboration will fail closed): class=%s status=%s",
-                repository,
-                pr_number,
-                head_sha,
-                safe["error_class"],
-                safe["status"],
-            )
-            head_commit_committed_at = None
     # Issue #63: staleness timestamp for stale-thread detection. A Codex
     # thread whose first comment predates the most recent push may have been
     # addressed in a newer commit even though GitHub didn't mark it outdated.
     # Issue #250: the REST "Get a pull request" object has NO top-level
-    # pushed_at field — reading pr_data["pushed_at"] always yielded None and
-    # the stale-thread routing was dead in production. Codex P1 on #334:
-    # source it from the PR head commit's committed date (bound to the
-    # reviewed head, not the repository-wide push fallback); None fails safe
-    # (stale routing simply does not fire — pre-#250 production behavior).
-    pr_pushed_at: str | None = head_commit_committed_at
+    # pushed_at field — the stale-thread routing was dead in production.
+    # Scope ruling on #335 (timestamp-integrity family): the staleness time
+    # must be an OBSERVED event time — the moment Voyager's own append-only
+    # poll ledger FIRST recorded the current head — never commit metadata
+    # (GIT_COMMITTER_DATE is attacker-controllable; a force-push to a
+    # backdated commit would fake staleness or mask it). First run with no
+    # recorded observation fails safe (stale routing does not fire).
     # Issue #62: detect fork PRs. The REST API always includes head.repo.full_name
     # and base.repo.full_name; when they differ the PR is from a fork.
-    head_repo: str | None = (pr_data.get("head") or {}).get("repo", {}).get("full_name") or None
+    head_obj = pr_data.get("head") or {}
+    head_repo_obj = head_obj.get("repo") or {}
+    head_repo: str | None = head_repo_obj.get("full_name") or None
     base_repo: str | None = (pr_data.get("base") or {}).get("repo", {}).get("full_name") or None
-    is_fork_pr = bool(head_repo and base_repo and head_repo != base_repo)
+    # Issue #267: a deleted/renamed fork has head.repo = null — treat as
+    # fork-unsafe (fail closed) instead of crashing or bypassing the gate.
+    head_repo_missing = bool(head_obj) and not head_repo_obj
+    is_fork_pr = head_repo_missing or bool(head_repo and base_repo and head_repo != base_repo)
     # Wave 7C-1 commit 3 + Codex MVE-round P2: hoist branch_protected fetch out of
     # the per-thread loop. All threads on the same PR share the same base branch,
     # so calling branch_protected once per webhook (not N times for N threads)
@@ -2442,7 +2454,6 @@ async def _compute_clearance_automation_unlocked(
             get_diff=get_diff,
             failures=investigator_failures,
             profile_name=default_profile_name,
-            pr_pushed_at=pr_pushed_at,
             current_head_updated_at=current_head_updated_at,
             store=store,
             known_limitation_store=known_limitation_store,

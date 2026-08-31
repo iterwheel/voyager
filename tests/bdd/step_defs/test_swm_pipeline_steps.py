@@ -470,9 +470,13 @@ def _fresh_codex_thread(
     *,
     thread_id: str = THREAD_ID,
     path: str = "app.py",
+    original_commit: str | None = None,
 ) -> dict[str, Any]:
-    """A State A (not outdated, no replies) Codex thread."""
-    return {
+    """A State A (not outdated, no replies) Codex thread.
+
+    ``original_commit`` anchors the finding to the head it was reviewed on
+    (final ruling on #335: staleness is a SHA comparison, never a clock)."""
+    thread = {
         "id": thread_id,
         "isResolved": False,
         "isOutdated": False,
@@ -491,6 +495,9 @@ def _fresh_codex_thread(
             ]
         },
     }
+    if original_commit is not None:
+        thread["comments"]["nodes"][0]["originalCommit"] = {"oid": original_commit}
+    return thread
 
 
 # Minimal unified diff that contains app.py at line 10. Used by 7B-3 investigator
@@ -692,7 +699,7 @@ def given_poll_history_no_head_change(ctx) -> None:
     ctx["store"] = StateStore(_fresh_state_dir())
     ctx["store"].append_poll(
         PollRecord(
-            ts=_datetime(2026, 5, 11, 11, 0, 0, tzinfo=_UTC),
+            ts=_datetime(2026, 5, 11, 12, 45, 0, tzinfo=_UTC),
             repo=REPO,
             pr=PR,
             head_sha="head-sha-abc1234",
@@ -2174,25 +2181,36 @@ def then_pipeline_stale_verdict_skip_log(ctx, expected_sha: str, actual_sha: str
 # ---------------------------------------------------------------------------
 
 
+@given(parsers.parse('the stub client records a backdated head commit date "{date}"'))
+def given_backdated_commit_date(ctx, date: str) -> None:
+    """Issue #335 ruling fixture: attacker-controlled committer metadata must
+    not affect staleness — the poll-ledger observation wins."""
+    ctx["client"].head_commit_date = date
+
+
 @given("the PR was pushed after the Codex review")
 def given_pr_pushed_after_codex(ctx) -> None:
-    """Head-observation timestamp newer than _fresh_codex_thread's createdAt.
+    """The finding was reviewed on an OLDER head than the current PR head.
 
-    Issue #250: staleness sources from the PR head commit's committed date
-    (bound to the reviewed head), so the stub drives that — plus the other
-    head timestamps for consistency.
+    Final ruling on #335: staleness is a SHA comparison (the thread's
+    originalCommit vs the current head) — clocks are logging-only, so this
+    fixture anchors the thread and needs no ledger records.
     """
     ctx["client"].head_updated_at = "2026-05-12T00:00:00Z"
-    ctx["client"].head_commit_date = "2026-05-12T00:00:00Z"
-    ctx["client"].head_check_suite_at = "2026-05-12T00:00:00Z"
+    old = {"oid": "old-sha-0000000000000000000000000000000000000000"}
+    for thread in ctx["client"].threads or []:
+        if thread is not None and (thread.get("comments") or {}).get("nodes"):
+            thread["comments"]["nodes"][0]["originalCommit"] = old
 
 
 @given("the PR was not pushed after the Codex review")
 def given_pr_not_pushed_after_codex(ctx) -> None:
-    """Head timestamps older than _fresh_codex_thread's createdAt."""
+    """The finding was reviewed on the CURRENT head (fresh — not stale)."""
     ctx["client"].head_updated_at = "2026-05-10T00:00:00Z"
-    ctx["client"].head_commit_date = "2026-05-10T00:00:00Z"
-    ctx["client"].head_check_suite_at = "2026-05-10T00:00:00Z"
+    head = {"oid": ctx["client"].pr_payload["head"]["sha"]}
+    for thread in ctx["client"].threads or []:
+        if thread is not None and (thread.get("comments") or {}).get("nodes"):
+            thread["comments"]["nodes"][0]["originalCommit"] = head
 
 
 # Issue #62: fork PR head-repo accessibility (UnsupportedContext)
@@ -2204,6 +2222,38 @@ def given_fork_pr(ctx, head_repo: str) -> None:
     """Configure the stub PR payload as a fork PR."""
     ctx["client"].pr_payload["head"]["repo"]["full_name"] = head_repo
     # base repo stays as iterwheel/sandbox (the default)
+
+
+@given(parsers.parse('the latest author reply was edited at "{edited_at}"'))
+def given_reply_edited(ctx, edited_at: str) -> None:
+    """Issue #335 security P1: an edited reply keeps createdAt but carries
+    lastEditedAt — the corroboration boundary must use the edit time."""
+    comments = ctx["client"].threads[0].get("comments", {}).get("nodes", [])
+    for c in comments:
+        if c.get("author", {}).get("login") == "ryosaeba1985":
+            c["lastEditedAt"] = edited_at
+
+
+@given("the stub PR head repository is deleted (head.repo is null)")
+def given_fork_head_repo_deleted(ctx) -> None:
+    """Issue #267: PR from a deleted/renamed fork — REST head.repo is null."""
+    ctx["client"].pr_payload["head"]["repo"] = None
+
+
+@then("the Stage 1.5 action suggested_action mentions the missing head repository")
+def then_stage15_suggested_missing_head_repo(ctx) -> None:
+    """Issue #267: deleted-fork skip message names the missing repository."""
+    auto = ctx["automation"]
+    assert auto is not None, f"raised={ctx.get('raised')}"
+    actions = auto.get("sync_actions") or []
+    unsupported = [
+        a for a in actions if (a.get("result") or {}).get("error_class") == "UnsupportedContext"
+    ]
+    assert unsupported, f"no UnsupportedContext actions found in sync_actions: {actions!r}"
+    suggested = (unsupported[0]["result"]).get("suggested_action") or ""
+    lowered = suggested.lower()
+    assert "missing" in lowered, f"got {suggested!r}"
+    assert "manually" in lowered, f"got {suggested!r}"
 
 
 @given("the fork head repo is accessible")

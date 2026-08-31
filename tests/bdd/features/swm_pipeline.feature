@@ -147,6 +147,16 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     Then the thread verdict is "NEEDS_HUMAN_JUDGMENT"
     And no resolveReviewThread mutation was invoked
 
+  Scenario: Edited reply cannot ride a pre-edit head transition (issue #335 security P1)
+    Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with substantive author reply and isResolved false
+    And the recorded poll history shows an earlier head before the Codex review
+    And the latest author reply was edited at "2026-05-11T14:30:00Z"
+    And a fake investigator returning verdict "RESOLVED" confidence 0.99 reason "edited-in verdict adopted"
+    And the stub client returns a sample diff for "app.py"
+    When compute_clearance_automation runs with investigator and DRY_RUN false
+    Then the thread verdict is "NEEDS_HUMAN_JUDGMENT"
+    And no resolveReviewThread mutation was invoked
+
   Scenario: Investigator RESOLVED with a recorded head transition resolves (issue #254 corroboration)
     Given the stub PR "iterwheel/sandbox" #49 has 1 outdated Codex thread at path "app.py" line 10
     And the recorded poll history shows an earlier head before the Codex review
@@ -600,6 +610,16 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
   # Issue #63: State A investigator eligibility (codex_review_stale)
   # ---------------------------------------------------------------------------
 
+  Scenario: Backdated committer date cannot mask staleness (issue #335 ruling)
+    Given the stub PR "iterwheel/sandbox" #49 has 1 fresh Codex thread (State A) at path "app.py"
+    And the PR was pushed after the Codex review
+    And the recorded poll history shows an earlier head before the Codex review
+    And the stub client records a backdated head commit date "2026-05-01T00:00:00Z"
+    And a fake investigator returning verdict "RESOLVED" confidence 0.92 reason "diff confirms the null-guard was added" for each thread
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "ready"
+    And the thread llm_verdict is "RESOLVED"
+
   Scenario: Issue #63 State A stale — PR pushed after Codex review, investigator invoked
     Given the stub PR "iterwheel/sandbox" #49 has 1 fresh Codex thread (State A) at path "app.py"
     And a fake investigator returning verdict "RESOLVED" confidence 0.92 reason "diff confirms the null-guard was added" for each thread
@@ -624,6 +644,30 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
   # ---------------------------------------------------------------------------
   # Issue #62: fork PR head-repo accessibility (UnsupportedContext)
   # ---------------------------------------------------------------------------
+
+  Scenario: Issue #267 deleted-fork PR (head.repo null) fails closed with UnsupportedContext
+    Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with substantive author reply and isResolved false
+    And the stub PR head repository is deleted (head.repo is null)
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "error"
+    And exactly 0 resolveReviewThread mutations were invoked
+    And the Stage 1.5 action result error_class is "UnsupportedContext"
+    And the Stage 1.5 action suggested_action mentions the missing head repository
+
+  Scenario: Issue #267 deleted-fork PR skips the resolver fallback and takes the manual-close path (Codex P2)
+    Given the stub PR "iterwheel/sandbox" #49 author is "iterwheel-assembly[bot]"
+    And the stub PR "iterwheel/sandbox" #49 has 1 outdated Codex thread at path "app.py" line 10
+    And a fake investigator returning verdict "RESOLVED" confidence 0.95 reason "Fix corroborated in diff"
+    And the stub client returns a sample diff for "app.py"
+    And the stub PR head repository is deleted (head.repo is null)
+    And the thread viewerCanResolve is false
+    And the authorized resolver app "iterwheel-assembly" can resolve the thread
+    When compute_clearance_automation runs with DRY_RUN false
+    Then the automation status is "ready"
+    And exactly 0 resolveReviewThread mutations were invoked
+    And the Stage 1.5 action has a skipped action
+    And the Stage 1.5 skipped action reason is "viewerCanResolve is false"
+    And exactly 1 in-thread reply was posted under the Codex review comment
 
   Scenario: Issue #62 fork PR with inaccessible head repo — resolveReviewThread skipped with UnsupportedContext
     Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with substantive author reply and isResolved false

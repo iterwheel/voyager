@@ -77,6 +77,7 @@ query ThreadComments($threadId: ID!, $cursor: String) {
           body
           url
           createdAt
+          lastEditedAt
           replyTo { databaseId }
         }
       }
@@ -379,6 +380,8 @@ class GitHubAppClient:
                       body
                       url
                       createdAt
+                      lastEditedAt
+                      originalCommit { oid }
                       replyTo { databaseId }
                     }
                   }
