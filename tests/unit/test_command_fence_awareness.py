@@ -113,3 +113,17 @@ def test_blueprint_trigger_inside_fence_is_ignored():
 
 def test_stack_trigger_in_quoted_reply_is_ignored():
     assert should_run_stack("issue_comment", _comment("> old comment said /stack\nagreed")) is False
+
+
+def test_html_comments_are_stripped():
+    """Codex P1 round 3: hidden HTML-comment content cannot carry a command."""
+    assert "/assembly" not in visible_comment_text("<!--\n/assembly --dry-run\n-->")
+    assert "/stack" not in visible_comment_text("<!-- example: /stack -->")
+    assert "/stack" in visible_comment_text("please run /stack <!-- todo -->")
+
+
+def test_indented_code_after_heading_is_stripped():
+    """Codex P1 round 3: heading + 4-space indent is an indented code block."""
+    assert "/assembly" not in visible_comment_text("# Usage\n    /assembly --dry-run")
+    # Document-start behavior deliberately unchanged (parser contract).
+    assert "/assembly" in visible_comment_text("    /assembly")
