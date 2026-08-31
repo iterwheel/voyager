@@ -907,7 +907,7 @@ async def github_webhook(
     candidate_routes = [
         *route_blueprint_event(x_github_event, payload),
         *route_stack_event(x_github_event, payload),
-        *route_clearance_event(x_github_event, payload),
+        *route_clearance_event(x_github_event, payload, cfg=cfg),
         *route_changelog_event(x_github_event, payload),
         *route_assembly_event(x_github_event, payload, cfg=cfg),
         *route_review_fix_event(x_github_event, payload, cfg=cfg),

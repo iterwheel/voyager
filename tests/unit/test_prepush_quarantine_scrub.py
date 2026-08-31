@@ -22,6 +22,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _HOOK_ENV_QUARANTINE = {
@@ -65,10 +67,17 @@ def test_repo_pointers_and_quarantine_are_scrubbed():
     assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
 
 
-def test_object_store_vars_survive_without_quarantine():
-    """Codex P2: intentional object-store config (no quarantine) is preserved."""
+@pytest.mark.parametrize("keep", ["both", "object_dir", "alternates"])
+def test_object_store_vars_survive_without_quarantine(keep):
+    """Codex P2: intentional object-store config (no quarantine) is preserved —
+    including configurations that set only ONE of the pair."""
+    base = {k: v for k, v in _HOOK_ENV_QUARANTINE.items() if k != "GIT_QUARANTINE_PATH"}
+    if keep == "object_dir":
+        base.pop("GIT_ALTERNATE_OBJECT_DIRECTORIES")
+    elif keep == "alternates":
+        base.pop("GIT_OBJECT_DIRECTORY")
     result = _child_pytest(
-        {k: v for k, v in _HOOK_ENV_QUARANTINE.items() if k != "GIT_QUARANTINE_PATH"},
+        base,
         "tests/unit/test_prepush_quarantine_scrub.py::test_object_store_vars_preserved",
     )
     assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
@@ -81,15 +90,21 @@ def test_no_hook_env_leak():
 
 
 def test_object_store_vars_preserved():
-    """Runs as a CHILD pytest: intentional object-store vars survive (P2)."""
+    """Runs as a CHILD pytest: intentional object-store vars survive (P2).
+
+    Codex P2 on #332: only the variables PRESENT AT LAUNCH are asserted —
+    a valid intentional configuration may set just one of the pair."""
     import pytest
 
-    if not (
-        "GIT_OBJECT_DIRECTORY" in os.environ or "GIT_ALTERNATE_OBJECT_DIRECTORIES" in os.environ
-    ):
+    expected = [
+        name
+        for name in ("GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES")
+        if name in os.environ
+    ]
+    if not expected:
         pytest.skip("child-only probe: run via test_object_store_vars_survive_without_quarantine")
     assert "GIT_QUARANTINE_PATH" not in os.environ  # precondition: no quarantine
-    for name in ("GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
+    for name in expected:
         assert os.environ.get(name), f"{name} must survive outside quarantine contexts"
 
 
