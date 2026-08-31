@@ -182,6 +182,21 @@ Feature: SWM judge — verdict assignment per SWM-1101 decision tree
     When codex_followup_reaction is called
     Then the followup reaction is "negative"
 
+  Scenario: Questioned token answered with No is negative (Codex round 5)
+    Given a Codex follow-up body "Fixed? No—the race persists."
+    When codex_followup_reaction is called
+    Then the followup reaction is "negative"
+
+  Scenario: Distant "no new issues" before a positive stays positive
+    Given a Codex follow-up body "no new issues introduced, looks good"
+    When codex_followup_reaction is called
+    Then the followup reaction is "positive"
+
+  Scenario: Close "no" before a token negates it
+    Given a Codex follow-up body "no issues were addressed here"
+    When codex_followup_reaction is called
+    Then the followup reaction is "negative"
+
   Scenario: Empty Codex follow-up returns None
     Given a None Codex follow-up body
     When codex_followup_reaction is called

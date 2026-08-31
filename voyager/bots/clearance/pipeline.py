@@ -1278,11 +1278,25 @@ async def _process_thread(
             llm_decision = returned
             adopted_verdict = coerced
             adopted_reason = llm_decision.reason
-            finding_created_at = str(
-                ((_comment_nodes(thread_dict) or [{}])[0].get("createdAt")) or ""
+            # Codex P1 on #335: the untrusted claim is the thread's LATEST
+            # comment (usually the author reply) — corroborating head motion
+            # must postdate it, not merely the original finding.
+            comments_for_claim = _comment_nodes(thread_dict) or [{}]
+            # Clearance's own writeback comments (close-reason markers,
+            # conclusion replies) are bookkeeping, not claims — exclude them
+            # from the claim boundary.
+            claim_created_at = max(
+                (
+                    str(c.get("createdAt") or "")
+                    for c in comments_for_claim
+                    if not logins_equivalent(
+                        str(((c.get("author") or {}).get("login")) or ""), CLEARANCE_BOT_LOGIN
+                    )
+                ),
+                default="",
             )
             if coerced == Verdict.RESOLVED and not _head_sha_advanced_after_thread(
-                store, repo, pr, head_sha, finding_created_at
+                store, repo, pr, head_sha, claim_created_at
             ):
                 # Issue #254: the investigator's inputs are untrusted (author
                 # reply, attacker-quotable Codex comments, diff text). A RESOLVED

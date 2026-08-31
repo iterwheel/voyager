@@ -132,7 +132,13 @@ def _positive_is_negated(text: str, pos: int, token_len: int) -> bool:
     if pos >= 2 and text[pos - 2 : pos] == "un" and (pos == 2 or not text[pos - 3].isalnum()):
         return True
     window = text[max(0, pos - _NEGATION_WINDOW) : pos]
-    if _NEGATOR_RE.search(window):
+    if _NEGATOR_WIDE_RE.search(window):
+        return True
+    # Bare "no" negates only in immediate proximity (nothing but short filler
+    # between it and the token): "no issues were addressed" negates, while
+    # the affirmative idiom "no new issues introduced, looks good" keeps the
+    # distant token positive (Codex P1 rounds on #335).
+    if _CLOSE_NO_RE.search(window[-24:]):
         return True
     after = text[pos + token_len : pos + token_len + 24]
     return bool(_AFTER_NEGATOR_RE.match(after))
@@ -142,7 +148,20 @@ _AFTER_NEGATOR_RE = re.compile(
     r"^[\s,.!?;:]{0,6}(?:not|never|nor|isn['\u2019]?t|aren['\u2019]?t|wasn['\u2019]?t|"
     r"won['\u2019]?t|don['\u2019]?t|doesn['\u2019]?t|didn['\u2019]?t|"
     r"hasn['\u2019]?t|haven['\u2019]?t|can['\u2019]?t|cannot)\b"
+    r"|^[?\s]{0,4}no[\s\u2014\u2013-]"  # "Fixed? No—the race persists."
 )
+
+# Wide negator set WITHOUT bare "no" (proximity-handled separately).
+_NEGATOR_WIDE_RE = re.compile(
+    r"\b(?:"
+    r"not|never|none|nobody|nothing|"
+    r"isn['\u2019]?t|aren['\u2019]?t|wasn['\u2019]?t|weren['\u2019]?t|won['\u2019]?t|"
+    r"don['\u2019]?t|doesn['\u2019]?t|didn['\u2019]?t|hasn['\u2019]?t|haven['\u2019]?t|"
+    r"can['\u2019]?t|cannot|cant|dont|doesnt|didnt|hasnt|havent|"
+    r"remains?|still|yet|without|lack(?:s|ing|ed)?|missing"
+    r")\b"
+)
+_CLOSE_NO_RE = re.compile(r"\bno\b[^.!?]{0,16}$")
 
 
 @dataclass(frozen=True)
