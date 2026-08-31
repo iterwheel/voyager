@@ -15,9 +15,15 @@ unreachable, definitionally.
 
 from __future__ import annotations
 
+import re
+
 from markdown_it import MarkdownIt
 
-_md = MarkdownIt("commonmark")
+# GFM tables are containers on GitHub: enable the table rule so table rows
+# never reach the command surface (P1 round 10).
+_HTML_CONTAINER_TAGS = frozenset({"details", "summary", "blockquote", "figure", "center", "table"})
+
+_md = MarkdownIt("commonmark").enable("table")
 
 _CONTAINER_OPEN = frozenset({"blockquote_open", "list_open", "list_item_open", "paragraph_open"})
 _CONTAINER_CLOSE = frozenset(
@@ -39,7 +45,21 @@ def visible_comment_text(body: str | None) -> str:
     paragraph: list[str] = []
     depth = 0
     in_heading = False
+    html_container_depth = 0  # >0 while inside a raw-HTML container block
     for token in _md.parse(body):
+        if token.type == "html_block":
+            # Raw-HTML CONTAINER tags (details/summary/blockquote-as-html) hide
+            # the Markdown blocks they enclose: '<details>' opens a container
+            # that stays active until its close tag (P1 round 10). Plain
+            # standalone HTML blocks are invisible either way.
+            tag = re.search(r"</?([a-zA-Z][a-zA-Z0-9-]*)", token.content or "")
+            name = tag.group(1).lower() if tag else ""
+            if name in _HTML_CONTAINER_TAGS:
+                if token.content.lstrip().startswith("</"):
+                    html_container_depth = max(0, html_container_depth - 1)
+                else:
+                    html_container_depth += 1
+            continue
         if token.type == "heading_open":
             in_heading = True
             depth += 1
@@ -50,7 +70,13 @@ def visible_comment_text(body: str | None) -> str:
             depth += 1
         elif token.type in _CONTAINER_CLOSE:
             depth -= 1
-        elif token.type == "inline" and depth == 1 and token.children and not in_heading:
+        elif (
+            token.type == "inline"
+            and depth == 1
+            and token.children
+            and not in_heading
+            and html_container_depth == 0
+        ):
             # An inline token follows its paragraph_open/heading_open; it is
             # top-level prose only when the enclosing depth is exactly the
             # block's own level (1). Heading content is NOT a command surface
