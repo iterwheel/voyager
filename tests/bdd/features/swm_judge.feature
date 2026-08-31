@@ -267,6 +267,21 @@ Feature: SWM judge — verdict assignment per SWM-1101 decision tree
     When codex_followup_reaction is called
     Then the followup reaction is "positive"
 
+  Scenario: Present-tense regression verb is a rejection (Codex round 15)
+    Given a Codex follow-up body "The concern is resolved, but this regresses error handling."
+    When codex_followup_reaction is called
+    Then the followup reaction is "negative"
+
+  Scenario: After-token scan stops at sentence boundaries (Codex round 15)
+    Given a Codex follow-up body "The concern is resolved. It is not a regression."
+    When codex_followup_reaction is called
+    Then the followup reaction is "positive"
+
+  Scenario: Mixed negated and affirmative regressions reject (Codex round 15)
+    Given a Codex follow-up body "This has not regressed on Linux. The concern is resolved, but the Windows path regressed."
+    When codex_followup_reaction is called
+    Then the followup reaction is "negative"
+
   Scenario: Empty Codex follow-up returns None
     Given a None Codex follow-up body
     When codex_followup_reaction is called

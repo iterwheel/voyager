@@ -65,7 +65,7 @@ def codex_followup_reaction(followup_body: str | None) -> str | None:
     # Codex P2 round 14: a NEGATED regression ('has not regressed', 'No
     # regression introduced') is an approval, not a rejection — only
     # affirmative regression statements reject.
-    if _REGRESSION_RE.search(text) and not _NEGATED_REGRESSION_RE.search(text):
+    if _has_affirmative_regression(text):
         return "negative"
     if any(
         token in text
@@ -146,11 +146,32 @@ _NEGATOR_RE = re.compile(
 )
 _NEGATION_WINDOW = 48
 # Affirmative regression statement vs negated regression (an approval).
-_REGRESSION_RE = re.compile(r"\bregress(?:ed|ion)\b")
+# Every common inflection (Codex P1 round 15: 'regresses' read as approval).
+_REGRESSION_RE = re.compile(r"\bregress(?:ed|es|ing|ion|ions)?\b")
 _NEGATED_REGRESSION_RE = re.compile(
     r"\b(?:not|no|never|isn['\u2019]?t|aren['\u2019]?t|wasn['\u2019]?t|weren['\u2019]?t|"
     r"hasn['\u2019]?t|haven['\u2019]?t|didn['\u2019]?t)\s+"
-    r"(?:\w+\s+){0,2}regress(?:ed|ion)?\b"
+    r"(?:\w+\s+){0,2}regress(?:ed|es|ing|ion|ions)?\b"
+)
+
+
+def _has_affirmative_regression(text: str) -> bool:
+    """True when ANY regression occurrence is not locally negated (Codex P1
+    round 15: a negated occurrence elsewhere must not mask this one)."""
+    for match in _REGRESSION_RE.finditer(text):
+        start = match.start()
+        # The negated form binds to the verb within ~3 words; look at the
+        # 24 chars before this occurrence, same sentence only.
+        before = text[max(0, start - 24) : start]
+        before = before.rsplit(".", 1)[-1].rsplit("!", 1)[-1].rsplit("?", 1)[-1]
+        if not _NEGATED_REGRESSION_LEAD_RE.search(before):
+            return True
+    return False
+
+
+_NEGATED_REGRESSION_LEAD_RE = re.compile(
+    r"(?:not|no|never|isn['\u2019]?t|aren['\u2019]?t|wasn['\u2019]?t|weren['\u2019]?t|"
+    r"hasn['\u2019]?t|haven['\u2019]?t|didn['\u2019]?t)\s+(?:\w+\s+){0,2}$"
 )
 
 
@@ -180,7 +201,13 @@ def _positive_is_negated(text: str, pos: int, token_len: int) -> bool:
     # distant token positive (Codex P1 rounds on #335).
     if _CLOSE_NO_RE.search(window[-24:]):
         return True
-    after = text[pos + token_len : pos + token_len + 48]
+    after_full = text[pos + token_len : pos + token_len + 48]
+    # "Resolved? No." — the question-No form legitimately crosses the '?'.
+    if _AFTER_QUESTION_NO_RE.match(after_full):
+        return True
+    # A negator in a LATER completed sentence must not negate this token
+    # (Codex P2 round 15): stop the scan at the first sentence end.
+    after = re.split(r"[.!?]", after_full)[0]
     return bool(_AFTER_NEGATOR_RE.match(after))
 
 
@@ -190,8 +217,8 @@ _AFTER_NEGATOR_RE = re.compile(
     r"isn['\u2019]?t|aren['\u2019]?t|wasn['\u2019]?t|"
     r"won['\u2019]?t|don['\u2019]?t|doesn['\u2019]?t|didn['\u2019]?t|"
     r"hasn['\u2019]?t|haven['\u2019]?t|can['\u2019]?t|cannot)\b"
-    r"|^[?\s]{0,4}no(?:[\s\u2014\u2013-]|[.!?]|$)"  # "Fixed? No—" / "Resolved? No."
 )
+_AFTER_QUESTION_NO_RE = re.compile(r"^[?\s]{0,4}no(?:[\s\u2014\u2013-]|[.!?]|$)")
 
 # Wide negator set WITHOUT bare "no" (proximity-handled separately).
 _NEGATOR_WIDE_RE = re.compile(
