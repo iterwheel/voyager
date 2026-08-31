@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 
 _FENCE_OPEN_RE = re.compile(r"^\s*(`{3,}|~{3,})")
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 _NEW_BLOCK_RE = re.compile(r"^(?:#{1,6}\s|[-*+]\s|\d+[.)]\s)")
 
 
@@ -32,6 +33,7 @@ def visible_comment_text(body: str | None) -> str:
     """
     if not body:
         return ""
+    body = _HTML_COMMENT_RE.sub("", body)
     visible: list[str] = []
     fence_marker = ""
     in_quote = False
@@ -68,6 +70,14 @@ def visible_comment_text(body: str | None) -> str:
             in_quote = True
             awaiting_code_block = False
             in_indented_code = False
+            continue
+        if line.lstrip().startswith("#"):
+            # A heading is a block boundary: an indented line after it is an
+            # indented code block (Codex P1 round 3).
+            visible.append(line)
+            awaiting_code_block = True
+            in_indented_code = False
+            in_quote = False
             continue
         if in_quote:
             # Lazy continuation only applies to paragraph text: a line that
