@@ -237,6 +237,16 @@ Feature: SWM judge — verdict assignment per SWM-1101 decision tree
     When codex_followup_reaction is called
     Then the followup reaction is "negative"
 
+  Scenario: Terminal question-No reply is negative (Codex round 12)
+    Given a Codex follow-up body "Resolved? No."
+    When codex_followup_reaction is called
+    Then the followup reaction is "negative"
+
+  Scenario: Adversative clause ending in remains is negative (Codex round 12)
+    Given a Codex follow-up body "The symptom is addressed, but the original race remains."
+    When codex_followup_reaction is called
+    Then the followup reaction is "negative"
+
   Scenario: Empty Codex follow-up returns None
     Given a None Codex follow-up body
     When codex_followup_reaction is called

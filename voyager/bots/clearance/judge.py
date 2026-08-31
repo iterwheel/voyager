@@ -162,16 +162,16 @@ def _positive_is_negated(text: str, pos: int, token_len: int) -> bool:
     # distant token positive (Codex P1 rounds on #335).
     if _CLOSE_NO_RE.search(window[-24:]):
         return True
-    after = text[pos + token_len : pos + token_len + 24]
+    after = text[pos + token_len : pos + token_len + 48]
     return bool(_AFTER_NEGATOR_RE.match(after))
 
 
 _AFTER_NEGATOR_RE = re.compile(
-    r"^[\s,.!?;:]{0,6}(?:but|however|though|yet)?[\s,.!?;:]{0,6}"
-    r"(?:not|never|nor|isn['\u2019]?t|aren['\u2019]?t|wasn['\u2019]?t|"
+    r"^[\s,.!?;:]{0,6}(?:but|however|though|yet)?[^.!?]{0,24}?"
+    r"(?:not|never|nor|remains?|persists?|isn['\u2019]?t|aren['\u2019]?t|wasn['\u2019]?t|"
     r"won['\u2019]?t|don['\u2019]?t|doesn['\u2019]?t|didn['\u2019]?t|"
     r"hasn['\u2019]?t|haven['\u2019]?t|can['\u2019]?t|cannot)\b"
-    r"|^[?\s]{0,4}no[\s\u2014\u2013-]"  # "Fixed? No—the race persists."
+    r"|^[?\s]{0,4}no(?:[\s\u2014\u2013-]|[.!?]|$)"  # "Fixed? No—" / "Resolved? No."
 )
 
 # Wide negator set WITHOUT bare "no" (proximity-handled separately).
