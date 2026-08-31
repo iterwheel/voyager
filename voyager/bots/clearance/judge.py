@@ -147,7 +147,7 @@ _NEGATOR_RE = re.compile(
 _NEGATION_WINDOW = 48
 # Affirmative regression statement vs negated regression (an approval).
 # Every common inflection (Codex P1 round 15: 'regresses' read as approval).
-_REGRESSION_RE = re.compile(r"\bregress(?:ed|es|ing|ion|ions)?\b")
+_REGRESSION_RE = re.compile(r"\bregress(?:ed|es|ing|ion|ions)?\b(?!\s+tests?\b)")
 _NEGATED_REGRESSION_RE = re.compile(
     r"\b(?:not|no|never|isn['\u2019]?t|aren['\u2019]?t|wasn['\u2019]?t|weren['\u2019]?t|"
     r"hasn['\u2019]?t|haven['\u2019]?t|didn['\u2019]?t)\s+"
@@ -164,10 +164,22 @@ def _has_affirmative_regression(text: str) -> bool:
         # 24 chars before this occurrence, same sentence only.
         before = text[max(0, start - 24) : start]
         before = before.rsplit(".", 1)[-1].rsplit("!", 1)[-1].rsplit("?", 1)[-1]
-        if not _NEGATED_REGRESSION_LEAD_RE.search(before):
-            return True
+        if _NEGATED_REGRESSION_LEAD_RE.search(before):
+            continue
+        # Codex P2 round 16: merely DISCUSSING a regression (fixing/preventing
+        # one, or referencing a regression test) is not an asserted regression.
+        if _REGRESSION_HANDLING_LEAD_RE.search(before):
+            continue
+        return True
     return False
 
+
+# Handling verbs directly before the noun: the regression is being fixed /
+# prevented / tested, not reported.
+_REGRESSION_HANDLING_LEAD_RE = re.compile(
+    r"\b(?:fix(?:es|ed)?|prevent(?:s|ed)?|address(?:es|ed)?|resolv(?:es|ed)?|"
+    r"handles?|handled|mitigat(?:es|ed)?|covers?|covered|tests?)\s+(?:the\s+|a\s+|this\s+)?$"
+)
 
 _NEGATED_REGRESSION_LEAD_RE = re.compile(
     r"(?:not|no|never|isn['\u2019]?t|aren['\u2019]?t|wasn['\u2019]?t|weren['\u2019]?t|"
