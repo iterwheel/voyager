@@ -179,6 +179,7 @@ def visible_comment_text(body: str | None) -> str:
     if not body:
         return ""
     parts: list[str] = []
+    spans: list[tuple[str, list[str]]] = []
     depth = 0
     in_heading = False
     html_containers: list[str] = []  # open containers; matched closers pop
@@ -246,42 +247,32 @@ def visible_comment_text(body: str | None) -> str:
                 elif child.type == "link_close":
                     visible_spans.append("](")
             if visible_spans:
-                parts.append("".join(visible_spans))
+                span_text = "".join(visible_spans)
+                parts.append(span_text)
+                src_start = token.map[0] if token.map else 0
+                src_end = token.map[1] if token.map and len(token.map) > 1 else src_start + 1
+                spans.append((span_text, body.splitlines()[src_start:src_end]))
         # fences, code blocks, html blocks emit no inline tokens — dropped
     result = "\n".join(parts)
-    # Escape/entity sanitation (rounds 16-21): the parser resolves source
-    # escapes ('\\/stack') and HTML entities ('&sol;stack'). A reconstructed
-    # token is live when ITS OWN source line carries it live (unescaped,
-    # non-entity); when the producing line cannot be identified (structural
-    # lines were removed), fall back to a global live-occurrence budget
-    # consumed in document order.
-    source_lines = body.splitlines()
-    live_budget = sum(
-        len(re.findall(rf"(?<![\\\w`/&;]){re.escape(word)}\b", body, re.I))
-        for word in _COMMAND_WORDS
-    )
-    sanitized = []
-    for i, line in enumerate(result.splitlines()):
-        src = source_lines[i] if i < len(source_lines) else ""
-        for match in re.finditer(r"/(?:assembly|implement|stack|blueprint)\b", line, re.I):
+    # Escape/entity sanitation (rounds 16-22): the parser resolves source
+    # escapes ('\\/stack') and HTML entities ('&sol;stack'). Each visible
+    # SPAN is verified against its OWN source lines (the paragraph token's
+    # .map) — no global budget, no output-index guessing: structural lines
+    # (headings/fences/quotes) never feed the live count, and a genuine
+    # command under a heading pairs with its true line.
+    for span_text, src_lines in spans:
+        src = "\n".join(src_lines)
+        for match in re.finditer(r"/(?:assembly|implement|stack|blueprint)\b", span_text, re.I):
             cmd = str(match.group(0))
             if _line_has_live_token(src, cmd):
-                continue  # live on its own source line
-            if re.search(rf"\\?{re.escape(cmd)}", src, re.I) or "&" in src:
-                # escaped ('\\/stack') or entity ('&sol;stack') on its own
-                # source line: not live — remove.
-                line = re.sub(rf"(?<![\w`/]){re.escape(cmd)}\b", "", line)
                 continue
-            # producing line unknown: consume the global live budget
-            if live_budget > 0:
-                live_budget -= 1
-                continue
-            line = re.sub(rf"(?<![\w`/]){re.escape(cmd)}\b", "", line)
-        sanitized.append(line)
-    return "\n".join(sanitized)
-
-
-_COMMAND_WORDS = ("/assembly", "/implement", "/stack", "/blueprint")
+            result = result.replace(
+                span_text,
+                re.sub(rf"(?<![\w`/]){re.escape(cmd)}\b", "", span_text),
+                1,
+            )
+            span_text = re.sub(rf"(?<![\w`/]){re.escape(cmd)}\b", "", span_text)
+    return result
 
 
 def _line_has_live_token(source_line: str, token: str) -> bool:
