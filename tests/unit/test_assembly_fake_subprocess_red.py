@@ -47,6 +47,18 @@ def _contract():
     )
 
 
+@pytest.fixture(autouse=True)
+def _clear_writeback_locks():
+    """Issue #257: the writeback lock dict is module-global and keyed on
+    (repo, issue-number); tests share issue numbers across files, so a lock
+    created in one test's event loop must not leak into another asyncio.run()."""
+    from voyager.bots.assembly import writeback as _wb
+
+    _wb._assembly_writeback_locks.clear()
+    yield
+    _wb._assembly_writeback_locks.clear()
+
+
 def _route() -> dict[str, Any]:
     contract = _contract().to_dict()
     return {
@@ -479,7 +491,9 @@ async def test_concurrent_fake_subprocess_dispatches_serialize_without_duplicate
     ]
     assert client.branch_ref_exists.await_count == 2
     assert client.create_branch_ref.await_count == 1
-    assert client.find_pull_request_by_head.await_count == 2
+    # Issue #257 + Codex P1 on #337: each dispatch resolves the issue branch
+    # pre-lock AND inside the lock (2 dispatches x 2 extra lookups).
+    assert client.find_pull_request_by_head.await_count == 6
     assert client.create_pull_request.await_count == 1
     assert client.update_pull_request.await_count == 1
 

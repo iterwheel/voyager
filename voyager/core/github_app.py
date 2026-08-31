@@ -5,7 +5,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, quote_plus
 
 import httpx
 import jwt
@@ -992,6 +992,27 @@ class GitHubAppClient:
         payload = await self.request(app_slug, "GET", path, repository=repo)
         items = list(payload or [])
         return dict(items[0]) if items else None
+
+    async def find_open_prs_referencing_issue(
+        self,
+        app_slug: str,
+        repo: str,
+        issue_number: int,
+    ) -> list[dict[str, Any]]:
+        """Return open PRs whose body references ``#<issue_number>`` (issue #257).
+
+        Search-API based; callers must re-verify candidates (head-branch
+        prefix, body reference) since the numeric query can over-match.
+        Returns [] on failure — never raises.
+        """
+        query = quote_plus(f"repo:{repo} is:pr is:open {issue_number} in:body")
+        path = f"/search/issues?q={query}&per_page=30"
+        try:
+            payload = await self.request(app_slug, "GET", path, repository=repo)
+        except (httpx.HTTPError, TimeoutError):
+            return []
+        items = (payload or {}).get("items") if isinstance(payload, dict) else None
+        return [dict(item) for item in items or [] if isinstance(item, dict)]
 
     async def pull_request_head_updated_at(
         self, app_slug: str, repo: str, pull_number: int
