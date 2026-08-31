@@ -275,33 +275,34 @@ def visible_comment_text(body: str | None) -> str:
                 spans.append((span_text, body.splitlines()[src_start:src_end]))
         # fences, code blocks, html blocks emit no inline tokens — dropped
     result = "\n".join(parts)
-    # Escape/entity sanitation (rounds 16-22): the parser resolves source
-    # escapes ('\\/stack') and HTML entities ('&sol;stack'). Each visible
-    # SPAN is verified against its OWN source lines (the paragraph token's
-    # .map) — no global budget, no output-index guessing: structural lines
-    # (headings/fences/quotes) never feed the live count, and a genuine
-    # command under a heading pairs with its true line.
+    # Escape/entity sanitation (rounds 16-26): each visible SPAN is verified
+    # against its OWN source lines (the paragraph token's .map) and sanitized
+    # at its tracked offset — never located by content search. Verification
+    # covers the COMMAND WORD plus recognized FLAGS (entity-decoded flags
+    # must not survive); unrelated trailing prose (normalized '&' etc.) is
+    # not required to be byte-identical.
+    spans_with_offsets: list[tuple[str, list[str], int]] = []
+    offset = 0
     for span_text, src_lines in spans:
+        spans_with_offsets.append((span_text, src_lines, offset))
+        offset += len(span_text) + 1  # +1 for the joining newline
+    for span_text, src_lines, base in spans_with_offsets:
         src = "\n".join(src_lines)
         for match in re.finditer(r"/(?:assembly|implement|stack|blueprint)\b", span_text, re.I):
             cmd = str(match.group(0))
-            # Round 23: verify the ENTIRE command line (flags included) —
-            # entity-decoded flags ('&#45;&#45;allow…') must not survive.
-            # Round 25: /assembly and /implement parse FLAGS — verify the
-            # whole line; substring triggers (/stack, /blueprint) verify the
-            # OCCURRENCE only (inline links/normalization on the line must
-            # not void a genuine request).
             nl = span_text.find("\n", match.start())
             cmd_line = span_text[match.start() : nl if nl > 0 else len(span_text)].rstrip()
-            verify = cmd_line if cmd.startswith(("/assembly", "/implement")) else cmd
-            if _line_has_live_token(src, verify) or f"`{cmd}" in src:
+            flags = " ".join(tok for tok in cmd_line.split()[1:] if tok.startswith("--"))
+            verify = f"{cmd} {flags}".strip() if flags else cmd
+            if (
+                _line_has_live_token(src, verify)
+                # whitespace-normalized match (tab-separated flags)
+                or _line_has_live_token(" ".join(src.split()), verify)
+                or f"`{cmd}" in src
+            ):
                 continue  # live, or inside an inline code span (prose intent)
-            # Remove ONLY this specific occurrence (count=1, from its own
-            # position — not every token in the span).
-            result = result[: result.find(span_text)] + result[result.find(span_text) :].replace(
-                span_text[match.start() : match.end()], "", 1
-            )
-            span_text = span_text[: match.start()] + span_text[match.end() :]
+            pos = base + match.start()
+            result = result[:pos] + result[pos + len(cmd) :]
     return result
 
 
