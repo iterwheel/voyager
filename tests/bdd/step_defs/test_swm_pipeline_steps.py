@@ -22,6 +22,7 @@ import asyncio
 import json
 import logging
 import os
+import tempfile
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -85,13 +86,18 @@ class _StubGitHubAppClient:
             "title": "Fix the bug",
             "number": PR,
             "user": {"login": "ryosaeba1985"},  # default PR author for existing scenarios
-            # Issue #63: pushed_at defaults to None, so stale detection is off
-            # unless a scenario explicitly sets it.
+            # Issue #250: the REST "Get a pull request" object has no top-level
+            # pushed_at — the fixture deliberately omits it so it matches the
+            # real payload shape. Staleness is driven by head_updated_at below
+            # (pull_request_head_updated_at), exactly like production.
         }
         self.pr_payload_second_fetch: dict[str, Any] | None = None  # R5-P2: second-call head SHA
         self.head_updated_at: str | None = "2026-05-11T12:45:00Z"
-        # Issue #254 Codex P1: per-head-commit date for investigator corroboration.
+        # Issue #254 Codex P1: per-head-commit date for stale-thread detection.
         self.head_commit_date: str | None = "2026-05-11T12:45:00Z"
+        # Codex P1 (forged dates): server-observed check-suite timestamp for
+        # the head commit — the investigator corroboration source.
+        self.head_check_suite_at: str | None = "2026-05-11T12:45:00Z"
         self.fail_pull_request: bool = False
         self.fail_pull_request_httpx: bool = False  # Wave 7C-6: raises httpx.HTTPError
         self.pull_request_call_count: int = 0  # Wave 7C-6: tracks guard fetch calls
@@ -193,6 +199,11 @@ class _StubGitHubAppClient:
 
     async def commit_committed_date(self, app_slug: str, repo: str, sha: str) -> str | None:
         return self.head_commit_date
+
+    async def commit_check_suite_observed_at(
+        self, app_slug: str, repo: str, sha: str
+    ) -> str | None:
+        return self.head_check_suite_at
 
     async def issue_comments(
         self, app_slug: str, repo: str, issue_number: int
@@ -625,6 +636,7 @@ def given_codex_substantive(ctx, repo: str, pr: int) -> None:
     # uncorroborated path configure the thread reply without this Given.
     given_fake_investigator(ctx, "RESOLVED", 0.95, "Fix corroborated in diff")
     given_stub_diff(ctx, "app.py")
+    given_poll_history_head_change(ctx)
 
 
 @given(
@@ -644,6 +656,9 @@ def given_codex_short_ack(ctx, repo: str, pr: int) -> None:
 )
 def given_codex_outdated(ctx, repo: str, pr: int) -> None:
     ctx["client"].threads = [_codex_thread(is_outdated=True)]
+    # Issue #254: scenarios whose investigator returns RESOLVED need a
+    # corroborated head transition recorded; harmless for OPEN/NHJ paths.
+    given_poll_history_head_change(ctx)
 
 
 @given(parsers.parse('the stub PR "{repo}" #{pr:d} has 1 human-authored review thread'))
@@ -651,14 +666,70 @@ def given_human_thread(ctx, repo: str, pr: int) -> None:
     ctx["client"].threads = [_human_thread()]
 
 
-@given("the stub PR head was last updated before the thread comments")
-def given_head_older_than_thread(ctx) -> None:
-    """Issue #254: no commits pushed after the review thread — an
-    investigator RESOLVED derived from author prose has no independent
-    corroboration. Drives BOTH the head-observation timestamp and the
-    head-commit committed date (the corroboration source)."""
-    ctx["client"].head_updated_at = "2026-05-10T00:00:00Z"
-    ctx["client"].head_commit_date = "2026-05-10T00:00:00Z"
+_STATE_DIR_SEQ = 0
+
+
+def _fresh_state_dir() -> Path:
+    """Return an unused per-scenario state directory (issue #254 scenarios)."""
+    global _STATE_DIR_SEQ
+    _STATE_DIR_SEQ += 1
+    return Path(tempfile.mkdtemp(prefix=f"clearance-state-{_STATE_DIR_SEQ}-"))
+
+
+@given("the recorded poll history shows no head change since before the Codex review")
+def given_poll_history_no_head_change(ctx) -> None:
+    """Issue #254 (Codex P1 rounds): polls at or before the finding all
+    recorded the CURRENT head — no corroborated head transition; an
+    investigator RESOLVED must be capped to human judgment."""
+    from datetime import UTC as _UTC
+    from datetime import datetime as _datetime
+
+    from voyager.bots.clearance.models import PollRecord, Status
+    from voyager.bots.clearance.state import StateStore
+
+    # Fresh store: a transition poll recorded by an earlier Given (thread
+    # seeding) must not corroborate this scenario's unchanged head.
+    ctx["store"] = StateStore(_fresh_state_dir())
+    ctx["store"].append_poll(
+        PollRecord(
+            ts=_datetime(2026, 5, 11, 11, 0, 0, tzinfo=_UTC),
+            repo=REPO,
+            pr=PR,
+            head_sha="head-sha-abc1234",
+            status=Status.BLOCKED,
+        )
+    )
+
+
+@given("the recorded poll history shows an earlier head before the Codex review")
+def given_poll_history_head_change(ctx) -> None:
+    """Issue #254: Voyager recorded a DIFFERENT head SHA at or before the
+    finding — a corroborated transition onto the current head."""
+    from datetime import UTC as _UTC
+    from datetime import datetime as _datetime
+
+    from voyager.bots.clearance.models import PollRecord, Status
+
+    ctx["store"].append_poll(
+        PollRecord(
+            ts=_datetime(2026, 5, 11, 11, 0, 0, tzinfo=_UTC),
+            repo=REPO,
+            pr=PR,
+            head_sha="old-sha-0000000000000000000000000000000000000000",
+            status=Status.BLOCKED,
+        )
+    )
+    # Post-finding poll on the CURRENT head — the recorded transition that
+    # FOLLOWS the thread's latest claim (fixtures place comments up to 13:00).
+    ctx["store"].append_poll(
+        PollRecord(
+            ts=_datetime(2026, 5, 11, 13, 30, 0, tzinfo=_UTC),
+            repo=REPO,
+            pr=PR,
+            head_sha="head-sha-abc1234",
+            status=Status.BLOCKED,
+        )
+    )
 
 
 @given("the stub PR has 1 Codex thread with an injection-style author reply and isResolved false")
@@ -719,6 +790,9 @@ def given_pr_author(ctx, repo: str, pr: int, author_login: str) -> None:
 )
 def given_codex_thread_non_author_reply(ctx, reply_author: str) -> None:
     ctx["client"].threads = [_codex_thread_with_custom_reply(reply_author=reply_author)]
+    # Issue #254: scenarios using this Given that configure an investigator
+    # model a corroborated resolve; record the head transition.
+    given_poll_history_head_change(ctx)
 
 
 @given(
@@ -730,6 +804,7 @@ def given_codex_thread_stale_followup(ctx) -> None:
     # Issue #253: the newer substantive reply needs corroboration to resolve.
     given_fake_investigator(ctx, "RESOLVED", 0.95, "Fix corroborated in diff")
     given_stub_diff(ctx, "app.py")
+    given_poll_history_head_change(ctx)
 
 
 @given(
@@ -1114,6 +1189,9 @@ def given_no_investigator(ctx) -> None:
 )
 def given_outdated_codex_thread(ctx, repo: str, pr: int, path: str, line: int) -> None:
     ctx["client"].threads = [_outdated_codex_thread(path=path, line=line)]
+    # Issue #254: scenarios whose investigator returns RESOLVED need a
+    # corroborated head transition recorded; harmless for OPEN/NHJ paths.
+    given_poll_history_head_change(ctx)
 
 
 @given(
@@ -2050,6 +2128,22 @@ def given_stub_pr_head_advances_on_second_call(ctx, sha: str) -> None:
 def given_stub_pr_head_stable(ctx, sha: str) -> None:
     ctx["client"].pr_payload["head"] = {**ctx["client"].pr_payload["head"], "sha": sha}
     ctx["client"].pr_payload_second_fetch = None
+    # Issue #254: the corroborated-resolve scenarios need the recorded
+    # post-finding transition to land on THIS stable head.
+    from datetime import UTC as _UTC
+    from datetime import datetime as _datetime
+
+    from voyager.bots.clearance.models import PollRecord, Status
+
+    ctx["store"].append_poll(
+        PollRecord(
+            ts=_datetime(2026, 5, 11, 12, 45, 0, tzinfo=_UTC),
+            repo=REPO,
+            pr=PR,
+            head_sha=sha,
+            status=Status.BLOCKED,
+        )
+    )
 
 
 @then(
@@ -2082,14 +2176,23 @@ def then_pipeline_stale_verdict_skip_log(ctx, expected_sha: str, actual_sha: str
 
 @given("the PR was pushed after the Codex review")
 def given_pr_pushed_after_codex(ctx) -> None:
-    """Set pushed_at to a timestamp newer than _fresh_codex_thread's createdAt."""
-    ctx["client"].pr_payload["pushed_at"] = "2026-05-12T00:00:00Z"
+    """Head-observation timestamp newer than _fresh_codex_thread's createdAt.
+
+    Issue #250: staleness sources from the PR head commit's committed date
+    (bound to the reviewed head), so the stub drives that — plus the other
+    head timestamps for consistency.
+    """
+    ctx["client"].head_updated_at = "2026-05-12T00:00:00Z"
+    ctx["client"].head_commit_date = "2026-05-12T00:00:00Z"
+    ctx["client"].head_check_suite_at = "2026-05-12T00:00:00Z"
 
 
 @given("the PR was not pushed after the Codex review")
 def given_pr_not_pushed_after_codex(ctx) -> None:
-    """Set pushed_at to a timestamp older than _fresh_codex_thread's createdAt."""
-    ctx["client"].pr_payload["pushed_at"] = "2026-05-10T00:00:00Z"
+    """Head timestamps older than _fresh_codex_thread's createdAt."""
+    ctx["client"].head_updated_at = "2026-05-10T00:00:00Z"
+    ctx["client"].head_commit_date = "2026-05-10T00:00:00Z"
+    ctx["client"].head_check_suite_at = "2026-05-10T00:00:00Z"
 
 
 # Issue #62: fork PR head-repo accessibility (UnsupportedContext)

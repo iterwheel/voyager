@@ -692,30 +692,65 @@ def _issue_comment_login(comment: dict[str, Any]) -> str | None:
     )
 
 
-def _head_advanced_after_thread(
-    thread_dict: dict[str, Any],
-    current_head_updated_at: str | None,
+def _head_sha_advanced_after_thread(
+    store: Any,
+    repo: str,
+    pr: int,
+    current_head_sha: str,
+    finding_created_at: str,
 ) -> bool:
-    """Issue #254: independent corroboration that the reviewed head moved.
+    """Issue #254 (Codex P1 rounds): recorded head-SHA transition corroboration.
 
-    True only when the PR head commit's own committed date is known AND is
-    strictly newer than the thread's first comment — the Codex finding. The
-    signal is bound to the exact head commit (REST /commits/{sha}), so a push
-    to any OTHER branch cannot masquerade as motion on the reviewed head
-    (Codex P1 on #254). A head that predates the finding means no commits
-    landed on this branch after the review, so an investigator RESOLVED
-    derived from author prose is prose-only and must not mutate thread state
-    (legit flow — push the fix, then reply — has the head after the finding
-    and stays corroborated). Unknown commit date (None) fails closed.
-    ISO-8601 timestamps compare lexicographically (GitHub emits UTC 'Z').
+    True only when Voyager's OWN append-only poll history records the PR head
+    moving across the finding: an earlier poll (at or before the finding's
+    createdAt) with a DIFFERENT head SHA, and the current head distinct from
+    it. Every previously tried proxy had a hole Codex correctly rejected —
+    repository-wide pushed_at (other-branch pushes), git committer dates
+    (forgeable GIT_COMMITTER_DATE), and check-suite creation (a late/re-run
+    workflow creates a suite for an UNCHANGED head). A recorded SHA transition
+    proves actual code motion on this PR; polls are written by Voyager itself
+    with server-side timestamps. When no pre-finding poll exists (first run
+    after a review), there is no corroborated transition — fail closed to
+    human judgment. ISO-8601 timestamps compare lexicographically.
     """
-    if not current_head_updated_at:
+    if not finding_created_at or not current_head_sha or store is None:
         return False
-    comments = _comment_nodes(thread_dict)
-    if not comments:
+    try:
+        latest_pre_finding_sha: str | None = None
+        latest_pre_finding_ts = ""
+        post_finding_current_head = False
+        for record in store.read_polls(repo, pr):
+            ts = (
+                record.ts.isoformat().replace("+00:00", "Z")
+                if hasattr(record.ts, "isoformat")
+                else str(record.ts)
+            )
+            if not record.head_sha:
+                continue
+            if ts <= finding_created_at:
+                # Latest poll at/before the finding is the reviewed baseline.
+                if ts >= latest_pre_finding_ts:
+                    latest_pre_finding_ts = ts
+                    latest_pre_finding_sha = record.head_sha
+            elif record.head_sha == current_head_sha:
+                # A RECORDED post-finding poll on the CURRENT head ties the
+                # transition to today's head (Codex P1s: motion between two
+                # pre-finding polls, or onto a transient head that was later
+                # replaced, must not corroborate).
+                post_finding_current_head = True
+        return bool(
+            latest_pre_finding_sha
+            and post_finding_current_head
+            and current_head_sha != latest_pre_finding_sha
+        )
+    except Exception:
+        _log.warning(
+            "corroboration poll-history read failed for %s#%s; failing closed",
+            repo,
+            pr,
+            exc_info=True,
+        )
         return False
-    finding_created_at = str(comments[0].get("createdAt") or "")
-    return bool(finding_created_at and current_head_updated_at > finding_created_at)
 
 
 def _issue_comment_created_at(comment: dict[str, Any]) -> str:
@@ -947,7 +982,7 @@ async def _process_thread(
     profile_name: str | None = None,
     pr_pushed_at: str | None = None,
     current_head_updated_at: str | None = None,
-    head_commit_committed_at: str | None = None,
+    store: Any | None = None,
     known_limitation_store: KnownLimitationStore | None = None,
 ) -> tuple[Thread, ThreadSnapshot] | None:
     """Classify, judge, and build Thread + ThreadSnapshot for one Codex thread.
@@ -1243,8 +1278,25 @@ async def _process_thread(
             llm_decision = returned
             adopted_verdict = coerced
             adopted_reason = llm_decision.reason
-            if coerced == Verdict.RESOLVED and not _head_advanced_after_thread(
-                thread_dict, head_commit_committed_at
+            # Codex P1 on #335: the untrusted claim is the thread's LATEST
+            # comment (usually the author reply) — corroborating head motion
+            # must postdate it, not merely the original finding.
+            comments_for_claim = _comment_nodes(thread_dict) or [{}]
+            # Clearance's own writeback comments (close-reason markers,
+            # conclusion replies) are bookkeeping, not claims — exclude them
+            # from the claim boundary.
+            claim_created_at = max(
+                (
+                    str(c.get("createdAt") or "")
+                    for c in comments_for_claim
+                    if not logins_equivalent(
+                        str(((c.get("author") or {}).get("login")) or ""), CLEARANCE_BOT_LOGIN
+                    )
+                ),
+                default="",
+            )
+            if coerced == Verdict.RESOLVED and not _head_sha_advanced_after_thread(
+                store, repo, pr, head_sha, claim_created_at
             ):
                 # Issue #254: the investigator's inputs are untrusted (author
                 # reply, attacker-quotable Codex comments, diff text). A RESOLVED
@@ -2278,10 +2330,6 @@ async def _compute_clearance_automation_unlocked(
     pr_title = pr_data.get("title")
     pr_author_login: str | None = (pr_data.get("user") or {}).get("login") or None
     base_branch = (pr_data.get("base") or {}).get("ref") or "main"
-    # Issue #63: PR pushed_at timestamp for stale-thread detection.
-    # A Codex thread whose first comment predates the most recent push may have
-    # been addressed in a newer commit even though GitHub didn't mark it outdated.
-    pr_pushed_at: str | None = pr_data.get("pushed_at") or None
     try:
         current_head_updated_at = (
             await client.pull_request_head_updated_at(CLEARANCE_AGENT_SLUG, repository, pr_number)
@@ -2300,10 +2348,11 @@ async def _compute_clearance_automation_unlocked(
             safe["status"],
         )
         current_head_updated_at = None
-    # Issue #254 (Codex P1): corroboration must be bound to the reviewed PR's
-    # head commit — repository-level push timestamps advance on pushes to ANY
-    # branch, which a fork author could use to fake code motion. Fetch the
-    # head commit's own committed date; None (fetch failure) fails closed.
+    # Issue #254 (Codex P1): head-motion signals must be bound to the reviewed
+    # PR's head — repository-level push timestamps (the head-observation
+    # fallback above) advance on pushes to ANY branch, which a fork author
+    # could use to fake code motion. Fetch the head commit's own committed
+    # date; None (fetch failure) fails closed.
     head_commit_committed_at: str | None = None
     if head_sha:
         try:
@@ -2314,7 +2363,7 @@ async def _compute_clearance_automation_unlocked(
             safe = _safe_exception_fields(exc)
             _log.warning(
                 "head commit date fetch failed for %s#%s head=%s "
-                "(investigator corroboration will fail closed): class=%s status=%s",
+                "(stale-thread routing + corroboration will fail closed): class=%s status=%s",
                 repository,
                 pr_number,
                 head_sha,
@@ -2322,6 +2371,16 @@ async def _compute_clearance_automation_unlocked(
                 safe["status"],
             )
             head_commit_committed_at = None
+    # Issue #63: staleness timestamp for stale-thread detection. A Codex
+    # thread whose first comment predates the most recent push may have been
+    # addressed in a newer commit even though GitHub didn't mark it outdated.
+    # Issue #250: the REST "Get a pull request" object has NO top-level
+    # pushed_at field — reading pr_data["pushed_at"] always yielded None and
+    # the stale-thread routing was dead in production. Codex P1 on #334:
+    # source it from the PR head commit's committed date (bound to the
+    # reviewed head, not the repository-wide push fallback); None fails safe
+    # (stale routing simply does not fire — pre-#250 production behavior).
+    pr_pushed_at: str | None = head_commit_committed_at
     # Issue #62: detect fork PRs. The REST API always includes head.repo.full_name
     # and base.repo.full_name; when they differ the PR is from a fork.
     head_repo: str | None = (pr_data.get("head") or {}).get("repo", {}).get("full_name") or None
@@ -2385,7 +2444,7 @@ async def _compute_clearance_automation_unlocked(
             profile_name=default_profile_name,
             pr_pushed_at=pr_pushed_at,
             current_head_updated_at=current_head_updated_at,
-            head_commit_committed_at=head_commit_committed_at,
+            store=store,
             known_limitation_store=known_limitation_store,
         )
         if result is None:

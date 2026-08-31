@@ -81,6 +81,19 @@ def state_a_no_response() -> dict:
 
 
 @given(
+    "a state C thread with a short reply and a formal clean-verdict follow-up",
+    target_fixture="judge_inputs",
+)
+def state_c_formal_verdict_followup() -> dict:
+    return {
+        "classification": "C",
+        "author_reply_body": "thanks",
+        "code_changed": False,
+        "codex_followup_body": "Codex Review: Didn't find any major issues. Nice work!",
+    }
+
+
+@given(
     "a state C thread with a short reply and a positive Codex follow-up",
     target_fixture="judge_inputs",
 )
