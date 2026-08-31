@@ -36,6 +36,18 @@ from voyager.bots.assembly.constants import (
 from voyager.bots.assembly.writeback import dispatch_assembly_writeback
 
 
+@pytest.fixture(autouse=True)
+def _clear_writeback_locks():
+    """Issue #257: the writeback lock dict is module-global and keyed on
+    (repo, issue-number); tests share issue numbers across files, so a lock
+    created in one test's event loop must not leak into another asyncio.run()."""
+    from voyager.bots.assembly import writeback as _wb
+
+    _wb._assembly_writeback_locks.clear()
+    yield
+    _wb._assembly_writeback_locks.clear()
+
+
 def _route(
     *,
     refusal: dict | None = None,
@@ -585,6 +597,12 @@ def test_duplicate_no_changes_preserves_existing_pr_progress_context(monkeypatch
     client = _mock_client_for_writes()
     client.find_pull_request_by_head = AsyncMock(
         side_effect=[
+            # #257: each dispatch now consumes one find_pull_request_by_head at
+            # issue-branch resolution time; the remaining entries feed the same
+            # consumers as before (ensure-PR in run 1, no-changes preserve in
+            # run 2 — whose resolution call also takes a None first).
+            None,
+            None,
             None,
             {
                 "number": 1234,
@@ -669,6 +687,8 @@ def test_resume_request_uses_compatible_stored_session(monkeypatch, tmp_path) ->
     client = _mock_client_for_writes()
     client.find_pull_request_by_head = AsyncMock(
         side_effect=[
+            # #257: dispatch-time issue-branch resolution consumes the first.
+            _existing_same_repo_pr(number=1234, sha=previous_sha),
             _existing_same_repo_pr(number=1234, sha=previous_sha),
             _existing_same_repo_pr(number=1234, sha=previous_sha),
         ]
@@ -726,7 +746,7 @@ def test_resume_resolution_runs_under_branch_lock(monkeypatch) -> None:
     async def _assert_locked_resolve(**kwargs):
         repository = kwargs["repository"]
         contract = kwargs["contract"]
-        assert wb_module._get_lock(repository, contract.branch_name).locked()
+        assert wb_module._get_lock(repository, f"issue-{contract.issue_number}").locked()
         return {
             "requested": True,
             "mode": "resume_fallback",
@@ -788,6 +808,8 @@ def test_resume_request_falls_back_when_stored_head_is_stale(monkeypatch) -> Non
     client = _mock_client_for_writes()
     client.find_pull_request_by_head = AsyncMock(
         side_effect=[
+            # #257: dispatch-time issue-branch resolution consumes the first.
+            _existing_same_repo_pr(number=1234, sha="c" * 40),
             _existing_same_repo_pr(number=1234, sha="c" * 40),
             _existing_same_repo_pr(number=1234, sha="c" * 40),
         ]
@@ -1021,19 +1043,25 @@ def _reset_env(monkeypatch, tmp_path):
 # `assert len(seen) == 1` line fails with `AssertionError: expected 1, got 2`.
 
 
-def _route_for_concurrency(*, branch_name: str = "69-implement-assembly-bot-mvp") -> dict:
+def _route_for_concurrency(
+    *,
+    branch_name: str = "69-implement-assembly-bot-mvp",
+    issue_number: int = 69,
+) -> dict:
     """Build a route dict whose contract + writeback both target ``branch_name``.
 
     The branch_name appears in two places: ``writeback["branch_name"]`` (read
     by the dispatcher to skip the make_branch_name fallback) and inside the
     nested contract dict so that the rebuilt-by-dispatcher contract keeps
     the same value (the dispatcher prefers the writeback-side branch_name
-    when present).
+    when present). ``issue_number`` keeps the lock key in step with the
+    branch (issue #257: the writeback lock is keyed on the ISSUE).
     """
     route = _route()
     route["writeback"]["branch_name"] = branch_name
     contract = route["writeback"]["contract"] or {}
     contract["branch_name"] = branch_name
+    contract["issue_number"] = issue_number
     route["writeback"]["contract"] = contract
     return route
 
@@ -1115,9 +1143,11 @@ def test_concurrent_deliveries_are_serialized(monkeypatch) -> None:
 
 
 def test_distinct_branches_are_parallel(monkeypatch) -> None:
-    """F3 / D5: two deliveries for the same repo but DIFFERENT branch_name
-    must NOT serialize — the lock is keyed on (repo, branch), and a
-    different branch is a different GitHub-side resource.
+    """F3 / D5: two deliveries for the same repo but DIFFERENT issues must
+    NOT serialize — the lock is keyed on (repo, issue-number) (issue #257),
+    and a different issue is a different GitHub-side resource. (Deliveries
+    for the SAME issue serialize regardless of branch name — see the
+    same-branch serialization test.)
     """
     from voyager.bots.assembly import adapters
     from voyager.bots.assembly import writeback as wb_module
@@ -1154,7 +1184,7 @@ def test_distinct_branches_are_parallel(monkeypatch) -> None:
         client_a = _mock_client_for_writes()
         client_b = _mock_client_for_writes()
         route_a = _route_for_concurrency(branch_name="69-implement-alpha")
-        route_b = _route_for_concurrency(branch_name="70-implement-beta")
+        route_b = _route_for_concurrency(branch_name="70-implement-beta", issue_number=70)
         task_a = asyncio.create_task(
             dispatch_assembly_writeback(client_a, route_a, repository="iterwheel/voyager-sandbox")
         )

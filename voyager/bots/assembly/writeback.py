@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import re
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -73,19 +74,22 @@ if TYPE_CHECKING:
 _assembly_writeback_locks: dict[tuple[str, str], asyncio.Lock] = {}
 
 
-def _get_lock(repository: str, branch_name: str) -> asyncio.Lock:
-    """Return (creating if needed) the per-(repo, branch) writeback lock.
+def _get_lock(repository: str, key: str) -> asyncio.Lock:
+    """Return (creating if needed) the per-(repo, key) writeback lock.
 
-    Lock dict grows monotonically (no TTL). At Voyager's ~50 issues/year
+    Issue #257: callers key on the ISSUE NUMBER (``f"issue-{n}"``), not the
+    branch name — the branch name derives from the mutable issue title, so a
+    title edit between runs would mint a second lock and let two deliveries
+    race. Lock dict grows monotonically (no TTL). At Voyager's ~50 issues/year
     cadence x 64 bytes/lock the worst-case footprint is ~3 KB until bridge
     restart, which is well within acceptable. WeakValueDictionary migration
     trigger is documented in CHG-1819 D6 / Out of Scope.
     """
-    key = (repository, branch_name)
-    lock = _assembly_writeback_locks.get(key)
+    lock_key = (repository, key)
+    lock = _assembly_writeback_locks.get(lock_key)
     if lock is None:
         lock = asyncio.Lock()
-        _assembly_writeback_locks[key] = lock
+        _assembly_writeback_locks[lock_key] = lock
     return lock
 
 
@@ -839,6 +843,28 @@ async def dispatch_assembly_writeback(
         ),
         delivery_id=delivery_id,
     )
+    # Issue #257: the branch name derives from the mutable issue title. If the
+    # title was edited since the first run, the freshly computed name points at
+    # a branch that does not exist and the run would push a duplicate branch
+    # plus a duplicate PR for the same issue. Resolve the issue's existing
+    # open Assembly PR (head branch "<number>-…") and reuse its branch.
+    stable_branch = await _existing_branch_for_issue(
+        client, repository, contract.issue_number, contract.branch_name
+    )
+    if stable_branch and stable_branch != contract.branch_name:
+        _log.info(
+            "assembly_issue_branch_reuse: %s",
+            json.dumps(
+                {
+                    "event": "assembly_issue_branch_reuse",
+                    "repository": repository,
+                    "issue": contract.issue_number,
+                    "reused_branch": stable_branch,
+                    "computed_branch": contract.branch_name,
+                }
+            ),
+        )
+        contract = replace(contract, branch_name=stable_branch)
     contract_dict = contract.to_dict()
     base_result["contract"] = contract_dict
     base_result["audit_id"] = generate_audit_id(
@@ -848,16 +874,17 @@ async def dispatch_assembly_writeback(
     )
 
     # ------------------------------------------------------------------
-    # CHG-1819 F3 — per-(repository, branch_name) asyncio lock.
+    # CHG-1819 F3 — per-(repository, issue) asyncio lock.
     #
     # Serialises concurrent `/assembly` deliveries that target the same
-    # branch so two background tasks cannot both compute the same commits
+    # issue so two background tasks cannot both compute the same commits
     # and race on `create_branch_ref` (which would 422 the second caller).
-    # Scope per CHG-1819 D5: branch is the shared GitHub resource; the
-    # delivery_id is unique per webhook and would never block. Lock dict
-    # growth is documented on `_get_lock`.
+    # Issue #257: keyed on the issue number, never the branch name — the
+    # branch name derives from the mutable issue title, and a title edit
+    # between runs must not mint a fresh lock (or a second, duplicate loop).
+    # Lock dict growth is documented on `_get_lock`.
     # ------------------------------------------------------------------
-    async with _get_lock(repository, contract.branch_name):
+    async with _get_lock(repository, f"issue-{contract.issue_number}"):
         # Resolve session metadata inside the same per-branch lock that
         # protects adapter execution. This keeps the PR head-SHA compatibility
         # check adjacent to the run that consumes the session and avoids a
@@ -1667,6 +1694,56 @@ async def _ensure_branch(
             )
         )
         return False
+
+
+async def _existing_branch_for_issue(
+    client: GitHubAppClient,
+    repository: str,
+    issue_number: int,
+    computed_branch: str,
+) -> str | None:
+    """Issue #257: return the branch of the issue's existing open Assembly PR.
+
+    Fast path: an open PR already exists for the freshly computed branch name
+    (title unchanged) — return it unchanged. Otherwise search the repo's open
+    PRs whose head branch starts with ``<issue_number>-`` (Assembly naming) and
+    whose body references the issue; reuse that branch so a title edit cannot
+    fork the idempotency key into duplicate branches/PRs. Any lookup failure
+    returns None (caller keeps the computed name — today's behavior).
+    """
+    try:
+        direct = await client.find_pull_request_by_head(
+            ASSEMBLY_AGENT_SLUG, repository, computed_branch
+        )
+        if direct is not None:
+            return computed_branch
+        candidates = await client.find_open_prs_referencing_issue(
+            ASSEMBLY_AGENT_SLUG, repository, issue_number
+        )
+    except Exception:
+        # Resolution is best-effort idempotency hardening (#257): any failure
+        # falls back to the computed branch (pre-existing behavior), logged.
+        _log.warning(
+            "Assembly issue-branch resolution lookup failed",
+            extra={"repository": repository, "issue": issue_number},
+            exc_info=True,
+        )
+        return None
+    try:
+        prefix = f"{issue_number}-"
+        for pr in candidates or []:
+            head_ref = str(((pr.get("head") or {}).get("ref")) or "")
+            body = str(pr.get("body") or "")
+            if head_ref.startswith(prefix) and f"#{issue_number}" in body:
+                return head_ref
+    except Exception:
+        _log.warning(
+            "Assembly issue-branch candidate scan failed",
+            extra={"repository": repository, "issue": issue_number},
+            exc_info=True,
+        )
+        return None
+    return None
 
 
 async def _verify_pr_head_repo(
