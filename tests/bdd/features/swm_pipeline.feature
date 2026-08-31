@@ -178,6 +178,7 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
 
   Scenario: State A thread (fresh) + investigator configured — investigator NOT called
     Given the stub PR "iterwheel/sandbox" #49 has 1 fresh Codex thread (State A) at path "app.py"
+    And the PR was not pushed after the Codex review
     And a fake investigator returning verdict "RESOLVED" confidence 0.99 reason "Would fire if called"
     And the stub client returns a sample diff for "app.py"
     When compute_clearance_automation runs with investigator
@@ -217,6 +218,7 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
 
   Scenario: Lazy memoize — zero State B threads means pull_request_diff never called
     Given the stub PR "iterwheel/sandbox" #49 has 1 fresh Codex thread (State A) at path "app.py"
+    And the PR was not pushed after the Codex review
     And a fake investigator returning verdict "RESOLVED" confidence 0.99 reason "irrelevant"
     And the stub client records pull_request_diff calls
     When compute_clearance_automation runs with investigator

@@ -51,6 +51,13 @@ def codex_followup_reaction(followup_body: str | None) -> str | None:
     substring ``"resolved"``. Codex automated review on PR #8 flagged this
     misclassification — a Codex follow-up rejecting the fix was treated as
     approval and would have produced a wrong RESOLVED verdict downstream.
+
+    Issue #249: the fixed token list missed phrasings like ``"has not been
+    addressed"``, ``"remains unresolved"`` and ``"unaddressed"`` — the
+    negated positive then classified as approval. Positive tokens now only
+    count when no negator (``not``, ``n't`` forms, ``never``, ``no``, ``un-``,
+    ``remains``, ``still`` …) precedes them within a word window; a negated
+    positive is itself a negative signal.
     """
     if not followup_body:
         return None
@@ -64,15 +71,57 @@ def codex_followup_reaction(followup_body: str | None) -> str | None:
             "still has",
             "still ",
             "concern remains",
+            "unaddressed",
+            "unresolved",
+            "unfixed",
             "👎",
         ]
     ):
         return "negative"
-    if any(
-        token in text for token in ["looks good", "no new issues", "addressed", "resolved", "👍"]
-    ):
+    positives = ["looks good", "no new issues", "addressed", "resolved", "fixed", "👍"]
+    any_positive = False
+    any_negated_positive = False
+    for token in positives:
+        start = 0
+        while True:
+            pos = text.find(token, start)
+            if pos < 0:
+                break
+            if _positive_is_negated(text, pos):
+                any_negated_positive = True
+            else:
+                any_positive = True
+            start = pos + len(token)
+    if any_positive:
         return "positive"
+    if any_negated_positive:
+        return "negative"
     return None
+
+
+_NEGATOR_RE = re.compile(
+    r"\b(?:"
+    r"not|never|"
+    r"isn'?t|aren'?t|wasn'?t|weren'?t|won'?t|don'?t|doesn'?t|didn'?t|"
+    r"hasn'?t|haven'?t|can'?t|cannot|cant|dont|doesnt|didnt|hasnt|havent|"
+    r"remains?|still|yet|without|lack(?:s|ing|ed)?|missing"
+    r")\b"
+)
+_NEGATION_WINDOW = 48
+
+
+def _positive_is_negated(text: str, pos: int) -> bool:
+    """True when a negator word precedes the positive token at ``pos``.
+
+    Conservative by design (#249): a negator anywhere in the short window
+    before a positive token negates it — a missed true positive keeps the
+    thread open for a human, while a missed negation auto-resolves a rejected
+    finding. Also catches the glued ``un-`` prefix (``unaddressed``).
+    """
+    if pos >= 2 and text[pos - 2 : pos] == "un" and (pos == 2 or not text[pos - 3].isalnum()):
+        return True
+    window = text[max(0, pos - _NEGATION_WINDOW) : pos]
+    return bool(_NEGATOR_RE.search(window))
 
 
 @dataclass(frozen=True)

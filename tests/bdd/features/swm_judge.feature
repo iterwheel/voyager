@@ -123,6 +123,38 @@ Feature: SWM judge — verdict assignment per SWM-1101 decision tree
     When codex_followup_reaction is called
     Then the followup reaction is "negative"
 
+  # Issue #249: negation-window coverage — phrasings the fixed token list missed
+
+  Scenario: "has not been addressed" is negative (issue #249)
+    Given a Codex follow-up body "This has not been addressed in the follow-up commit."
+    When codex_followup_reaction is called
+    Then the followup reaction is "negative"
+
+  Scenario: "remains unresolved" is negative (issue #249)
+    Given a Codex follow-up body "The race condition remains unresolved."
+    When codex_followup_reaction is called
+    Then the followup reaction is "negative"
+
+  Scenario: "unaddressed" is negative (issue #249)
+    Given a Codex follow-up body "The migration path is unaddressed."
+    When codex_followup_reaction is called
+    Then the followup reaction is "negative"
+
+  Scenario: "hasn't been fixed" is negative (issue #249)
+    Given a Codex follow-up body "The leak hasn't been fixed yet."
+    When codex_followup_reaction is called
+    Then the followup reaction is "negative"
+
+  Scenario: unnegated positive still classifies positive (issue #249)
+    Given a Codex follow-up body "Addressed in commit abc1234, the guard is in place."
+    When codex_followup_reaction is called
+    Then the followup reaction is "positive"
+
+  Scenario: Sentiment-free follow-up returns None (issue #249)
+    Given a Codex follow-up body "I re-ran the analysis on the current head."
+    When codex_followup_reaction is called
+    Then the followup reaction is None
+
   Scenario: Empty Codex follow-up returns None
     Given a None Codex follow-up body
     When codex_followup_reaction is called

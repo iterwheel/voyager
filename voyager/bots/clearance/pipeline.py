@@ -2278,10 +2278,6 @@ async def _compute_clearance_automation_unlocked(
     pr_title = pr_data.get("title")
     pr_author_login: str | None = (pr_data.get("user") or {}).get("login") or None
     base_branch = (pr_data.get("base") or {}).get("ref") or "main"
-    # Issue #63: PR pushed_at timestamp for stale-thread detection.
-    # A Codex thread whose first comment predates the most recent push may have
-    # been addressed in a newer commit even though GitHub didn't mark it outdated.
-    pr_pushed_at: str | None = pr_data.get("pushed_at") or None
     try:
         current_head_updated_at = (
             await client.pull_request_head_updated_at(CLEARANCE_AGENT_SLUG, repository, pr_number)
@@ -2300,6 +2296,15 @@ async def _compute_clearance_automation_unlocked(
             safe["status"],
         )
         current_head_updated_at = None
+    # Issue #63: staleness timestamp for stale-thread detection. A Codex
+    # thread whose first comment predates the most recent push may have been
+    # addressed in a newer commit even though GitHub didn't mark it outdated.
+    # Issue #250: the REST "Get a pull request" object has NO top-level
+    # pushed_at field — reading pr_data["pushed_at"] always yielded None and
+    # the stale-thread routing was dead in production. Source it from the
+    # GraphQL head-observation timestamp instead (same "when was the current
+    # head pushed" semantics, and it is a field that actually exists).
+    pr_pushed_at: str | None = current_head_updated_at
     # Issue #254 (Codex P1): corroboration must be bound to the reviewed PR's
     # head commit — repository-level push timestamps advance on pushes to ANY
     # branch, which a fork author could use to fake code motion. Fetch the
