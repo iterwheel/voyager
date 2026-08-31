@@ -155,6 +155,33 @@ Feature: SWM judge — verdict assignment per SWM-1101 decision tree
     When codex_followup_reaction is called
     Then the followup reaction is None
 
+  # Codex P1 rounds on #334/#335: negation attachment refinements
+
+  Scenario: Hard negator directly after a positive token negates it
+    Given a Codex follow-up body "Looks fixed, not verified at HEAD."
+    When codex_followup_reaction is called
+    Then the followup reaction is "negative"
+
+  Scenario: Bare "no further action" after a positive stays positive
+    Given a Codex follow-up body "The leak is addressed. No further action needed."
+    When codex_followup_reaction is called
+    Then the followup reaction is "positive"
+
+  Scenario: Negative pronoun "none" negates a positive
+    Given a Codex follow-up body "None of the findings were addressed by this patch."
+    When codex_followup_reaction is called
+    Then the followup reaction is "negative"
+
+  Scenario: Bare "fixed" alone is not approval (negation-only token)
+    Given a Codex follow-up body "I believe this got fixed."
+    When codex_followup_reaction is called
+    Then the followup reaction is None
+
+  Scenario: Negated "fixed" still classifies negative
+    Given a Codex follow-up body "The leak hasn't been fixed yet."
+    When codex_followup_reaction is called
+    Then the followup reaction is "negative"
+
   Scenario: Empty Codex follow-up returns None
     Given a None Codex follow-up body
     When codex_followup_reaction is called

@@ -718,7 +718,7 @@ def _head_sha_advanced_after_thread(
     try:
         latest_pre_finding_sha: str | None = None
         latest_pre_finding_ts = ""
-        post_finding_change = False
+        post_finding_current_head = False
         for record in store.read_polls(repo, pr):
             ts = (
                 record.ts.isoformat().replace("+00:00", "Z")
@@ -732,12 +732,17 @@ def _head_sha_advanced_after_thread(
                 if ts >= latest_pre_finding_ts:
                     latest_pre_finding_ts = ts
                     latest_pre_finding_sha = record.head_sha
-            elif latest_pre_finding_sha is not None and record.head_sha != latest_pre_finding_sha:
-                # A RECORDED post-finding poll on a different head — the
-                # transition follows the finding (Codex P1: motion between two
-                # pre-finding polls must not corroborate).
-                post_finding_change = True
-        return bool(latest_pre_finding_sha and post_finding_change)
+            elif record.head_sha == current_head_sha:
+                # A RECORDED post-finding poll on the CURRENT head ties the
+                # transition to today's head (Codex P1s: motion between two
+                # pre-finding polls, or onto a transient head that was later
+                # replaced, must not corroborate).
+                post_finding_current_head = True
+        return bool(
+            latest_pre_finding_sha
+            and post_finding_current_head
+            and current_head_sha != latest_pre_finding_sha
+        )
     except Exception:
         _log.warning(
             "corroboration poll-history read failed for %s#%s; failing closed",

@@ -2128,6 +2128,22 @@ def given_stub_pr_head_advances_on_second_call(ctx, sha: str) -> None:
 def given_stub_pr_head_stable(ctx, sha: str) -> None:
     ctx["client"].pr_payload["head"] = {**ctx["client"].pr_payload["head"], "sha": sha}
     ctx["client"].pr_payload_second_fetch = None
+    # Issue #254: the corroborated-resolve scenarios need the recorded
+    # post-finding transition to land on THIS stable head.
+    from datetime import UTC as _UTC
+    from datetime import datetime as _datetime
+
+    from voyager.bots.clearance.models import PollRecord, Status
+
+    ctx["store"].append_poll(
+        PollRecord(
+            ts=_datetime(2026, 5, 11, 12, 45, 0, tzinfo=_UTC),
+            repo=REPO,
+            pr=PR,
+            head_sha=sha,
+            status=Status.BLOCKED,
+        )
+    )
 
 
 @then(

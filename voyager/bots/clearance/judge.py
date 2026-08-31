@@ -78,18 +78,21 @@ def codex_followup_reaction(followup_body: str | None) -> str | None:
         ]
     ):
         return "negative"
-    positives = ["looks good", "no new issues", "addressed", "resolved", "fixed", "👍"]
+    # "fixed" is negation-only (Codex P1 on #335): bare "fixed" is too weak to
+    # approve on its own, but "hasn't been fixed" must still classify negative.
+    positives = ["looks good", "no new issues", "addressed", "resolved", "👍"]
+    negation_only_tokens = ["fixed"]
     any_positive = False
     any_negated_positive = False
-    for token in positives:
+    for token in positives + negation_only_tokens:
         start = 0
         while True:
             pos = text.find(token, start)
             if pos < 0:
                 break
-            if _positive_is_negated(text, pos):
+            if _positive_is_negated(text, pos, len(token)):
                 any_negated_positive = True
-            else:
+            elif token not in negation_only_tokens:
                 any_positive = True
             start = pos + len(token)
     # Codex P1 on #254/#334: an explicit negation anywhere in the follow-up is
@@ -104,7 +107,7 @@ def codex_followup_reaction(followup_body: str | None) -> str | None:
 
 _NEGATOR_RE = re.compile(
     r"\b(?:"
-    r"not|never|no|"
+    r"not|never|no|none|nobody|nothing|"
     r"isn['\u2019]?t|aren['\u2019]?t|wasn['\u2019]?t|weren['\u2019]?t|won['\u2019]?t|"
     r"don['\u2019]?t|doesn['\u2019]?t|didn['\u2019]?t|hasn['\u2019]?t|haven['\u2019]?t|"
     r"can['\u2019]?t|cannot|cant|dont|doesnt|didnt|hasnt|havent|"
@@ -114,18 +117,32 @@ _NEGATOR_RE = re.compile(
 _NEGATION_WINDOW = 48
 
 
-def _positive_is_negated(text: str, pos: int) -> bool:
-    """True when a negator word precedes the positive token at ``pos``.
+def _positive_is_negated(text: str, pos: int, token_len: int) -> bool:
+    """True when a negator word attaches to the positive token at ``pos``.
 
     Conservative by design (#249): a negator anywhere in the short window
-    before a positive token negates it — a missed true positive keeps the
+    BEFORE a positive token negates it — a missed true positive keeps the
     thread open for a human, while a missed negation auto-resolves a rejected
-    finding. Also catches the glued ``un-`` prefix (``unaddressed``).
+    finding. Also catches the glued ``un-`` prefix (``unaddressed``), and a
+    hard negator immediately AFTER the token ("looks fixed, not verified" —
+    Codex P1 on #334). Bare "no" after a token is affirmative in Codex's
+    closing idiom ("addressed. No further action needed") and is NOT an
+    after-negator.
     """
     if pos >= 2 and text[pos - 2 : pos] == "un" and (pos == 2 or not text[pos - 3].isalnum()):
         return True
     window = text[max(0, pos - _NEGATION_WINDOW) : pos]
-    return bool(_NEGATOR_RE.search(window))
+    if _NEGATOR_RE.search(window):
+        return True
+    after = text[pos + token_len : pos + token_len + 24]
+    return bool(_AFTER_NEGATOR_RE.match(after))
+
+
+_AFTER_NEGATOR_RE = re.compile(
+    r"^[\s,.!?;:]{0,6}(?:not|never|nor|isn['\u2019]?t|aren['\u2019]?t|wasn['\u2019]?t|"
+    r"won['\u2019]?t|don['\u2019]?t|doesn['\u2019]?t|didn['\u2019]?t|"
+    r"hasn['\u2019]?t|haven['\u2019]?t|can['\u2019]?t|cannot)\b"
+)
 
 
 @dataclass(frozen=True)
