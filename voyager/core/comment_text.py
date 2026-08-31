@@ -287,16 +287,21 @@ def visible_comment_text(body: str | None) -> str:
             cmd = str(match.group(0))
             # Round 23: verify the ENTIRE command line (flags included) —
             # entity-decoded flags ('&#45;&#45;allow…') must not survive.
+            # Round 25: /assembly and /implement parse FLAGS — verify the
+            # whole line; substring triggers (/stack, /blueprint) verify the
+            # OCCURRENCE only (inline links/normalization on the line must
+            # not void a genuine request).
             nl = span_text.find("\n", match.start())
             cmd_line = span_text[match.start() : nl if nl > 0 else len(span_text)].rstrip()
-            if _line_has_live_token(src, cmd_line):
-                continue
-            result = result.replace(
-                span_text,
-                re.sub(rf"(?<![\w`/]){re.escape(cmd)}\b", "", span_text),
-                1,
+            verify = cmd_line if cmd.startswith(("/assembly", "/implement")) else cmd
+            if _line_has_live_token(src, verify) or f"`{cmd}" in src:
+                continue  # live, or inside an inline code span (prose intent)
+            # Remove ONLY this specific occurrence (count=1, from its own
+            # position — not every token in the span).
+            result = result[: result.find(span_text)] + result[result.find(span_text) :].replace(
+                span_text[match.start() : match.end()], "", 1
             )
-            span_text = re.sub(rf"(?<![\w`/]){re.escape(cmd)}\b", "", span_text)
+            span_text = span_text[: match.start()] + span_text[match.end() :]
     return result
 
 
