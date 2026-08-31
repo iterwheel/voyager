@@ -77,6 +77,7 @@ query ThreadComments($threadId: ID!, $cursor: String) {
           body
           url
           createdAt
+          lastEditedAt
           replyTo { databaseId }
         }
       }

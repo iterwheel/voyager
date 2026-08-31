@@ -610,13 +610,14 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
   # Issue #63: State A investigator eligibility (codex_review_stale)
   # ---------------------------------------------------------------------------
 
-  Scenario: Backdated committer date cannot fake or mask staleness (issue #335 ruling)
+  Scenario: Backdated committer date cannot mask staleness (issue #335 ruling)
     Given the stub PR "iterwheel/sandbox" #49 has 1 fresh Codex thread (State A) at path "app.py"
     And the PR was pushed after the Codex review
     And the stub client records a backdated head commit date "2026-05-01T00:00:00Z"
     And a fake investigator returning verdict "RESOLVED" confidence 0.92 reason "diff confirms the null-guard was added" for each thread
     When compute_clearance_automation runs with DRY_RUN false
-    Then the automation status is "pending"
+    Then the automation status is "ready"
+    And the thread llm_verdict is "RESOLVED"
 
   Scenario: Issue #63 State A stale — PR pushed after Codex review, investigator invoked
     Given the stub PR "iterwheel/sandbox" #49 has 1 fresh Codex thread (State A) at path "app.py"

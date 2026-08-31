@@ -2390,14 +2390,28 @@ async def _compute_clearance_automation_unlocked(
     pr_pushed_at: str | None = None
     if head_sha and store is not None:
         try:
+            # The staleness time is the LATEST transition into the current
+            # head: the first ledger record of the current head that follows
+            # a DIFFERENT observed SHA. Re-observing the same SHA later does
+            # not advance it (revert-to-A uses A's latest entry point), and
+            # the very first observed SHA of a PR is not a transition at all
+            # (Voyager starting to poll late must not fabricate staleness).
+            saw_other = False
             for record in store.read_polls(repository, pr_number):
+                ts = (
+                    record.ts.isoformat().replace("+00:00", "Z")
+                    if hasattr(record.ts, "isoformat")
+                    else str(record.ts)
+                )
                 if record.head_sha == head_sha:
-                    pr_pushed_at = (
-                        record.ts.isoformat().replace("+00:00", "Z")
-                        if hasattr(record.ts, "isoformat")
-                        else str(record.ts)
-                    )
-                    break
+                    if saw_other:
+                        pr_pushed_at = ts  # keep the LATEST transition entry
+                    # else: first-ever observation of this head — not a
+                    # transition; keep scanning (an older different SHA may
+                    # still follow... ledger is append-order, so nothing
+                    # earlier exists once we saw this SHA first).
+                else:
+                    saw_other = True
         except Exception as exc:
             safe = _safe_exception_fields(exc)
             _log.warning(

@@ -2194,6 +2194,16 @@ def given_pr_pushed_after_codex(ctx) -> None:
     from voyager.bots.clearance.models import PollRecord, Status
 
     ctx["client"].head_updated_at = "2026-05-12T00:00:00Z"
+    # A real transition: an older DIFFERENT head, then the current head.
+    ctx["store"].append_poll(
+        PollRecord(
+            ts=_datetime(2026, 5, 11, 8, 0, 0, tzinfo=_UTC),
+            repo=REPO,
+            pr=PR,
+            head_sha="old-sha-0000000000000000000000000000000000000000",
+            status=Status.BLOCKED,
+        )
+    )
     ctx["store"].append_poll(
         PollRecord(
             ts=_datetime(2026, 5, 12, 0, 0, 0, tzinfo=_UTC),
