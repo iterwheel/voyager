@@ -247,6 +247,11 @@ Feature: SWM judge — verdict assignment per SWM-1101 decision tree
     When codex_followup_reaction is called
     Then the followup reaction is "negative"
 
+  Scenario: Longer adversative clauses still negate (Codex round 13)
+    Given a Codex follow-up body "The symptom is addressed, but the original concurrency race remains."
+    When codex_followup_reaction is called
+    Then the followup reaction is "negative"
+
   Scenario: Empty Codex follow-up returns None
     Given a None Codex follow-up body
     When codex_followup_reaction is called
