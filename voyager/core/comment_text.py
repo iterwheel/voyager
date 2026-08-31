@@ -260,6 +260,6 @@ def _source_has_live_line(body: str, line: str) -> bool:
         stripped2 = raw_line.lstrip()
         if stripped2.startswith("\\"):
             continue  # escaped in source: not live
-        if stripped2.lower() == target:
+        if stripped2.lower().rstrip() == target.rstrip():
             return True
     return False
