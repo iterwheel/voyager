@@ -303,7 +303,8 @@ def visible_comment_text(body: str | None) -> str:
 def _line_has_live_token(source_line: str, token: str) -> bool:
     """True when this raw source line carries the token live (unescaped,
     not entity-encoded)."""
-    return bool(re.search(rf"(?<![\\\w`/&;]){re.escape(token)}\b", source_line, re.I))
+    boundary = r"\b" if token and token[-1].isalnum() else ""
+    return bool(re.search(rf"(?<![\\\w`/&;]){re.escape(token)}{boundary}", source_line, re.I))
 
 
 _COMMAND_WORDS = ("/assembly", "/implement", "/stack", "/blueprint")
