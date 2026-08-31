@@ -121,9 +121,18 @@ def codex_followup_reaction(followup_body: str | None) -> str | None:
     any_positive = False
     any_negated_positive = False
     for token in positives + negation_only_tokens:
+        # Single WORDS match on word boundaries: identifiers stay neutral
+        # ('addressed_threads' contains neither an approval nor a rejection).
+        token_re = (
+            re.compile(rf"\b{re.escape(token)}\b") if " " not in token and token != "👍" else None
+        )
         start = 0
         while True:
-            pos = text.find(token, start)
+            if token_re is not None:
+                m = token_re.search(text, start)
+                pos = m.start() if m else -1
+            else:
+                pos = text.find(token, start)
             if pos < 0:
                 break
             if _positive_is_negated(text, pos, len(token)):
