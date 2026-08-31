@@ -2206,6 +2206,28 @@ def given_fork_pr(ctx, head_repo: str) -> None:
     # base repo stays as iterwheel/sandbox (the default)
 
 
+@given("the stub PR head repository is deleted (head.repo is null)")
+def given_fork_head_repo_deleted(ctx) -> None:
+    """Issue #267: PR from a deleted/renamed fork — REST head.repo is null."""
+    ctx["client"].pr_payload["head"]["repo"] = None
+
+
+@then("the Stage 1.5 action suggested_action mentions the missing head repository")
+def then_stage15_suggested_missing_head_repo(ctx) -> None:
+    """Issue #267: deleted-fork skip message names the missing repository."""
+    auto = ctx["automation"]
+    assert auto is not None, f"raised={ctx.get('raised')}"
+    actions = auto.get("sync_actions") or []
+    unsupported = [
+        a for a in actions if (a.get("result") or {}).get("error_class") == "UnsupportedContext"
+    ]
+    assert unsupported, f"no UnsupportedContext actions found in sync_actions: {actions!r}"
+    suggested = (unsupported[0]["result"]).get("suggested_action") or ""
+    lowered = suggested.lower()
+    assert "missing" in lowered, f"got {suggested!r}"
+    assert "manually" in lowered, f"got {suggested!r}"
+
+
 @given("the fork head repo is accessible")
 def given_fork_head_accessible(ctx) -> None:
     ctx["client"]._head_repo_accessible = True

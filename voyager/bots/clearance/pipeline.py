@@ -2009,20 +2009,25 @@ async def _maybe_sync_stage_15(
 
         # Lazy head-repo accessibility check for fork PRs — runs only when
         # we encounter the first thread that actually needs a mutation.
-        if fork_head_blocked is None and is_fork_pr and head_repo and head_repo != repository:
-            if not dry_run:
-                accessible = await client.check_head_repo_accessible(
-                    CLEARANCE_AGENT_SLUG, head_repo
-                )
-                fork_head_blocked = not accessible
-            else:
-                try:
+        if fork_head_blocked is None and is_fork_pr:
+            if not head_repo:
+                # Issue #267: deleted/renamed fork (head.repo null) — fail
+                # closed into the fork-safety skip.
+                fork_head_blocked = True
+            elif head_repo != repository:
+                if not dry_run:
                     accessible = await client.check_head_repo_accessible(
                         CLEARANCE_AGENT_SLUG, head_repo
                     )
-                except Exception:
-                    accessible = False
-                fork_head_blocked = not accessible
+                    fork_head_blocked = not accessible
+                else:
+                    try:
+                        accessible = await client.check_head_repo_accessible(
+                            CLEARANCE_AGENT_SLUG, head_repo
+                        )
+                    except Exception:
+                        accessible = False
+                    fork_head_blocked = not accessible
 
         # Issue #62: skip resolveReviewThread on fork PRs where the head repo
         # is not accessible. This produces a specific unsupported-context action
@@ -2030,11 +2035,18 @@ async def _maybe_sync_stage_15(
         # Must run before the dry_run gate so dry-run output also surfaces the
         # UnsupportedContext result instead of a misleading resolvable path.
         if fork_head_blocked:
-            skip_reason = (
-                f"Unsupported context: PR #{pr} is from fork {head_repo}. "
-                f"Install {CLEARANCE_AGENT_SLUG} on {head_repo} to enable "
-                f"auto-resolve, or resolve thread {thread.id} manually."
-            )
+            if head_repo:
+                skip_reason = (
+                    f"Unsupported context: PR #{pr} is from fork {head_repo}. "
+                    f"Install {CLEARANCE_AGENT_SLUG} on {head_repo} to enable "
+                    f"auto-resolve, or resolve thread {thread.id} manually."
+                )
+            else:
+                skip_reason = (
+                    f"Unsupported context: PR #{pr} head repository is missing "
+                    f"(deleted or renamed fork). Resolve thread {thread.id} "
+                    f"manually; auto-resolve cannot target a missing repository."
+                )
             _log.warning(skip_reason)
             actions.append(
                 Stage15Action(
@@ -2391,9 +2403,14 @@ async def _compute_clearance_automation_unlocked(
     pr_pushed_at: str | None = head_commit_committed_at
     # Issue #62: detect fork PRs. The REST API always includes head.repo.full_name
     # and base.repo.full_name; when they differ the PR is from a fork.
-    head_repo: str | None = (pr_data.get("head") or {}).get("repo", {}).get("full_name") or None
+    head_obj = pr_data.get("head") or {}
+    head_repo_obj = head_obj.get("repo") or {}
+    head_repo: str | None = head_repo_obj.get("full_name") or None
     base_repo: str | None = (pr_data.get("base") or {}).get("repo", {}).get("full_name") or None
-    is_fork_pr = bool(head_repo and base_repo and head_repo != base_repo)
+    # Issue #267: a deleted/renamed fork has head.repo = null — treat as
+    # fork-unsafe (fail closed) instead of crashing or bypassing the gate.
+    head_repo_missing = bool(head_obj) and not head_repo_obj
+    is_fork_pr = head_repo_missing or bool(head_repo and base_repo and head_repo != base_repo)
     # Wave 7C-1 commit 3 + Codex MVE-round P2: hoist branch_protected fetch out of
     # the per-thread loop. All threads on the same PR share the same base branch,
     # so calling branch_protected once per webhook (not N times for N threads)
