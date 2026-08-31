@@ -636,7 +636,9 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
 
   Scenario: Issue #267 deleted-fork PR skips the resolver fallback and takes the manual-close path (Codex P2)
     Given the stub PR "iterwheel/sandbox" #49 author is "iterwheel-assembly[bot]"
-    And the stub PR has 1 Codex thread with a substantive reply from "iterwheel-assembly[bot]" and isResolved false
+    And the stub PR "iterwheel/sandbox" #49 has 1 outdated Codex thread at path "app.py" line 10
+    And a fake investigator returning verdict "RESOLVED" confidence 0.95 reason "Fix corroborated in diff"
+    And the stub client returns a sample diff for "app.py"
     And the stub PR head repository is deleted (head.repo is null)
     And the thread viewerCanResolve is false
     And the authorized resolver app "iterwheel-assembly" can resolve the thread
