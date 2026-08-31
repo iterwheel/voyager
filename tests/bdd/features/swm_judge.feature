@@ -222,6 +222,16 @@ Feature: SWM judge — verdict assignment per SWM-1101 decision tree
     When codex_followup_reaction is called
     Then the followup reaction is "negative"
 
+  Scenario: Still-looks-good approval stays positive (Codex round 10)
+    Given a Codex follow-up body "This still looks good after retesting."
+    When codex_followup_reaction is called
+    Then the followup reaction is "positive"
+
+  Scenario: Negator in a completed sentence does not negate later positives
+    Given a Codex follow-up body "This isn't a regression. The concern is resolved."
+    When codex_followup_reaction is called
+    Then the followup reaction is "positive"
+
   Scenario: Empty Codex follow-up returns None
     Given a None Codex follow-up body
     When codex_followup_reaction is called

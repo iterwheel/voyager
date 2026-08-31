@@ -69,7 +69,6 @@ def codex_followup_reaction(followup_body: str | None) -> str | None:
             "not resolved",
             "still not",
             "still has",
-            "still ",
             "concern remains",
             "unaddressed",
             "unresolved",
@@ -131,7 +130,7 @@ _NEGATOR_RE = re.compile(
     r"isn['\u2019]?t|aren['\u2019]?t|wasn['\u2019]?t|weren['\u2019]?t|won['\u2019]?t|"
     r"don['\u2019]?t|doesn['\u2019]?t|didn['\u2019]?t|hasn['\u2019]?t|haven['\u2019]?t|"
     r"can['\u2019]?t|cannot|cant|dont|doesnt|didnt|hasnt|havent|"
-    r"remains?|still|yet|without|lack(?:s|ing|ed)?|missing"
+    r"remains?|yet|without|lack(?:s|ing|ed)?|missing"
     r")\b"
 )
 _NEGATION_WINDOW = 48
@@ -152,6 +151,9 @@ def _positive_is_negated(text: str, pos: int, token_len: int) -> bool:
     if pos >= 2 and text[pos - 2 : pos] == "un" and (pos == 2 or not text[pos - 3].isalnum()):
         return True
     window = text[max(0, pos - _NEGATION_WINDOW) : pos]
+    # A negator in a COMPLETED sentence does not govern a later positive
+    # token (Codex P2 round 10): clip at the last sentence boundary.
+    window = re.split(r"[.!?]", window)[-1]
     if _NEGATOR_WIDE_RE.search(window):
         return True
     # Bare "no" negates only in immediate proximity (nothing but short filler
@@ -178,7 +180,7 @@ _NEGATOR_WIDE_RE = re.compile(
     r"isn['\u2019]?t|aren['\u2019]?t|wasn['\u2019]?t|weren['\u2019]?t|won['\u2019]?t|"
     r"don['\u2019]?t|doesn['\u2019]?t|didn['\u2019]?t|hasn['\u2019]?t|haven['\u2019]?t|"
     r"can['\u2019]?t|cannot|cant|dont|doesnt|didnt|hasnt|havent|"
-    r"remains?|still|yet|without|lack(?:s|ing|ed)?|missing"
+    r"remains?|yet|without|lack(?:s|ing|ed)?|missing"
     r")\b"
 )
 _CLOSE_NO_RE = re.compile(r"\bno\b[^.!?]{0,16}$")
