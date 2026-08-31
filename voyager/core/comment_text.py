@@ -28,6 +28,12 @@ _CONTAINER_OPEN = frozenset({"blockquote_open", "list_open", "list_item_open", "
 _CONTAINER_CLOSE = frozenset(
     {"blockquote_close", "list_close", "list_item_close", "paragraph_close"}
 )
+# Non-paragraph block containers whose inline content is NOT top-level prose
+# (tables, table rows/cells — round 23).
+_TABLE_OPEN = frozenset({"table_open", "thead_open", "tbody_open", "tr_open", "td_open", "th_open"})
+_TABLE_CLOSE = frozenset(
+    {"table_close", "thead_close", "tbody_close", "tr_close", "td_close", "th_close"}
+)
 
 # Standard HTML/GFM block containers (P1 round 12: the complete supported set,
 # not a partial allowlist).
@@ -182,6 +188,7 @@ def visible_comment_text(body: str | None) -> str:
     spans: list[tuple[str, list[str]]] = []
     depth = 0
     in_heading = False
+    in_container_block = False
     html_containers: list[str] = []  # open containers; matched closers pop
     for token in _md.parse(body):
         if token.type == "html_block":
@@ -194,6 +201,14 @@ def visible_comment_text(body: str | None) -> str:
             if depth == 0:
                 _apply_container_tags(token.content or "", html_containers)
             continue
+        if token.type in _TABLE_OPEN:
+            in_container_block = True
+            depth += 1
+            continue
+        if token.type in _TABLE_CLOSE:
+            in_container_block = False
+            depth -= 1
+            continue
         if token.type == "heading_open":
             in_heading = True
             depth += 1
@@ -204,7 +219,13 @@ def visible_comment_text(body: str | None) -> str:
             depth += 1
         elif token.type in _CONTAINER_CLOSE:
             depth -= 1
-        elif token.type == "inline" and depth == 1 and token.children and not in_heading:
+        elif (
+            token.type == "inline"
+            and depth == 1
+            and token.children
+            and not in_heading
+            and not in_container_block
+        ):
             # An inline token follows its paragraph_open/heading_open; it is
             # top-level prose only when the enclosing depth is exactly the
             # block's own level (1). Heading content is NOT a command surface
@@ -264,7 +285,11 @@ def visible_comment_text(body: str | None) -> str:
         src = "\n".join(src_lines)
         for match in re.finditer(r"/(?:assembly|implement|stack|blueprint)\b", span_text, re.I):
             cmd = str(match.group(0))
-            if _line_has_live_token(src, cmd):
+            # Round 23: verify the ENTIRE command line (flags included) —
+            # entity-decoded flags ('&#45;&#45;allow…') must not survive.
+            nl = span_text.find("\n", match.start())
+            cmd_line = span_text[match.start() : nl if nl > 0 else len(span_text)].rstrip()
+            if _line_has_live_token(src, cmd_line):
                 continue
             result = result.replace(
                 span_text,
