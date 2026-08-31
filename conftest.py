@@ -102,11 +102,27 @@ def _pointer_targets_this_repo(name: str, own_git_dir: Path | None) -> bool:
     return resolved == own_git_dir
 
 
+def _decide_pointer_scrub(own_git_dir: Path | None, has_local_git_entry: bool) -> list[str]:
+    """Which repo-pointer variables to scrub (pure decision, unit-tested).
+
+    - Pointer-only checkout (no local .git entry, discovery without the
+      pointers fails): the env pointers ARE this checkout's metadata — keep
+      them all (Codex P2 on #338).
+    - Unresolvable otherwise: fail toward the historically safe scrub.
+    - Normal checkout: scrub exactly the pointers that target THIS repo.
+    """
+    if own_git_dir is None and not has_local_git_entry:
+        return []
+    if own_git_dir is None:
+        return list(_REPO_POINTER_VARS)
+    return [name for name in _REPO_POINTER_VARS if _pointer_targets_this_repo(name, own_git_dir)]
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _scrub_git_hook_env():
     in_quarantine = "GIT_QUARANTINE_PATH" in os.environ
     own_git_dir = _outer_repo_git_dir()
-    scrub = [name for name in _REPO_POINTER_VARS if _pointer_targets_this_repo(name, own_git_dir)]
+    scrub = _decide_pointer_scrub(own_git_dir, (_REPO_ROOT / ".git").exists())
     if in_quarantine:
         scrub += list(_QUARANTINE_VARS)
     removed = {name: os.environ.pop(name) for name in scrub if name in os.environ}

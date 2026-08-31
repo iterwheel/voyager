@@ -193,3 +193,36 @@ def test_hook_contaminated_repo_pointers_are_scrubbed():
         "tests/unit/test_prepush_quarantine_scrub.py::test_no_hook_env_leak",
     )
     assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
+
+
+def test_pointer_only_checkout_keeps_all_pointers():
+    """Codex P2 on #338: a checkout with NO local .git entry is described only
+    by its env pointers — discovery without them fails, and the decision must
+    KEEP every pointer (they are the checkout metadata, not leakage)."""
+    from conftest import _decide_pointer_scrub
+
+    assert _decide_pointer_scrub(None, has_local_git_entry=False) == []
+
+
+def test_unresolvable_normal_checkout_scrubs_all():
+    """Discovery failure WITH a local .git entry fails toward the safe scrub."""
+    from conftest import _decide_pointer_scrub
+
+    assert _decide_pointer_scrub(None, has_local_git_entry=True) == [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+    ]
+
+
+def test_normal_checkout_scrubs_only_this_repos_pointers(monkeypatch):
+    """Pointers pointing elsewhere survive; pointers here are scrubbed."""
+    import conftest
+    from conftest import _decide_pointer_scrub
+
+    own = conftest._REPO_ROOT / ".git"
+    monkeypatch.setenv("GIT_DIR", "/tmp/elsewhere/.git")
+    monkeypatch.setenv("GIT_WORK_TREE", str(conftest._REPO_ROOT))
+    scrub = _decide_pointer_scrub(own, True)
+    assert "GIT_WORK_TREE" in scrub
+    assert "GIT_DIR" not in scrub
