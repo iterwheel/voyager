@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from conftest import isolated_git_env as _isolated_git_env
 from voyager.bots.assembly import adapters as adapters_module
 from voyager.bots.assembly import writeback as writeback_module
 from voyager.bots.assembly.ac_spotcheck import (
@@ -93,7 +94,12 @@ def _assert_no_secret(value: Any, secret: str = INSTALLATION_TOKEN) -> None:
 async def test_repository_lfs_detection_ignores_commented_attribute_rules(
     tmp_path: Path,
 ) -> None:
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "init", "-q"],
+        cwd=tmp_path,
+        env=_isolated_git_env(),
+        check=True,
+    )
     (tmp_path / ".gitattributes").write_text(
         "# *.bin filter=lfs diff=lfs merge=lfs -text\n"
         "   # *.zip filter=lfs diff=lfs merge=lfs -text\n",
@@ -113,7 +119,12 @@ async def test_repository_lfs_detection_ignores_commented_attribute_rules(
 async def test_repository_lfs_detection_ignores_attribute_files_in_ignored_trees(
     tmp_path: Path,
 ) -> None:
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "init", "-q"],
+        cwd=tmp_path,
+        env=_isolated_git_env(),
+        check=True,
+    )
     (tmp_path / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
     ignored_tree = tmp_path / "node_modules" / "dependency"
     ignored_tree.mkdir(parents=True)

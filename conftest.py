@@ -102,6 +102,20 @@ def _pointer_targets_this_repo(name: str, own_git_dir: Path | None) -> bool:
     return resolved == own_git_dir
 
 
+def isolated_git_env() -> dict[str, str]:
+    """Env for git subprocesses that operate on THROWAWAY repositories.
+
+    Strips hook/quarantine state and repo pointers regardless of the session
+    scrub decision: an intentional external pointer is correct for the suite
+    (it describes the checkout) but catastrophic for a subprocess git cwd'd
+    into a temp repo (Codex P2 on #338 — isolation is the tests' job here).
+    """
+    env = dict(os.environ)
+    for name in (*_REPO_POINTER_VARS, *_QUARANTINE_VARS):
+        env.pop(name, None)
+    return env
+
+
 def _decide_pointer_scrub(own_git_dir: Path | None, has_local_git_entry: bool) -> list[str]:
     """Which repo-pointer variables to scrub (pure decision, unit-tested).
 
