@@ -14,7 +14,9 @@ import re
 
 # A fence opener: optionally inside a list item (marker + indent — GFM keeps
 # fences as the first block of a list item, Codex P1 round 7).
-_FENCE_OPEN_RE = re.compile(r"^(?:[-*+] |[0-9]+[.)] )?\s{0,3}(?:\t ?)?(`{3,}|~{3,})")
+# A fence opener: 0-3 leading SPACES (a tab starts indented code, not a
+# fence — Codex P2 round 8), optionally after a list marker.
+_FENCE_OPEN_RE = re.compile(r"^(?:[-*+] |[0-9]+[.)] )? {0,3}(`{3,}|~{3,})")
 _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 _ATX_HEADING_RE = re.compile(r"^ {0,3}#{1,6}\s")
 _NEW_BLOCK_RE = re.compile(r"^(?:#{1,6}\s|[-*+]\s|\d+[.)]\s)")
@@ -60,13 +62,9 @@ def visible_comment_text(body: str | None) -> str:
     """
     if not body:
         return ""
-    body = _strip_terminated_html_comments(body)
-    # Unterminated comment: everything after the opener is hidden (GFM) —
-    # but an opener inside an inline code span is literal text, not a
-    # comment start (Codex P2 round 7).
-    masked = _mask_inline_code(body)
-    if "<!--" in masked:
-        body = body[: masked.index("<!--")]
+    # Codex P1 round 8: fence parsing runs BEFORE comment stripping — HTML
+    # syntax inside fenced content is literal code and must not be able to
+    # synthesize or remove fence markers.
     visible: list[str] = []
     fence_marker = ""
     in_quote = False
@@ -103,7 +101,15 @@ def visible_comment_text(body: str | None) -> str:
             visible.append(line)
             continue
         if line.lstrip().startswith(">"):
-            in_quote = True
+            # A quote line whose CONTENT is a block construct (heading, list,
+            # fence) cannot be lazily continued — the next line starts new
+            # content (Codex P2 round 8).
+            content = line.lstrip()[1:].lstrip()
+            in_quote = not (
+                content.startswith("#")
+                or _NEW_BLOCK_RE.match(content)
+                or _FENCE_OPEN_RE.match(content)
+            )
             awaiting_code_block = False
             in_indented_code = False
             continue
@@ -149,4 +155,11 @@ def visible_comment_text(body: str | None) -> str:
         in_indented_code = False
         awaiting_code_block = False
         visible.append(line)
-    return "\n".join(visible)
+    stripped = "\n".join(visible)
+    stripped = _strip_terminated_html_comments(stripped)
+    # Unterminated comment: everything after the opener is hidden (GFM) —
+    # but an opener inside an inline code span is literal text (round 7).
+    masked = _mask_inline_code(stripped)
+    if "<!--" in masked:
+        stripped = stripped[: masked.index("<!--")]
+    return stripped
