@@ -48,17 +48,19 @@ def visible_comment_text(body: str | None) -> str:
     html_container_depth = 0  # >0 while inside a raw-HTML container block
     for token in _md.parse(body):
         if token.type == "html_block":
-            # Raw-HTML CONTAINER tags (details/summary/blockquote-as-html) hide
-            # the Markdown blocks they enclose: '<details>' opens a container
-            # that stays active until its close tag (P1 round 10). Plain
-            # standalone HTML blocks are invisible either way.
-            tag = re.search(r"</?([a-zA-Z][a-zA-Z0-9-]*)", token.content or "")
-            name = tag.group(1).lower() if tag else ""
-            if name in _HTML_CONTAINER_TAGS:
-                if token.content.lstrip().startswith("</"):
-                    html_container_depth = max(0, html_container_depth - 1)
+            # Raw-HTML CONTAINER tags hide the Markdown blocks they enclose.
+            # A single html_block may contain BOTH the opening and closing
+            # tags ('<table>...</table>' on one token) — process EVERY tag
+            # occurrence and apply the net balance (P2 round 11).
+            net = 0
+            for tag in re.finditer(r"</?([a-zA-Z][a-zA-Z0-9-]*)", token.content or ""):
+                if tag.group(1).lower() not in _HTML_CONTAINER_TAGS:
+                    continue
+                if tag.group(0).startswith("</"):
+                    net -= 1
                 else:
-                    html_container_depth += 1
+                    net += 1
+            html_container_depth = max(0, html_container_depth + net)
             continue
         if token.type == "heading_open":
             in_heading = True
