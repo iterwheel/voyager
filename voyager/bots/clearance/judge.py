@@ -1,9 +1,21 @@
 """Verdict assignment per SWM-1101 (Decision Tree steps 3-6).
 
-The 'substantively reasonable' heuristic deliberately stays conservative:
-we only return RESOLVED when there is concrete evidence (specific identifier,
-sufficient length, no obvious deflection pattern). Borderline cases collapse to
-NEEDS_HUMAN_JUDGMENT so the maintainer sees them rather than a false RESOLVED.
+Heuristic contract (class-closing, per the #334 scope ruling): this module
+parses Codex follow-up prose with a PRECEDENCE-ORDERED heuristic —
+
+1. DECISIVE APPROVAL first: explicit approval phrases (looks good /
+   no new issues / nice work / lgtm) and the 👍 reaction decide
+   RESOLVED before any negative-state keyword scan runs, unless a hard
+   negator is directly attached after the approval phrase itself.
+2. NEGATIVE-STATE keywords second (asserted regressions, still-* failure
+   forms, unresolved/unaddressed/unfixed/persists, missing coverage...).
+3. Token attachment analysis last (negators before/after addressed /
+   resolved / fixed).
+
+Prose is unbounded: new English paraphrases of the same sentiment are
+NOT defects of this heuristic — they are the reason a structured-signal
+protocol (machine-readable verdicts instead of prose parsing) is the
+long-term fix, tracked separately.
 """
 
 from __future__ import annotations
@@ -46,6 +58,34 @@ def is_substantive_reply(body: str | None) -> bool:
     return True
 
 
+# Decisive approval phrases (precedence 1). "addressed"/"resolved"/"fixed"
+# are NOT here — they are weaker tokens analyzed at precedence 3.
+_APPROVAL_PHRASES = ("looks good", "no new issues", "nice work", "lgtm")
+# Concessive still-occurrence: "the race can still occur" — outranks approval
+# words because the reviewer explicitly says the failure mode remains.
+_CONCESSIVE_STILL_RE = re.compile(
+    r"\b(?:can|could|may|might|will|would|does|do)\s+still\s+"
+    r"(?:occur|reproduce|happen|persist|remain|be\s+(?:present|seen|triggered|hit))\b"
+)
+
+
+def _decisive_approval(text: str) -> bool:
+    """True when an explicit approval phrase stands without an attached
+    hard negator (``looks good, but not verified`` is not decisive)."""
+    for phrase in _APPROVAL_PHRASES:
+        start = 0
+        while True:
+            idx = text.find(phrase, start)
+            if idx < 0:
+                break
+            after = text[idx + len(phrase) : idx + len(phrase) + 48]
+            after = re.split(r"[.!?]", after)[0]
+            if not _AFTER_NEGATOR_RE.match(after):
+                return True
+            start = idx + len(phrase)
+    return APPROVAL_REACTION in text
+
+
 def codex_followup_reaction(followup_body: str | None) -> str | None:
     """Detect 👍 / 👎 / textual approval signals in a Codex follow-up. Returns
     'positive' / 'negative' / None.
@@ -67,6 +107,16 @@ def codex_followup_reaction(followup_body: str | None) -> str | None:
     if not followup_body:
         return None
     text = followup_body.lower()
+    # Ruling ladder (class-closing, #334 + #335): structured signal >
+    # concessive still-occurrence > approval words > negative keywords >
+    # token attachment.
+    if APPROVAL_REACTION in text:  # 1. structured signal
+        return "positive"
+    if _CONCESSIVE_STILL_RE.search(text):  # 2. concessive still-occurrence
+        return "negative"
+    if _decisive_approval(text):  # 3. approval words
+        return "positive"
+
     # Codex P2 round 14: a NEGATED regression ('has not regressed', 'No
     # regression introduced') is an approval, not a rejection — only
     # affirmative regression statements reject.
@@ -183,6 +233,20 @@ _NEGATED_REGRESSION_RE = re.compile(
 )
 
 
+# Attachment breakers inside a no-phrase: sentence punctuation (already
+# clipped), another approval phrase, or a positive token.
+_APPROVAL_OR_BREAK_RE = re.compile(
+    r"looks good|no new issues|nice work|lgtm|\baddressed\b|\bresolved\b|\bfixed\b"
+)
+
+# Passive repaired tail: "regression was fixed / has been resolved ..." —
+# the regression is being repaired, not reported.
+_REGRESSION_REPAIRED_TAIL_RE = re.compile(
+    r"regress(?:ed|es|ing|ion|ions)?\b[\s,]*(?:was|is|are|has been|have been|"
+    r"gets|got|now)\s+(?:fixed|resolved|covered|prevented|addressed|mitigated|added|gone)\b"
+)
+
+
 def _has_affirmative_regression(text: str) -> bool:
     """True when ANY regression occurrence is not locally negated (Codex P1
     round 15: a negated occurrence elsewhere must not mask this one)."""
@@ -197,6 +261,9 @@ def _has_affirmative_regression(text: str) -> bool:
         # Codex P2 round 16: merely DISCUSSING a regression (fixing/preventing
         # one, or referencing a regression test) is not an asserted regression.
         if _REGRESSION_HANDLING_LEAD_RE.search(before):
+            continue
+        # Passive repaired form ("the regression was fixed"): not asserted.
+        if _REGRESSION_REPAIRED_TAIL_RE.search(text[max(0, start - 4) : start + 64]):
             continue
         return True
     return False
@@ -232,8 +299,15 @@ def _positive_is_negated(text: str, pos: int, token_len: int) -> bool:
     window = text[max(0, pos - _NEGATION_WINDOW) : pos]
     # A negator in a COMPLETED sentence does not govern a later positive
     # token (Codex P2 round 10): clip at the last sentence boundary.
-    window = re.split(r"[.!?]", window)[-1]
+    window = re.split(r"[.!?;]", window)[-1]
     if _NEGATOR_WIDE_RE.search(window):
+        return True
+    # Bare "no" attaches across a noun phrase when nothing breaks the span:
+    # "No aspects of the reported issue were addressed" negates; the
+    # affirmative "no new issues … looks good" carries its own approval
+    # phrase in the span and does not reach this precedence level.
+    no_match = re.search(r"\bno\b", window)
+    if no_match and not _APPROVAL_OR_BREAK_RE.search(window[no_match.end() :]):
         return True
     # Bare "no" negates only in immediate proximity (nothing but short filler
     # between it and the token): "no issues were addressed" negates, while
