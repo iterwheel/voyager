@@ -31,10 +31,13 @@ def test_lock_keyed_on_issue_number_not_branch() -> None:
     assert _get_lock("o/r", "issue-69") is not _get_lock("other/r", "issue-69")
 
 
-def _pr(head_ref: str, number: int, body: str) -> dict[str, Any]:
+def _pr(
+    head_ref: str, number: int, body: str, author: str = "iterwheel-assembly[bot]"
+) -> dict[str, Any]:
     return {
         "number": number,
         "html_url": f"https://example/pr/{number}",
+        "user": {"login": author},
         "head": {"ref": head_ref, "repo": {"full_name": "o/r"}},
         "base": {"repo": {"full_name": "o/r"}},
         "body": body,
@@ -100,3 +103,26 @@ async def test_lookup_failure_falls_back_to_computed_branch() -> None:
     client = AsyncMock()
     client.find_pull_request_by_head = AsyncMock(side_effect=TimeoutError("boom"))
     assert await _existing_branch_for_issue(client, "o/r", 69, "69-computed") is None
+
+
+async def test_human_pr_with_matching_shape_is_not_reused():
+    """Codex P1 round 8: a human PR with a coincidental "<issue>-" branch and
+    a Closes reference must never be adopted."""
+    original = make_branch_name(69, "[Feature]: Implement Assembly bot MVP")
+    edited = make_branch_name(69, "[Feature]: Renamed entirely")
+    client = _client(
+        direct=None,
+        pr_head=original,
+        search=[
+            {
+                "number": 1300,
+                "body": "Closes #69",
+                "pull_request": {"url": "https://api.example.com/o/r/pulls/1300"},
+            }
+        ],
+    )
+    # the human-authored PR detail (returned for any number)
+    client.pull_request = AsyncMock(
+        return_value=_pr(original, 1300, "Closes #69", author="some-human")
+    )
+    assert await _existing_branch_for_issue(client, "o/r", 69, edited) is None

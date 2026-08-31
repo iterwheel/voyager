@@ -175,6 +175,8 @@ def test_malformed_hash_paragraph_does_not_arm_indented_code():
     indented continuation stays visible."""
     assert "/assembly" in visible_comment_text("#tag\n    /assembly --dry-run")
     assert "/assembly" not in visible_comment_text("## Usage\n    /assembly --dry-run")
+
+
 def test_over_indented_fence_opener_is_not_a_fence():
     """Codex P2 round 3 (#337): a fence-looking line indented >= 4 spaces is
     indented code, not a fence opener (GFM <= 3 spaces) — a phantom fence

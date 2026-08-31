@@ -1756,6 +1756,14 @@ async def _existing_branch_for_issue(
             pr = await client.pull_request(ASSEMBLY_AGENT_SLUG, repository, pr_number)
             if not isinstance(pr, dict):
                 continue
+            # Codex P1 round 8: only an Assembly-authored PR may be reused —
+            # a human PR with a coincidental "<issue>-…" branch and a
+            # "Closes #N" body must never be adopted or overwritten.
+            pr_author = str(((pr.get("user") or {}).get("login")) or "")
+            if not pr_author.lower().startswith(f"{ASSEMBLY_AGENT_SLUG}"):
+                # assembly bot logins: iterwheel-assembly[bot] / iterwheel-assembly
+                continue
+                continue
             head_ref = str(((pr.get("head") or {}).get("ref")) or "")
             body = str(pr.get("body") or "")
             if head_ref.startswith(prefix) and f"#{issue_number}" in body:
