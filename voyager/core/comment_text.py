@@ -91,6 +91,10 @@ def _iter_html_tags(raw: str) -> Iterator[tuple[bool, str]]:
             end = raw.find("-->", i + 4)
             i = n if end < 0 else end + 3
             continue
+        if raw.startswith("<![CDATA[", i):
+            end = raw.find("]]>", i + 9)
+            i = n if end < 0 else end + 3
+            continue
         if raw[i] == "<":
             j = i + 1
             is_close = j < n and raw[j] == "/"
@@ -232,14 +236,15 @@ def visible_comment_text(body: str | None) -> str:
                 parts.append("".join(visible_spans))
         # fences, code blocks, html blocks emit no inline tokens — dropped
     result = "\n".join(parts)
-    # P2 round 16: the parser resolves source escapes ('\\/assembly' becomes
-    # '/assembly' in text content). A reconstructed line only counts as a live
-    # command when the SOURCE body really contains that line-start command.
+    # P2 round 16/17: the parser resolves source escapes ('\\/assembly' and
+    # escaped flag dashes). A reconstructed line-start COMMAND LINE only
+    # counts as live when the SOURCE really contains that same line content
+    # unescaped — verified per full line, case-insensitively.
     for line in result.splitlines():
         stripped = line.lstrip()
         if stripped.startswith(("/",)):
-            command = stripped.split()[0]
-            if command in _COMMAND_WORDS and not _source_has_live_command(body, command):
+            command = stripped.split()[0].lower()
+            if command in _COMMAND_WORDS and not _source_has_live_line(body, stripped):
                 result = result.replace(line, f"\\{line}", 1)
     return result
 
@@ -247,11 +252,14 @@ def visible_comment_text(body: str | None) -> str:
 _COMMAND_WORDS = ("/assembly", "/implement", "/stack", "/blueprint")
 
 
-def _source_has_live_command(body: str, command: str) -> bool:
-    """True when the raw source has a line whose first token IS the command
-    (not an escaped '\\/command')."""
+def _source_has_live_line(body: str, line: str) -> bool:
+    """True when the raw source has a line-start command line matching the
+    reconstructed one (case-insensitive, escapes count as absent)."""
+    target = line.lower().replace("\\", "")
     for raw_line in body.splitlines():
         stripped2 = raw_line.lstrip()
-        if stripped2.startswith(command) and not stripped2.startswith("\\" + command):
+        if stripped2.startswith("\\"):
+            continue  # escaped in source: not live
+        if stripped2.lower() == target:
             return True
     return False
