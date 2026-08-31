@@ -148,7 +148,8 @@ _NEGATION_WINDOW = 48
 # Affirmative regression statement vs negated regression (an approval).
 _REGRESSION_RE = re.compile(r"\bregress(?:ed|ion)\b")
 _NEGATED_REGRESSION_RE = re.compile(
-    r"\b(?:not|no|never|hasn['\u2019]?t|haven['\u2019]?t|didn['\u2019]?t)\s+"
+    r"\b(?:not|no|never|isn['\u2019]?t|aren['\u2019]?t|wasn['\u2019]?t|weren['\u2019]?t|"
+    r"hasn['\u2019]?t|haven['\u2019]?t|didn['\u2019]?t)\s+"
     r"(?:\w+\s+){0,2}regress(?:ed|ion)?\b"
 )
 
