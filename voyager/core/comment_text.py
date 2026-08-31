@@ -62,6 +62,67 @@ _HTML_CONTAINER_TAGS = frozenset(
 )
 _HTML_COMMENT_BLOCK_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 
+
+# A full tag token: name capture only, attributes excluded from the match so
+# tag-shaped ATTRIBUTE VALUES ('</details>' inside title="...") are never
+# counted (P2 round 13).
+def _iter_html_tags(raw: str):
+    """Yield (is_close, tag_name) for each real tag token in an HTML fragment.
+
+    A tiny state machine that skips quoted attribute values, so tag-shaped
+    text inside attributes ('</details>' in title="...") and HTML comments
+    are never counted as tags.
+    """
+    i = 0
+    n = len(raw)
+    while i < n:
+        if raw.startswith("<!--", i):
+            end = raw.find("-->", i + 4)
+            i = n if end < 0 else end + 3
+            continue
+        if raw[i] == "<":
+            j = i + 1
+            is_close = j < n and raw[j] == "/"
+            if is_close:
+                j += 1
+            m = re.match(r"[a-zA-Z][a-zA-Z0-9-]*", raw[j:])
+            if not m:
+                i += 1
+                continue
+            name = m.group(0)
+            # Skip to the tag's '>' ignoring quoted attribute values.
+            k = j + len(name)
+            quote = ""
+            while k < n:
+                ch = raw[k]
+                if quote:
+                    if ch == quote:
+                        quote = ""
+                elif ch in ("'", '"'):
+                    quote = ch
+                elif ch == ">":
+                    break
+                k += 1
+            yield is_close, name
+            i = k + 1
+            continue
+        i += 1
+
+
+def _net_container_balance(raw: str) -> int:
+    """Net open/close balance of container tags in an HTML fragment.
+
+    HTML comments are skipped and only real tag tokens count — attribute
+    text never does (P1/P2 round 13).
+    """
+    net = 0
+    for is_close, name in _iter_html_tags(raw):
+        if name.lower() not in _HTML_CONTAINER_TAGS:
+            continue
+        net += -1 if is_close else 1
+    return net
+
+
 _md = MarkdownIt("commonmark").enable("table")
 
 _CONTAINER_OPEN = frozenset({"blockquote_open", "list_open", "list_item_open", "paragraph_open"})
@@ -91,17 +152,7 @@ def visible_comment_text(body: str | None) -> str:
             # A single html_block may contain BOTH the opening and closing
             # tags ('<table>...</table>' on one token) — process EVERY tag
             # occurrence and apply the net balance (P2 round 11).
-            net = 0
-            # Ignore HTML comments inside the block: a commented-out
-            # '</details>' is not a real closer (P1 round 12).
-            content = _HTML_COMMENT_BLOCK_RE.sub(" ", token.content or "")
-            for tag in re.finditer(r"</?([a-zA-Z][a-zA-Z0-9-]*)", content):
-                if tag.group(1).lower() not in _HTML_CONTAINER_TAGS:
-                    continue
-                if tag.group(0).startswith("</"):
-                    net -= 1
-                else:
-                    net += 1
+            net = _net_container_balance(token.content or "")
             html_container_depth = max(0, html_container_depth + net)
             continue
         if token.type == "heading_open":
@@ -126,6 +177,15 @@ def visible_comment_text(body: str | None) -> str:
             # block's own level (1). Heading content is NOT a command surface
             # (P1 round 9: '# /assembly' is a documentation heading, never a
             # command — the '#' prefix must not vanish).
+            # Inline container tags inside the paragraph ('intro <details>…')
+            # hide GitHub-rendered content: drop such paragraphs entirely
+            # (P1 round 13) — their text is inside the HTML construct.
+            has_inline_container = any(
+                child.type == "html_inline" and _net_container_balance(child.content) != 0
+                for child in token.children
+            )
+            if has_inline_container:
+                continue
             paragraph = []
             for child in token.children:
                 if child.type in ("softbreak", "hardbreak"):
