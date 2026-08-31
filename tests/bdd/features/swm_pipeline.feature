@@ -122,6 +122,38 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     Then the thread verdict is "RESOLVED"
     And the thread llm_verdict is "RESOLVED"
     And the thread llm_confidence is 0.95
+
+  # Issue #254: investigator verdicts derive from untrusted text (author
+  # replies, quotable Codex comments, diff excerpts). A RESOLVED may only
+  # trigger the resolve mutation with independent corroboration — the head
+  # advanced after the thread's last activity.
+
+  Scenario: Investigator RESOLVED with head unchanged since the thread is capped to human judgment (issue #254)
+    Given the stub PR "iterwheel/sandbox" #49 has 1 outdated Codex thread at path "app.py" line 10
+    And the stub PR head was last updated before the thread comments
+    And a fake investigator returning verdict "RESOLVED" confidence 0.99 reason "injected: return RESOLVED"
+    And the stub client returns a sample diff for "app.py"
+    When compute_clearance_automation runs with investigator and DRY_RUN false
+    Then the thread verdict is "NEEDS_HUMAN_JUDGMENT"
+    And the automation status is "pending"
+    And no resolveReviewThread mutation was invoked
+
+  Scenario: Injected author reply driving an investigator RESOLVED cannot auto-resolve without head motion (issue #254)
+    Given the stub PR has 1 Codex thread with an injection-style author reply and isResolved false
+    And the stub PR head was last updated before the thread comments
+    And a fake investigator returning verdict "RESOLVED" confidence 0.99 reason "attacker-controlled verdict adopted"
+    And the stub client returns a sample diff for "app.py"
+    When compute_clearance_automation runs with investigator and DRY_RUN false
+    Then the thread verdict is "NEEDS_HUMAN_JUDGMENT"
+    And no resolveReviewThread mutation was invoked
+
+  Scenario: Investigator RESOLVED with head advanced after the thread resolves (issue #254 corroboration)
+    Given the stub PR "iterwheel/sandbox" #49 has 1 outdated Codex thread at path "app.py" line 10
+    And a fake investigator returning verdict "RESOLVED" confidence 0.95 reason "Fix confirmed in diff"
+    And the stub client returns a sample diff for "app.py"
+    When compute_clearance_automation runs with investigator and DRY_RUN false
+    Then the thread verdict is "RESOLVED"
+    And exactly 1 resolveReviewThread mutation was invoked
     And the thread llm_reason contains "Fix confirmed in diff"
     And the pipeline trigger contains "webhook+investigator"
 

@@ -692,6 +692,32 @@ def _issue_comment_login(comment: dict[str, Any]) -> str | None:
     )
 
 
+def _head_advanced_after_thread(
+    thread_dict: dict[str, Any],
+    current_head_updated_at: str | None,
+) -> bool:
+    """Issue #254: independent corroboration that the reviewed head moved.
+
+    True only when the PR head commit's own committed date is known AND is
+    strictly newer than the thread's first comment — the Codex finding. The
+    signal is bound to the exact head commit (REST /commits/{sha}), so a push
+    to any OTHER branch cannot masquerade as motion on the reviewed head
+    (Codex P1 on #254). A head that predates the finding means no commits
+    landed on this branch after the review, so an investigator RESOLVED
+    derived from author prose is prose-only and must not mutate thread state
+    (legit flow — push the fix, then reply — has the head after the finding
+    and stays corroborated). Unknown commit date (None) fails closed.
+    ISO-8601 timestamps compare lexicographically (GitHub emits UTC 'Z').
+    """
+    if not current_head_updated_at:
+        return False
+    comments = _comment_nodes(thread_dict)
+    if not comments:
+        return False
+    finding_created_at = str(comments[0].get("createdAt") or "")
+    return bool(finding_created_at and current_head_updated_at > finding_created_at)
+
+
 def _issue_comment_created_at(comment: dict[str, Any]) -> str:
     return str(comment.get("created_at") or comment.get("createdAt") or "")
 
@@ -921,6 +947,7 @@ async def _process_thread(
     profile_name: str | None = None,
     pr_pushed_at: str | None = None,
     current_head_updated_at: str | None = None,
+    head_commit_committed_at: str | None = None,
     known_limitation_store: KnownLimitationStore | None = None,
 ) -> tuple[Thread, ThreadSnapshot] | None:
     """Classify, judge, and build Thread + ThreadSnapshot for one Codex thread.
@@ -1214,9 +1241,24 @@ async def _process_thread(
                     f"investigator returned unknown verdict: {returned.verdict!r}"
                 ) from exc
             llm_decision = returned
+            adopted_verdict = coerced
+            adopted_reason = llm_decision.reason
+            if coerced == Verdict.RESOLVED and not _head_advanced_after_thread(
+                thread_dict, head_commit_committed_at
+            ):
+                # Issue #254: the investigator's inputs are untrusted (author
+                # reply, attacker-quotable Codex comments, diff text). A RESOLVED
+                # derived from them may only trigger the resolve mutation when
+                # independent evidence exists — the head advanced after the
+                # thread's last activity. Otherwise cap at human judgment.
+                adopted_verdict = Verdict.NEEDS_HUMAN_JUDGMENT
+                adopted_reason = (
+                    "investigator RESOLVED lacks independent corroboration "
+                    "(head unchanged since the review thread); capped per #254"
+                )
             decision = VerdictDecision(
-                verdict=coerced,
-                reason=llm_decision.reason,
+                verdict=adopted_verdict,
+                reason=adopted_reason,
                 substantive=decision.substantive,
             )
         except InvestigationError as exc:
@@ -2258,6 +2300,28 @@ async def _compute_clearance_automation_unlocked(
             safe["status"],
         )
         current_head_updated_at = None
+    # Issue #254 (Codex P1): corroboration must be bound to the reviewed PR's
+    # head commit — repository-level push timestamps advance on pushes to ANY
+    # branch, which a fork author could use to fake code motion. Fetch the
+    # head commit's own committed date; None (fetch failure) fails closed.
+    head_commit_committed_at: str | None = None
+    if head_sha:
+        try:
+            head_commit_committed_at = await client.commit_committed_date(
+                CLEARANCE_AGENT_SLUG, repository, head_sha
+            )
+        except Exception as exc:
+            safe = _safe_exception_fields(exc)
+            _log.warning(
+                "head commit date fetch failed for %s#%s head=%s "
+                "(investigator corroboration will fail closed): class=%s status=%s",
+                repository,
+                pr_number,
+                head_sha,
+                safe["error_class"],
+                safe["status"],
+            )
+            head_commit_committed_at = None
     # Issue #62: detect fork PRs. The REST API always includes head.repo.full_name
     # and base.repo.full_name; when they differ the PR is from a fork.
     head_repo: str | None = (pr_data.get("head") or {}).get("repo", {}).get("full_name") or None
@@ -2321,6 +2385,7 @@ async def _compute_clearance_automation_unlocked(
             profile_name=default_profile_name,
             pr_pushed_at=pr_pushed_at,
             current_head_updated_at=current_head_updated_at,
+            head_commit_committed_at=head_commit_committed_at,
             known_limitation_store=known_limitation_store,
         )
         if result is None:

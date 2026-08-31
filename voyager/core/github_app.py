@@ -711,6 +711,26 @@ class GitHubAppClient:
                 return None
             raise
 
+    async def commit_committed_date(self, app_slug: str, repo: str, sha: str) -> str | None:
+        """Return the commit date of one specific commit (REST /commits/{sha}).
+
+        Unlike repository-level ``pushed_at`` fields this is bound to the exact
+        commit, so pushes to OTHER branches cannot masquerade as motion on the
+        reviewed head (issue #254 Codex P1). Returns None when unavailable.
+        """
+        owner, name = repo.split("/", 1)
+        payload = await self.request(
+            app_slug, "GET", f"/repos/{owner}/{name}/commits/{sha}", repository=repo
+        )
+        if not isinstance(payload, dict):
+            return None
+        commit = payload.get("commit") or {}
+        return (
+            (commit.get("committer") or {}).get("date")
+            or (commit.get("author") or {}).get("date")
+            or None
+        )
+
     async def issue_reactions(
         self,
         app_slug: str,
