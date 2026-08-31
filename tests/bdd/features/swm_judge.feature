@@ -252,6 +252,21 @@ Feature: SWM judge — verdict assignment per SWM-1101 decision tree
     When codex_followup_reaction is called
     Then the followup reaction is "negative"
 
+  Scenario: Still-reproduces is a rejection (Codex round 14)
+    Given a Codex follow-up body "The symptom is addressed, but the crash still reproduces."
+    When codex_followup_reaction is called
+    Then the followup reaction is "negative"
+
+  Scenario: Negated regression is an approval (Codex round 14)
+    Given a Codex follow-up body "This has not regressed. The concern is resolved."
+    When codex_followup_reaction is called
+    Then the followup reaction is "positive"
+
+  Scenario: No-regression-introduced stays positive (Codex round 14)
+    Given a Codex follow-up body "No regression introduced, looks good"
+    When codex_followup_reaction is called
+    Then the followup reaction is "positive"
+
   Scenario: Empty Codex follow-up returns None
     Given a None Codex follow-up body
     When codex_followup_reaction is called

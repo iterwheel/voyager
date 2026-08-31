@@ -62,6 +62,11 @@ def codex_followup_reaction(followup_body: str | None) -> str | None:
     if not followup_body:
         return None
     text = followup_body.lower()
+    # Codex P2 round 14: a NEGATED regression ('has not regressed', 'No
+    # regression introduced') is an approval, not a rejection — only
+    # affirmative regression statements reject.
+    if _REGRESSION_RE.search(text) and not _NEGATED_REGRESSION_RE.search(text):
+        return "negative"
     if any(
         token in text
         for token in [
@@ -83,7 +88,13 @@ def codex_followup_reaction(followup_body: str | None) -> str | None:
             "still failing",
             "still missing",
             "still open",
-            "regressed",
+            "still reproduces",
+            "still reproduce",
+            "still seen",
+            "still observed",
+            "still triggers",
+            "still triggered",
+            "still recurs",
             "regression remains",
             "partially addressed",
             "partially resolved",
@@ -134,6 +145,12 @@ _NEGATOR_RE = re.compile(
     r")\b"
 )
 _NEGATION_WINDOW = 48
+# Affirmative regression statement vs negated regression (an approval).
+_REGRESSION_RE = re.compile(r"\bregress(?:ed|ion)\b")
+_NEGATED_REGRESSION_RE = re.compile(
+    r"\b(?:not|no|never|hasn['\u2019]?t|haven['\u2019]?t|didn['\u2019]?t)\s+"
+    r"(?:\w+\s+){0,2}regress(?:ed|ion)?\b"
+)
 
 
 def _positive_is_negated(text: str, pos: int, token_len: int) -> bool:
@@ -168,7 +185,8 @@ def _positive_is_negated(text: str, pos: int, token_len: int) -> bool:
 
 _AFTER_NEGATOR_RE = re.compile(
     r"^[\s,.!?;:]{0,6}(?:but|however|though|yet)?[^.!?]{0,44}?"
-    r"(?:not|never|nor|remains?|persists?|isn['\u2019]?t|aren['\u2019]?t|wasn['\u2019]?t|"
+    r"(?:not|never|nor|remains?|persists?|reproduces?|recurs?|"
+    r"isn['\u2019]?t|aren['\u2019]?t|wasn['\u2019]?t|"
     r"won['\u2019]?t|don['\u2019]?t|doesn['\u2019]?t|didn['\u2019]?t|"
     r"hasn['\u2019]?t|haven['\u2019]?t|can['\u2019]?t|cannot)\b"
     r"|^[?\s]{0,4}no(?:[\s\u2014\u2013-]|[.!?]|$)"  # "Fixed? No—" / "Resolved? No."
