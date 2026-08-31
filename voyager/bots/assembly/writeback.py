@@ -843,28 +843,40 @@ async def dispatch_assembly_writeback(
         ),
         delivery_id=delivery_id,
     )
+
     # Issue #257: the branch name derives from the mutable issue title. If the
     # title was edited since the first run, the freshly computed name points at
     # a branch that does not exist and the run would push a duplicate branch
     # plus a duplicate PR for the same issue. Resolve the issue's existing
     # open Assembly PR (head branch "<number>-…") and reuse its branch.
-    stable_branch = await _existing_branch_for_issue(
-        client, repository, contract.issue_number, contract.branch_name
-    )
-    if stable_branch and stable_branch != contract.branch_name:
-        _log.info(
-            "assembly_issue_branch_reuse: %s",
-            json.dumps(
-                {
-                    "event": "assembly_issue_branch_reuse",
-                    "repository": repository,
-                    "issue": contract.issue_number,
-                    "reused_branch": stable_branch,
-                    "computed_branch": contract.branch_name,
-                }
-            ),
+    async def _apply_stable_issue_branch(contract: AssemblyJobContract) -> AssemblyJobContract:
+        """Resolve the issue's existing Assembly branch (issue #257).
+
+        Runs BEFORE the lock (fast path) and AGAIN inside it (Codex P1 on
+        #337): two concurrent deliveries with different title-derived names
+        can both miss pre-lock; the second must observe the first delivery's
+        PR once it holds the lock.
+        """
+        stable_branch = await _existing_branch_for_issue(
+            client, repository, contract.issue_number, contract.branch_name
         )
-        contract = replace(contract, branch_name=stable_branch)
+        if stable_branch and stable_branch != contract.branch_name:
+            _log.info(
+                "assembly_issue_branch_reuse: %s",
+                json.dumps(
+                    {
+                        "event": "assembly_issue_branch_reuse",
+                        "repository": repository,
+                        "issue": contract.issue_number,
+                        "reused_branch": stable_branch,
+                        "computed_branch": contract.branch_name,
+                    }
+                ),
+            )
+            return replace(contract, branch_name=stable_branch)
+        return contract
+
+    contract = await _apply_stable_issue_branch(contract)
     contract_dict = contract.to_dict()
     base_result["contract"] = contract_dict
     base_result["audit_id"] = generate_audit_id(
@@ -885,6 +897,10 @@ async def dispatch_assembly_writeback(
     # Lock dict growth is documented on `_get_lock`.
     # ------------------------------------------------------------------
     async with _get_lock(repository, f"issue-{contract.issue_number}"):
+        # Codex P1 on #337: re-resolve under the lock so a concurrent delivery
+        # that opened its PR while we waited observes it and reuses its branch.
+        contract = await _apply_stable_issue_branch(contract)
+        base_result["contract"] = contract.to_dict()
         # Resolve session metadata inside the same per-branch lock that
         # protects adapter execution. This keeps the PR head-SHA compatibility
         # check adjacent to the run that consumes the session and avoids a
@@ -1731,7 +1747,15 @@ async def _existing_branch_for_issue(
         return None
     try:
         prefix = f"{issue_number}-"
-        for pr in candidates or []:
+        for candidate in candidates or []:
+            # Search results are ISSUE-shaped and carry no `head` — fetch the
+            # pull-request detail to read the head branch (Codex P1 on #337).
+            pr_number = _pr_number_from_search_item(candidate)
+            if pr_number <= 0:
+                continue
+            pr = await client.pull_request(ASSEMBLY_AGENT_SLUG, repository, pr_number)
+            if not isinstance(pr, dict):
+                continue
             head_ref = str(((pr.get("head") or {}).get("ref")) or "")
             body = str(pr.get("body") or "")
             if head_ref.startswith(prefix) and f"#{issue_number}" in body:
@@ -1744,6 +1768,25 @@ async def _existing_branch_for_issue(
         )
         return None
     return None
+
+
+def _pr_number_from_search_item(item: dict[str, Any]) -> int:
+    """Pull the PR number out of a /search/issues item (issue-shaped).
+
+    The ``pull_request`` sub-object carries an API URL ending in /pulls/{n};
+    fall back to the top-level number only when that shape is missing (a
+    direct pulls payload already includes head and bypasses this helper).
+    """
+    pr_url = str(((item.get("pull_request") or {}).get("url")) or "")
+    if pr_url.rstrip("/").endswith(f"/pulls/{item.get('number')}"):
+        try:
+            return int(item.get("number") or 0)
+        except (TypeError, ValueError):
+            return 0
+    tail = pr_url.rstrip("/").rsplit("/pulls/", 1)
+    if len(tail) == 2 and tail[1].isdigit():
+        return int(tail[1])
+    return 0
 
 
 async def _verify_pr_head_repo(

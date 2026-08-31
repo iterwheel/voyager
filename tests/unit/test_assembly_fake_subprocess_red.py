@@ -491,9 +491,9 @@ async def test_concurrent_fake_subprocess_dispatches_serialize_without_duplicate
     ]
     assert client.branch_ref_exists.await_count == 2
     assert client.create_branch_ref.await_count == 1
-    # Issue #257: each dispatch also resolves the issue-branch idempotency key
-    # via find_pull_request_by_head before the lock (2 dispatches x 1 extra).
-    assert client.find_pull_request_by_head.await_count == 4
+    # Issue #257 + Codex P1 on #337: each dispatch resolves the issue branch
+    # pre-lock AND inside the lock (2 dispatches x 2 extra lookups).
+    assert client.find_pull_request_by_head.await_count == 6
     assert client.create_pull_request.await_count == 1
     assert client.update_pull_request.await_count == 1
 
