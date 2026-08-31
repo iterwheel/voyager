@@ -286,23 +286,34 @@ def visible_comment_text(body: str | None) -> str:
     for span_text, src_lines in spans:
         spans_with_offsets.append((span_text, src_lines, offset))
         offset += len(span_text) + 1  # +1 for the joining newline
+    removed = 0  # total characters removed so far — later offsets adjust
     for span_text, src_lines, base in spans_with_offsets:
-        src = "\n".join(src_lines)
+        src_lines_list = list(src_lines)
         for match in re.finditer(r"/(?:assembly|implement|stack|blueprint)\b", span_text, re.I):
             cmd = str(match.group(0))
             nl = span_text.find("\n", match.start())
             cmd_line = span_text[match.start() : nl if nl > 0 else len(span_text)].rstrip()
             flags = " ".join(tok for tok in cmd_line.split()[1:] if tok.startswith("--"))
             verify = f"{cmd} {flags}".strip() if flags else cmd
+            # Verify against THIS occurrence's own source LINE (the paragraph
+            # line whose softbreak position matches the span's line), not the
+            # whole span: a harmless literal on an earlier line cannot
+            # approve a decoded occurrence on a later one.
+            span_line = span_text.count("\n", 0, match.start())
+            own_src = (
+                src_lines_list[span_line]
+                if span_line < len(src_lines_list)
+                else "\n".join(src_lines_list)
+            )
             if (
-                _line_has_live_token(src, verify)
-                # whitespace-normalized match (tab-separated flags)
-                or _line_has_live_token(" ".join(src.split()), verify)
-                or f"`{cmd}" in src
+                _line_has_live_token(own_src, verify)
+                or _line_has_live_token(" ".join(own_src.split()), verify)
+                or f"`{cmd}" in own_src
             ):
                 continue  # live, or inside an inline code span (prose intent)
-            pos = base + match.start()
+            pos = base + match.start() - removed
             result = result[:pos] + result[pos + len(cmd) :]
+            removed += len(cmd)
     return result
 
 
