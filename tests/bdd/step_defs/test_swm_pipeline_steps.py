@@ -496,7 +496,7 @@ def _fresh_codex_thread(
         },
     }
     if original_commit is not None:
-        thread["originalCommit"] = {"oid": original_commit}
+        thread["comments"]["nodes"][0]["originalCommit"] = {"oid": original_commit}
     return thread
 
 
@@ -2199,8 +2199,8 @@ def given_pr_pushed_after_codex(ctx) -> None:
     ctx["client"].head_updated_at = "2026-05-12T00:00:00Z"
     old = {"oid": "old-sha-0000000000000000000000000000000000000000"}
     for thread in ctx["client"].threads or []:
-        if thread is not None:
-            thread["originalCommit"] = old
+        if thread is not None and (thread.get("comments") or {}).get("nodes"):
+            thread["comments"]["nodes"][0]["originalCommit"] = old
 
 
 @given("the PR was not pushed after the Codex review")
@@ -2209,8 +2209,8 @@ def given_pr_not_pushed_after_codex(ctx) -> None:
     ctx["client"].head_updated_at = "2026-05-10T00:00:00Z"
     head = {"oid": ctx["client"].pr_payload["head"]["sha"]}
     for thread in ctx["client"].threads or []:
-        if thread is not None:
-            thread["originalCommit"] = head
+        if thread is not None and (thread.get("comments") or {}).get("nodes"):
+            thread["comments"]["nodes"][0]["originalCommit"] = head
 
 
 # Issue #62: fork PR head-repo accessibility (UnsupportedContext)

@@ -361,7 +361,6 @@ class GitHubAppClient:
                   id
                   isResolved
                   isOutdated
-                  originalCommit { oid }
                   viewerCanResolve
                   viewerCanReply
                   path
@@ -382,6 +381,7 @@ class GitHubAppClient:
                       url
                       createdAt
                       lastEditedAt
+                      originalCommit { oid }
                       replyTo { databaseId }
                     }
                   }

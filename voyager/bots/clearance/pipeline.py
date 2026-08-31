@@ -1210,7 +1210,9 @@ async def _process_thread(
     # not stale.
     codex_review_stale = False
     if state == ThreadState.A:
-        reviewed_sha = str(((thread_dict.get("originalCommit") or {}).get("oid")) or "")
+        # originalCommit lives on the review COMMENT (not the thread node).
+        first_comment = (_comment_nodes(thread_dict) or [{}])[0]
+        reviewed_sha = str(((first_comment.get("originalCommit") or {}).get("oid")) or "")
         codex_review_stale = bool(reviewed_sha and head_sha and reviewed_sha != head_sha)
 
     # AUGMENT invariant: gate skips when judge() already returned RESOLVED.
