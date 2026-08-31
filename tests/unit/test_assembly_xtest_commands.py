@@ -54,9 +54,9 @@ class TestCaseInsensitivity:
 
 class TestLeadingWhitespace:
     def test_tab_indent(self) -> None:
-        cmd = parse_assembly_command("\t/assembly")
-        assert cmd is not None
-        assert cmd.command == "/assembly"
+        # Parser-delegated contract (#336 class-closing): a tab-indented
+        # command at document start is an indented code block — no trigger.
+        assert parse_assembly_command("\t/assembly") is None
 
     def test_space_indent(self) -> None:
         cmd = parse_assembly_command("   /assembly")
@@ -64,9 +64,9 @@ class TestLeadingWhitespace:
         assert cmd.command == "/assembly"
 
     def test_mixed_indent(self) -> None:
-        cmd = parse_assembly_command(" \t  /implement")
-        assert cmd is not None
-        assert cmd.command == "/implement"
+        # Parser-delegated contract (#336): tab-containing indentation at
+        # document start is an indented code block — no trigger.
+        assert parse_assembly_command(" \t  /implement") is None
 
 
 class TestFlags:

@@ -125,12 +125,17 @@ def test_html_comments_are_stripped():
 def test_indented_code_after_heading_is_stripped():
     """Codex P1 round 3: heading + 4-space indent is an indented code block."""
     assert "/assembly" not in visible_comment_text("# Usage\n    /assembly --dry-run")
-    # Document-start behavior deliberately unchanged (parser contract).
-    assert "/assembly" in visible_comment_text("    /assembly")
+    # Parser-delegated contract (#336 class-closing): document-start
+    # indentation is an indented code block too (CommonMark).
+    assert "/assembly" not in visible_comment_text("    /assembly")
 
 
 def test_unterminated_html_comment_strips_to_end():
-    assert "/assembly" not in visible_comment_text("intro <!-- hidden\n/assembly --dry-run")
+    """Parser-delegated contract (#336 class-closing): CommonMark HTML blocks
+    (comments) must START the line to hide content; a mid-paragraph '<!--' is
+    inline HTML and the following command stays visible prose."""
+    assert "/assembly" not in visible_comment_text("<!-- hidden\n/assembly --dry-run")
+    assert "/assembly" in visible_comment_text("intro <!-- hidden\n/assembly --dry-run")
 
 
 def test_malformed_hash_line_continues_quote():

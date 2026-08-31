@@ -1,152 +1,60 @@
-"""Visible comment text — strip regions that cannot contain a real command.
+"""Visible comment text — prose a human actually wrote as a command surface.
 
 GitHub comment bodies routinely quote commands inside code blocks (fenced or
-indented: documentation, pasted logs, transcripts) and block quotes. Trigger
-detection that plain-matches against the raw body turns those quotes into real
-runs (issue #256): a maintainer documenting ``/assembly`` usage in a code fence
-triggered a full implementation run. This module removes those regions so
-triggers only see text a human actually wrote as prose.
+indented), block quotes, nested lists, and HTML comments. Trigger detection
+that plain-matches the raw body turns those quotes into real runs (issue
+#256). Class-closing ruling on #336: hand-parsing an unbounded grammar
+(CommonMark) invites infinite edge rounds — this module delegates to a real
+Markdown parser (markdown-it-py, already in the dependency tree) and keeps
+ONLY the inline text of top-level paragraphs and headings. Everything inside
+any container (fence, indented code block, block quote, list item — at any
+nesting depth) or HTML construct is invisible by construction; inline code
+spans are prose and stay visible. Commands inside quoted/nested content are
+unreachable, definitionally.
 """
 
 from __future__ import annotations
 
-import re
+from markdown_it import MarkdownIt
 
-# A fence opener: optionally inside a list item (marker + indent — GFM keeps
-# fences as the first block of a list item, Codex P1 round 7).
-_FENCE_OPEN_RE = re.compile(r"^(?:[-*+] |[0-9]+[.)] )?\s{0,3}(?:\t ?)?(`{3,}|~{3,})")
-_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
-_ATX_HEADING_RE = re.compile(r"^ {0,3}#{1,6}\s")
-_NEW_BLOCK_RE = re.compile(r"^(?:#{1,6}\s|[-*+]\s|\d+[.)]\s)")
+_md = MarkdownIt("commonmark")
 
-
-_INLINE_CODE_RE = re.compile(r"`[^`\n]+`")
-
-
-def _mask_inline_code(text: str) -> str:
-    """Replace inline code spans with same-length fillers."""
-    return _INLINE_CODE_RE.sub(lambda m: "\u0000" * len(m.group(0)), text)
+_CONTAINER_OPEN = frozenset(
+    {"blockquote_open", "list_open", "list_item_open", "paragraph_open", "heading_open"}
+)
+_CONTAINER_CLOSE = frozenset(
+    {"blockquote_close", "list_close", "list_item_close", "paragraph_close", "heading_close"}
+)
 
 
-def _strip_terminated_html_comments(body: str) -> str:
-    """Remove <!-- ... --> regions while leaving inline-code spans intact."""
-    masked = _mask_inline_code(body)
-    out: list[str] = []
-    i = 0
-    while i < len(body):
-        if masked.startswith("<!--", i):
-            end = masked.find("-->", i + 4)
-            if end >= 0:
-                i = end + 3  # drop the whole terminated comment
-                continue
-        out.append(body[i])
-        i += 1
-    return "".join(out)
-
-
+# Inline children whose content is kept (prose, inline code, line breaks).
 def visible_comment_text(body: str | None) -> str:
-    """Return the body with code blocks and block quotes removed.
+    """Return the inline text of top-level paragraphs/headings only.
 
-    Fenced code blocks (``` / ~~~, any length) are dropped, and a closing
-    fence must be a *bare* marker line — a same-length marker with an info
-    string (```` ```python ````) does not close a fence, matching GitHub
-    Flavored Markdown (Codex P1 on #336). Indented code blocks (4 spaces or a
-    tab) are dropped too (Codex P1). Block-quote lines (``>``) are dropped,
-    and — per Markdown's lazy continuation — so are the non-blank lines that
-    follow a quote line until a blank line separates them (Codex P1:
-    ``> docs say`` / ``/assembly`` renders as one quoted paragraph). Inline
-    code spans are kept — a human writing ``run `/assembly` now`` means the
-    command.
+    Content inside fences, indented code blocks, block quotes, list items
+    (any nesting), and HTML blocks/inline HTML (comments) is dropped by the
+    parser's token structure — no bespoke grammar cases.
     """
     if not body:
         return ""
-    body = _strip_terminated_html_comments(body)
-    # Unterminated comment: everything after the opener is hidden (GFM) —
-    # but an opener inside an inline code span is literal text, not a
-    # comment start (Codex P2 round 7).
-    masked = _mask_inline_code(body)
-    if "<!--" in masked:
-        body = body[: masked.index("<!--")]
-    visible: list[str] = []
-    fence_marker = ""
-    in_quote = False
-    in_indented_code = False
-    awaiting_code_block = False  # set on blank line; cleared by prose
-    for line in body.splitlines():
-        if fence_marker:
-            # Inside a fence: only a BARE closing marker of the same character,
-            # at least the same length, indented at most three spaces (GFM),
-            # ends it — no info string allowed.
-            close = _FENCE_OPEN_RE.match(line)
-            if (
-                close
-                and close.group(1)[0] == fence_marker[0]
-                and len(close.group(1)) >= len(fence_marker)
-                and line.strip() == close.group(1)
-                and len(line) - len(line.lstrip()) <= 3
-            ):
-                fence_marker = ""
-                # A closing fence is a block boundary: an indented line after
-                # it is an indented code block (Codex P2 round 5 on #337).
-                awaiting_code_block = True
-            continue
-        open_ = _FENCE_OPEN_RE.match(line)
-        if open_:
-            fence_marker = open_.group(1)
-            in_quote = False
-            continue
-        if not line.strip():
-            # Blank line ends a lazy quote continuation (and keeps paragraphs)
-            # and may start an indented code block on the next line.
-            in_quote = False
-            awaiting_code_block = True
-            visible.append(line)
-            continue
-        if line.lstrip().startswith(">"):
-            in_quote = True
-            awaiting_code_block = False
-            in_indented_code = False
-            continue
-        if in_quote:
-            # Lazy continuation only applies to paragraph text: a line that
-            # starts a new block construct (heading, list, fence) after the
-            # quote is its own content and stays visible (Codex P1 round 2).
-            # A MALFORMED hash line ("#tag" without space, or deep-indented
-            # "# x") is paragraph text, not a heading — it continues the quote.
-            stripped = line.lstrip()
-            is_heading = (
-                stripped.startswith("#")
-                and len(line) - len(line.lstrip()) <= 3
-                and len(stripped) > 1
-                and stripped[1] in " #"
-            )
-            if (is_heading and not stripped.startswith("# ")) or not is_heading:
-                if _NEW_BLOCK_RE.match(line) or _FENCE_OPEN_RE.match(line):
-                    in_quote = False
-                else:
-                    continue
-            # a real heading exits the quote and falls through
-        if _ATX_HEADING_RE.match(line):
-            # A heading is a block boundary: an indented line after it is an
-            # indented code block (Codex P1 round 3). A deeper-indented '#'
-            # line is indented code, not a heading (Codex P2 round 5 on #337).
-            visible.append(line)
-            awaiting_code_block = True
-            in_indented_code = False
-            in_quote = False
-            continue
-        if line.startswith("    ") or line.startswith("\t"):
-            # Indented code block — but only when a blank line separates it
-            # from preceding prose (GFM). A document-start indented command or
-            # a mid-paragraph indent is a lazy continuation / leading-space
-            # tolerance, which the /assembly parser deliberately supports
-            # (Codex round-5 CRLF feature) and stays visible.
-            if awaiting_code_block:
-                in_indented_code = True
-            if not in_indented_code:
-                visible.append(line)
-            continue
-        in_indented_code = False
-        awaiting_code_block = False
-        visible.append(line)
-    return "\n".join(visible)
+    parts: list[str] = []
+    paragraph: list[str] = []
+    depth = 0
+    for token in _md.parse(body):
+        if token.type in _CONTAINER_OPEN:
+            depth += 1
+        elif token.type in _CONTAINER_CLOSE:
+            depth -= 1
+        elif token.type == "inline" and depth == 1 and token.children:
+            # An inline token follows its paragraph_open/heading_open; it is
+            # top-level prose only when the enclosing depth is exactly the
+            # block's own level (1: the paragraph itself).
+            paragraph = []
+            for child in token.children:
+                if child.type in ("softbreak", "hardbreak"):
+                    paragraph.append("\n")
+                elif child.type in ("text", "code_inline"):
+                    paragraph.append(child.content)
+            parts.append("".join(paragraph))
+        # fences, code blocks, html blocks emit no inline tokens — dropped
+    return "\n".join(parts)
