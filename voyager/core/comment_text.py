@@ -262,7 +262,11 @@ def visible_comment_text(body: str | None) -> str:
                     visible_spans.append(child.content)
                     continue
                 if html_containers:
-                    continue  # inside a container: text is hidden
+                    # Inside a container: text is hidden, and its softbreaks
+                    # consume source lines from the mapping (round 29).
+                    if child.type in ("softbreak", "hardbreak"):
+                        hidden_newlines += 1
+                    continue
                 if child.type in ("softbreak", "hardbreak"):
                     line_hidden_offsets.append(hidden_newlines)
                     visible_spans.append("\n")
@@ -305,11 +309,15 @@ def visible_comment_text(body: str | None) -> str:
     for span_text, src_lines, base, line_offsets in spans_with_offsets:
         src_lines_list = list(src_lines)
         _ = line_offsets  # used per-match below
-        for match in re.finditer(r"/(?:assembly|implement|stack|blueprint)\b", span_text, re.I):
+        for match in re.finditer(
+            r"/(?:assembly|implement|stack|blueprint)(?:[\w-]+)?", span_text, re.I
+        ):
             cmd = str(match.group(0))
             nl = span_text.find("\n", match.start())
             cmd_line = span_text[match.start() : nl if nl > 0 else len(span_text)].rstrip()
-            flag_tokens = [tok for tok in cmd_line.split()[1:] if tok.startswith("--")]
+            flag_tokens = [
+                tok for tok in cmd_line.split()[1:] if tok.startswith("--") and tok in _KNOWN_FLAGS
+            ]
             # Verify the command word and each flag INDEPENDENTLY against this
             # occurrence's own source line (softbreak-position mapping) —
             # intervening prose is irrelevant, entity-decoded flags fail, and
@@ -347,6 +355,10 @@ def _line_has_live_token(source_line: str, token: str) -> bool:
 
 
 _COMMAND_WORDS = ("/assembly", "/implement", "/stack", "/blueprint")
+
+# Flags the Assembly parser actually recognizes — only these require literal
+# source verification; unknown flags follow the parser's lenient contract.
+_KNOWN_FLAGS = frozenset({"--dry-run", "--allow-missing-stack", "--resume"})
 
 
 def _source_has_live_line(body: str, line: str) -> bool:
