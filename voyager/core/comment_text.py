@@ -185,7 +185,7 @@ def visible_comment_text(body: str | None) -> str:
     if not body:
         return ""
     parts: list[str] = []
-    spans: list[tuple[str, list[str]]] = []
+    spans: list[tuple[str, list[str], list[int]]] = []
     depth = 0
     in_heading = False
     in_container_block = False
@@ -240,10 +240,18 @@ def visible_comment_text(body: str | None) -> str:
             # documentation ('**/assembly**') never becomes a line-start
             # command.
             visible_spans: list[str] = []
+            hidden_newlines = 0
+            # Per-visible-line accumulated hidden newlines BEFORE each
+            # softbreak (inline comments/HTML eat their lines from the
+            # source mapping — round 28).
+            line_hidden_offsets = [0]
             for child in token.children:
                 if child.type == "html_inline":
                     if "<!--" in child.content:
-                        # HTML comments hide their content (P2 round 19).
+                        # HTML comments hide their content (P2 round 19) and
+                        # consume their newlines from the line mapping
+                        # (round 28).
+                        hidden_newlines += child.content.count("\n")
                         continue
                     # Non-container inline HTML (<em>, <b>, …) is preserved
                     # verbatim — dropping it could turn enclosed text into a
@@ -256,6 +264,7 @@ def visible_comment_text(body: str | None) -> str:
                 if html_containers:
                     continue  # inside a container: text is hidden
                 if child.type in ("softbreak", "hardbreak"):
+                    line_hidden_offsets.append(hidden_newlines)
                     visible_spans.append("\n")
                 elif child.type == "text":
                     visible_spans.append(child.content)
@@ -272,7 +281,13 @@ def visible_comment_text(body: str | None) -> str:
                 parts.append(span_text)
                 src_start = token.map[0] if token.map else 0
                 src_end = token.map[1] if token.map and len(token.map) > 1 else src_start + 1
-                spans.append((span_text, body.splitlines()[src_start:src_end]))
+                spans.append(
+                    (
+                        span_text,
+                        body.splitlines()[src_start:src_end],
+                        line_hidden_offsets,
+                    )
+                )
         # fences, code blocks, html blocks emit no inline tokens — dropped
     result = "\n".join(parts)
     # Escape/entity sanitation (rounds 16-26): each visible SPAN is verified
@@ -281,35 +296,42 @@ def visible_comment_text(body: str | None) -> str:
     # covers the COMMAND WORD plus recognized FLAGS (entity-decoded flags
     # must not survive); unrelated trailing prose (normalized '&' etc.) is
     # not required to be byte-identical.
-    spans_with_offsets: list[tuple[str, list[str], int]] = []
+    spans_with_offsets: list[tuple[str, list[str], int, list[int]]] = []
     offset = 0
-    for span_text, src_lines in spans:
-        spans_with_offsets.append((span_text, src_lines, offset))
+    for span_text, src_lines, line_offsets in spans:
+        spans_with_offsets.append((span_text, src_lines, offset, line_offsets))
         offset += len(span_text) + 1  # +1 for the joining newline
     removed = 0  # total characters removed so far — later offsets adjust
-    for span_text, src_lines, base in spans_with_offsets:
+    for span_text, src_lines, base, line_offsets in spans_with_offsets:
         src_lines_list = list(src_lines)
+        _ = line_offsets  # used per-match below
         for match in re.finditer(r"/(?:assembly|implement|stack|blueprint)\b", span_text, re.I):
             cmd = str(match.group(0))
             nl = span_text.find("\n", match.start())
             cmd_line = span_text[match.start() : nl if nl > 0 else len(span_text)].rstrip()
-            flags = " ".join(tok for tok in cmd_line.split()[1:] if tok.startswith("--"))
-            verify = f"{cmd} {flags}".strip() if flags else cmd
-            # Verify against THIS occurrence's own source LINE (the paragraph
-            # line whose softbreak position matches the span's line), not the
-            # whole span: a harmless literal on an earlier line cannot
-            # approve a decoded occurrence on a later one.
+            flag_tokens = [tok for tok in cmd_line.split()[1:] if tok.startswith("--")]
+            # Verify the command word and each flag INDEPENDENTLY against this
+            # occurrence's own source line (softbreak-position mapping) —
+            # intervening prose is irrelevant, entity-decoded flags fail, and
+            # no contiguous phantom string is searched (rounds 23-28).
             span_line = span_text.count("\n", 0, match.start())
+            # Hidden inline-HTML newlines before this line shift the mapping:
+            # their source lines (inside comments) never approve anything.
+            src_line = span_line + (line_offsets[span_line] if span_line < len(line_offsets) else 0)
             own_src = (
-                src_lines_list[span_line]
-                if span_line < len(src_lines_list)
+                src_lines_list[src_line]
+                if src_line < len(src_lines_list)
                 else "\n".join(src_lines_list)
             )
-            if (
-                _line_has_live_token(own_src, verify)
-                or _line_has_live_token(" ".join(own_src.split()), verify)
-                or f"`{cmd}" in own_src
-            ):
+            normalized_src = " ".join(own_src.split())
+            word_live = _line_has_live_token(own_src, cmd) or _line_has_live_token(
+                normalized_src, cmd
+            )
+            flags_live = all(
+                _line_has_live_token(own_src, flag) or _line_has_live_token(normalized_src, flag)
+                for flag in flag_tokens
+            )
+            if (word_live and flags_live) or f"`{cmd}" in own_src:
                 continue  # live, or inside an inline code span (prose intent)
             pos = base + match.start() - removed
             result = result[:pos] + result[pos + len(cmd) :]
