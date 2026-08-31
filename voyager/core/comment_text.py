@@ -217,6 +217,9 @@ def visible_comment_text(body: str | None) -> str:
             visible_spans: list[str] = []
             for child in token.children:
                 if child.type == "html_inline":
+                    if "<!--" in child.content:
+                        # HTML comments hide their content (P2 round 19).
+                        continue
                     # Non-container inline HTML (<em>, <b>, …) is preserved
                     # verbatim — dropping it could turn enclosed text into a
                     # line-start command (P2 round 16).
@@ -254,15 +257,16 @@ def visible_comment_text(body: str | None) -> str:
             if command in _COMMAND_WORDS and not _source_has_live_line(body, stripped):
                 result = result.replace(line, f"\\{line}", 1)
                 continue
-        # Substring triggers (/stack, /blueprint) mid-line: an escape-resolved
-        # token must not reach the substring matchers either — re-escape any
-        # command token whose escaped spelling appears in the source.
-        for word in _COMMAND_WORDS:
-            token = word.lstrip("/")
-            if re.search(rf"(?<![\w`/]){word}\b", line) and (
-                f"\\{word}" in body or f"\\/{token}" in body
+        # Substring triggers (/stack, /blueprint): an escape-resolved token
+        # must not reach the substring matchers at all — REMOVE the token
+        # (a '' prefix still contains the substring) when the source used
+        # the escaped spelling.
+        for cmd_word in _COMMAND_WORDS:
+            bare = cmd_word.lstrip("/")
+            if re.search(rf"(?<![\w`/]){cmd_word}\b", line) and (
+                f"\\{cmd_word}" in body or f"\\/{bare}" in body
             ):
-                result = result.replace(line, line.replace(word, f"\\{word}"), 1)
+                result = result.replace(line, re.sub(rf"(?<![\w`/]){cmd_word}\b", "", line), 1)
     return result
 
 
