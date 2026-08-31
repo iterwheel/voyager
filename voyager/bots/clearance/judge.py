@@ -86,6 +86,14 @@ def codex_followup_reaction(followup_body: str | None) -> str | None:
             "still open",
             "regressed",
             "regression remains",
+            "partially addressed",
+            "partially resolved",
+            "partially fixed",
+            "only partially",
+            "not fully",
+            "partially fixed",
+            "incomplete",
+            "partially",
             "👎",
         ]
     ):

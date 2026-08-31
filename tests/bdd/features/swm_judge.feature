@@ -212,6 +212,16 @@ Feature: SWM judge — verdict assignment per SWM-1101 decision tree
     When codex_followup_reaction is called
     Then the followup reaction is "positive"
 
+  Scenario: Partial-resolution qualifiers are negative (Codex round 9)
+    Given a Codex follow-up body "The concern is only partially addressed by this patch"
+    When codex_followup_reaction is called
+    Then the followup reaction is "negative"
+
+  Scenario: Partially-resolved phrasing is negative (Codex round 9)
+    Given a Codex follow-up body "Partially resolved: the leak is gone but the race remains"
+    When codex_followup_reaction is called
+    Then the followup reaction is "negative"
+
   Scenario: Empty Codex follow-up returns None
     Given a None Codex follow-up body
     When codex_followup_reaction is called
