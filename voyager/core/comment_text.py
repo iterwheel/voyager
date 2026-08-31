@@ -186,9 +186,12 @@ def visible_comment_text(body: str | None) -> str:
         if token.type == "html_block":
             # Raw-HTML CONTAINER tags hide the Markdown blocks they enclose.
             # A single html_block may contain BOTH the opening and closing
-            # tags ('<table>...</table>' on one token) — process EVERY tag
-            # occurrence and apply the net balance (P2 round 11).
-            _apply_container_tags(token.content or "", html_containers)
+            # tags — process EVERY tag occurrence (round 11). HTML inside
+            # OTHER markdown containers (a quoted '<details>' example)
+            # cannot enclose top-level content — its state is not applied
+            # (round 20).
+            if depth == 0:
+                _apply_container_tags(token.content or "", html_containers)
             continue
         if token.type == "heading_open":
             in_heading = True
@@ -246,28 +249,45 @@ def visible_comment_text(body: str | None) -> str:
                 parts.append("".join(visible_spans))
         # fences, code blocks, html blocks emit no inline tokens — dropped
     result = "\n".join(parts)
-    # P2 round 16/17: the parser resolves source escapes ('\\/assembly' and
-    # escaped flag dashes). A reconstructed line-start COMMAND LINE only
-    # counts as live when the SOURCE really contains that same line content
-    # unescaped — verified per full line, case-insensitively.
-    for line in result.splitlines():
-        stripped = line.lstrip()
-        if stripped.startswith(("/",)):
-            command = stripped.split()[0].lower()
-            if command in _COMMAND_WORDS and not _source_has_live_line(body, stripped):
-                result = result.replace(line, f"\\{line}", 1)
+    # Escape/entity sanitation (rounds 16-21): the parser resolves source
+    # escapes ('\\/stack') and HTML entities ('&sol;stack'). A reconstructed
+    # token is live when ITS OWN source line carries it live (unescaped,
+    # non-entity); when the producing line cannot be identified (structural
+    # lines were removed), fall back to a global live-occurrence budget
+    # consumed in document order.
+    source_lines = body.splitlines()
+    live_budget = sum(
+        len(re.findall(rf"(?<![\\\w`/&;]){re.escape(word)}\b", body, re.I))
+        for word in _COMMAND_WORDS
+    )
+    sanitized = []
+    for i, line in enumerate(result.splitlines()):
+        src = source_lines[i] if i < len(source_lines) else ""
+        for match in re.finditer(r"/(?:assembly|implement|stack|blueprint)\b", line, re.I):
+            cmd = str(match.group(0))
+            if _line_has_live_token(src, cmd):
+                continue  # live on its own source line
+            if re.search(rf"\\?{re.escape(cmd)}", src, re.I) or "&" in src:
+                # escaped ('\\/stack') or entity ('&sol;stack') on its own
+                # source line: not live — remove.
+                line = re.sub(rf"(?<![\w`/]){re.escape(cmd)}\b", "", line)
                 continue
-        # Substring triggers (/stack, /blueprint): an escape-resolved token
-        # must not reach the substring matchers at all — REMOVE the token
-        # (a '' prefix still contains the substring) when the source used
-        # the escaped spelling.
-        for cmd_word in _COMMAND_WORDS:
-            bare = cmd_word.lstrip("/")
-            if re.search(rf"(?<![\w`/]){cmd_word}\b", line) and (
-                f"\\{cmd_word}" in body or f"\\/{bare}" in body
-            ):
-                result = result.replace(line, re.sub(rf"(?<![\w`/]){cmd_word}\b", "", line), 1)
-    return result
+            # producing line unknown: consume the global live budget
+            if live_budget > 0:
+                live_budget -= 1
+                continue
+            line = re.sub(rf"(?<![\w`/]){re.escape(token)}\b", "", line)
+        sanitized.append(line)
+    return "\n".join(sanitized)
+
+
+_COMMAND_WORDS = ("/assembly", "/implement", "/stack", "/blueprint")
+
+
+def _line_has_live_token(source_line: str, token: str) -> bool:
+    """True when this raw source line carries the token live (unescaped,
+    not entity-encoded)."""
+    return bool(re.search(rf"(?<![\\\w`/&;]){re.escape(token)}\b", source_line, re.I))
 
 
 _COMMAND_WORDS = ("/assembly", "/implement", "/stack", "/blueprint")
