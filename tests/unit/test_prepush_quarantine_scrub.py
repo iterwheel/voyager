@@ -129,9 +129,24 @@ def test_git_spawning_suite_passes_with_quarantine_parent_env():
 
 
 def _tmp_git_repo(tmp: Path) -> Path:
-    """A real throwaway git repo for intentional-pointer scenarios."""
-    subprocess.run(["git", "init", "--quiet", str(tmp)], check=True, timeout=60)
-    return tmp / ".git"
+    """A real throwaway git repo for intentional-pointer scenarios.
+
+    Codex P2 round 6: under a pointer-only checkout the session KEEPS the
+    pointers, so a bare `git init` would honor the inherited GIT_DIR and
+    reinitialize the outer checkout — initialize isolated and verify the
+    resulting git dir is under tmp.
+    """
+    from conftest import isolated_git_env
+
+    subprocess.run(
+        ["git", "init", "--quiet", str(tmp)],
+        env=isolated_git_env(),
+        check=True,
+        timeout=60,
+    )
+    git_dir = tmp / ".git"
+    assert git_dir.exists(), "isolated git init must create tmp/.git, not reuse GIT_DIR"
+    return git_dir
 
 
 def test_intentional_external_repo_pointers_survive(tmp_path):
