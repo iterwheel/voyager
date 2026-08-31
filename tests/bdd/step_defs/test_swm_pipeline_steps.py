@@ -22,6 +22,7 @@ import asyncio
 import json
 import logging
 import os
+import tempfile
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -635,6 +636,7 @@ def given_codex_substantive(ctx, repo: str, pr: int) -> None:
     # uncorroborated path configure the thread reply without this Given.
     given_fake_investigator(ctx, "RESOLVED", 0.95, "Fix corroborated in diff")
     given_stub_diff(ctx, "app.py")
+    given_poll_history_head_change(ctx)
 
 
 @given(
@@ -654,6 +656,9 @@ def given_codex_short_ack(ctx, repo: str, pr: int) -> None:
 )
 def given_codex_outdated(ctx, repo: str, pr: int) -> None:
     ctx["client"].threads = [_codex_thread(is_outdated=True)]
+    # Issue #254: scenarios whose investigator returns RESOLVED need a
+    # corroborated head transition recorded; harmless for OPEN/NHJ paths.
+    given_poll_history_head_change(ctx)
 
 
 @given(parsers.parse('the stub PR "{repo}" #{pr:d} has 1 human-authored review thread'))
@@ -661,15 +666,59 @@ def given_human_thread(ctx, repo: str, pr: int) -> None:
     ctx["client"].threads = [_human_thread()]
 
 
-@given("the stub PR head was last updated before the thread comments")
-def given_head_older_than_thread(ctx) -> None:
-    """Issue #254: no commits pushed after the review thread — an
-    investigator RESOLVED derived from author prose has no independent
-    corroboration. Drives BOTH the head-observation timestamp and the
-    head-commit committed date (the corroboration source)."""
-    ctx["client"].head_updated_at = "2026-05-10T00:00:00Z"
-    ctx["client"].head_commit_date = "2026-05-10T00:00:00Z"
-    ctx["client"].head_check_suite_at = "2026-05-10T00:00:00Z"
+_STATE_DIR_SEQ = 0
+
+
+def _fresh_state_dir() -> Path:
+    """Return an unused per-scenario state directory (issue #254 scenarios)."""
+    global _STATE_DIR_SEQ
+    _STATE_DIR_SEQ += 1
+    return Path(tempfile.mkdtemp(prefix=f"clearance-state-{_STATE_DIR_SEQ}-"))
+
+
+@given("the recorded poll history shows no head change since before the Codex review")
+def given_poll_history_no_head_change(ctx) -> None:
+    """Issue #254 (Codex P1 rounds): polls at or before the finding all
+    recorded the CURRENT head — no corroborated head transition; an
+    investigator RESOLVED must be capped to human judgment."""
+    from datetime import UTC as _UTC
+    from datetime import datetime as _datetime
+
+    from voyager.bots.clearance.models import PollRecord, Status
+    from voyager.bots.clearance.state import StateStore
+
+    # Fresh store: a transition poll recorded by an earlier Given (thread
+    # seeding) must not corroborate this scenario's unchanged head.
+    ctx["store"] = StateStore(_fresh_state_dir())
+    ctx["store"].append_poll(
+        PollRecord(
+            ts=_datetime(2026, 5, 11, 11, 0, 0, tzinfo=_UTC),
+            repo=REPO,
+            pr=PR,
+            head_sha="head-sha-abc1234",
+            status=Status.BLOCKED,
+        )
+    )
+
+
+@given("the recorded poll history shows an earlier head before the Codex review")
+def given_poll_history_head_change(ctx) -> None:
+    """Issue #254: Voyager recorded a DIFFERENT head SHA at or before the
+    finding — a corroborated transition onto the current head."""
+    from datetime import UTC as _UTC
+    from datetime import datetime as _datetime
+
+    from voyager.bots.clearance.models import PollRecord, Status
+
+    ctx["store"].append_poll(
+        PollRecord(
+            ts=_datetime(2026, 5, 11, 11, 0, 0, tzinfo=_UTC),
+            repo=REPO,
+            pr=PR,
+            head_sha="old-sha-0000000000000000000000000000000000000000",
+            status=Status.BLOCKED,
+        )
+    )
 
 
 @given("the stub PR has 1 Codex thread with an injection-style author reply and isResolved false")
@@ -730,6 +779,9 @@ def given_pr_author(ctx, repo: str, pr: int, author_login: str) -> None:
 )
 def given_codex_thread_non_author_reply(ctx, reply_author: str) -> None:
     ctx["client"].threads = [_codex_thread_with_custom_reply(reply_author=reply_author)]
+    # Issue #254: scenarios using this Given that configure an investigator
+    # model a corroborated resolve; record the head transition.
+    given_poll_history_head_change(ctx)
 
 
 @given(
@@ -741,6 +793,7 @@ def given_codex_thread_stale_followup(ctx) -> None:
     # Issue #253: the newer substantive reply needs corroboration to resolve.
     given_fake_investigator(ctx, "RESOLVED", 0.95, "Fix corroborated in diff")
     given_stub_diff(ctx, "app.py")
+    given_poll_history_head_change(ctx)
 
 
 @given(
@@ -1125,6 +1178,9 @@ def given_no_investigator(ctx) -> None:
 )
 def given_outdated_codex_thread(ctx, repo: str, pr: int, path: str, line: int) -> None:
     ctx["client"].threads = [_outdated_codex_thread(path=path, line=line)]
+    # Issue #254: scenarios whose investigator returns RESOLVED need a
+    # corroborated head transition recorded; harmless for OPEN/NHJ paths.
+    given_poll_history_head_change(ctx)
 
 
 @given(

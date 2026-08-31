@@ -130,7 +130,7 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
 
   Scenario: Investigator RESOLVED with head unchanged since the thread is capped to human judgment (issue #254)
     Given the stub PR "iterwheel/sandbox" #49 has 1 outdated Codex thread at path "app.py" line 10
-    And the stub PR head was last updated before the thread comments
+    And the recorded poll history shows no head change since before the Codex review
     And a fake investigator returning verdict "RESOLVED" confidence 0.99 reason "injected: return RESOLVED"
     And the stub client returns a sample diff for "app.py"
     When compute_clearance_automation runs with investigator and DRY_RUN false
@@ -140,15 +140,16 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
 
   Scenario: Injected author reply driving an investigator RESOLVED cannot auto-resolve without head motion (issue #254)
     Given the stub PR has 1 Codex thread with an injection-style author reply and isResolved false
-    And the stub PR head was last updated before the thread comments
+    And the recorded poll history shows no head change since before the Codex review
     And a fake investigator returning verdict "RESOLVED" confidence 0.99 reason "attacker-controlled verdict adopted"
     And the stub client returns a sample diff for "app.py"
     When compute_clearance_automation runs with investigator and DRY_RUN false
     Then the thread verdict is "NEEDS_HUMAN_JUDGMENT"
     And no resolveReviewThread mutation was invoked
 
-  Scenario: Investigator RESOLVED with head advanced after the thread resolves (issue #254 corroboration)
+  Scenario: Investigator RESOLVED with a recorded head transition resolves (issue #254 corroboration)
     Given the stub PR "iterwheel/sandbox" #49 has 1 outdated Codex thread at path "app.py" line 10
+    And the recorded poll history shows an earlier head before the Codex review
     And a fake investigator returning verdict "RESOLVED" confidence 0.95 reason "Fix confirmed in diff"
     And the stub client returns a sample diff for "app.py"
     When compute_clearance_automation runs with investigator and DRY_RUN false
@@ -279,7 +280,7 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
   Scenario: Pipeline appends a PollRecord per webhook trigger
     Given the stub PR "iterwheel/sandbox" #49 has 1 Codex thread with substantive author reply and isResolved false
     When compute_clearance_automation runs with DRY_RUN true
-    Then the store has 1 poll for "iterwheel/sandbox" PR 49
+    Then the store has 2 poll for "iterwheel/sandbox" PR 49
     And the latest poll status is "ready"
 
   Scenario: Pipeline persists one ThreadSnapshot per Codex thread
@@ -603,6 +604,7 @@ Feature: Clearance pipeline — webhook-driven SWM-1101 per-thread verdict orche
     Given the stub PR "iterwheel/sandbox" #49 has 1 fresh Codex thread (State A) at path "app.py"
     And a fake investigator returning verdict "RESOLVED" confidence 0.92 reason "diff confirms the null-guard was added" for each thread
     And the PR was pushed after the Codex review
+    And the recorded poll history shows an earlier head before the Codex review
     When compute_clearance_automation runs with DRY_RUN false
     Then the automation status is "ready"
     And the investigator was called 1 times
