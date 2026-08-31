@@ -19,11 +19,9 @@ from markdown_it import MarkdownIt
 
 _md = MarkdownIt("commonmark")
 
-_CONTAINER_OPEN = frozenset(
-    {"blockquote_open", "list_open", "list_item_open", "paragraph_open", "heading_open"}
-)
+_CONTAINER_OPEN = frozenset({"blockquote_open", "list_open", "list_item_open", "paragraph_open"})
 _CONTAINER_CLOSE = frozenset(
-    {"blockquote_close", "list_close", "list_item_close", "paragraph_close", "heading_close"}
+    {"blockquote_close", "list_close", "list_item_close", "paragraph_close"}
 )
 
 
@@ -40,15 +38,24 @@ def visible_comment_text(body: str | None) -> str:
     parts: list[str] = []
     paragraph: list[str] = []
     depth = 0
+    in_heading = False
     for token in _md.parse(body):
-        if token.type in _CONTAINER_OPEN:
+        if token.type == "heading_open":
+            in_heading = True
+            depth += 1
+        elif token.type == "heading_close":
+            in_heading = False
+            depth -= 1
+        elif token.type in _CONTAINER_OPEN:
             depth += 1
         elif token.type in _CONTAINER_CLOSE:
             depth -= 1
-        elif token.type == "inline" and depth == 1 and token.children:
+        elif token.type == "inline" and depth == 1 and token.children and not in_heading:
             # An inline token follows its paragraph_open/heading_open; it is
             # top-level prose only when the enclosing depth is exactly the
-            # block's own level (1: the paragraph itself).
+            # block's own level (1). Heading content is NOT a command surface
+            # (P1 round 9: '# /assembly' is a documentation heading, never a
+            # command — the '#' prefix must not vanish).
             paragraph = []
             for child in token.children:
                 if child.type in ("softbreak", "hardbreak"):
