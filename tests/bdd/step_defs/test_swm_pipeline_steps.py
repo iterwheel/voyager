@@ -92,8 +92,11 @@ class _StubGitHubAppClient:
         }
         self.pr_payload_second_fetch: dict[str, Any] | None = None  # R5-P2: second-call head SHA
         self.head_updated_at: str | None = "2026-05-11T12:45:00Z"
-        # Issue #254 Codex P1: per-head-commit date for investigator corroboration.
+        # Issue #254 Codex P1: per-head-commit date for stale-thread detection.
         self.head_commit_date: str | None = "2026-05-11T12:45:00Z"
+        # Codex P1 (forged dates): server-observed check-suite timestamp for
+        # the head commit — the investigator corroboration source.
+        self.head_check_suite_at: str | None = "2026-05-11T12:45:00Z"
         self.fail_pull_request: bool = False
         self.fail_pull_request_httpx: bool = False  # Wave 7C-6: raises httpx.HTTPError
         self.pull_request_call_count: int = 0  # Wave 7C-6: tracks guard fetch calls
@@ -195,6 +198,11 @@ class _StubGitHubAppClient:
 
     async def commit_committed_date(self, app_slug: str, repo: str, sha: str) -> str | None:
         return self.head_commit_date
+
+    async def commit_check_suite_observed_at(
+        self, app_slug: str, repo: str, sha: str
+    ) -> str | None:
+        return self.head_check_suite_at
 
     async def issue_comments(
         self, app_slug: str, repo: str, issue_number: int
@@ -661,6 +669,7 @@ def given_head_older_than_thread(ctx) -> None:
     head-commit committed date (the corroboration source)."""
     ctx["client"].head_updated_at = "2026-05-10T00:00:00Z"
     ctx["client"].head_commit_date = "2026-05-10T00:00:00Z"
+    ctx["client"].head_check_suite_at = "2026-05-10T00:00:00Z"
 
 
 @given("the stub PR has 1 Codex thread with an injection-style author reply and isResolved false")
@@ -2086,16 +2095,21 @@ def then_pipeline_stale_verdict_skip_log(ctx, expected_sha: str, actual_sha: str
 def given_pr_pushed_after_codex(ctx) -> None:
     """Head-observation timestamp newer than _fresh_codex_thread's createdAt.
 
-    Issue #250: staleness now sources from pull_request_head_updated_at (the
-    REST PR object has no top-level pushed_at), so the stub drives that.
+    Issue #250: staleness sources from the PR head commit's committed date
+    (bound to the reviewed head), so the stub drives that — plus the other
+    head timestamps for consistency.
     """
     ctx["client"].head_updated_at = "2026-05-12T00:00:00Z"
+    ctx["client"].head_commit_date = "2026-05-12T00:00:00Z"
+    ctx["client"].head_check_suite_at = "2026-05-12T00:00:00Z"
 
 
 @given("the PR was not pushed after the Codex review")
 def given_pr_not_pushed_after_codex(ctx) -> None:
-    """Head-observation timestamp older than _fresh_codex_thread's createdAt."""
+    """Head timestamps older than _fresh_codex_thread's createdAt."""
     ctx["client"].head_updated_at = "2026-05-10T00:00:00Z"
+    ctx["client"].head_commit_date = "2026-05-10T00:00:00Z"
+    ctx["client"].head_check_suite_at = "2026-05-10T00:00:00Z"
 
 
 # Issue #62: fork PR head-repo accessibility (UnsupportedContext)

@@ -731,6 +731,30 @@ class GitHubAppClient:
             or None
         )
 
+    async def commit_check_suite_observed_at(
+        self, app_slug: str, repo: str, sha: str
+    ) -> str | None:
+        """Return the newest server-side check-suite timestamp for a commit.
+
+        Issue #254 Codex P1: git committer/author dates are client-controlled
+        (a pusher can forge GIT_COMMITTER_DATE), so they cannot back a
+        privileged corroboration decision. Check suites are created by GitHub
+        when CI actually runs on the commit — a server-observed proof that the
+        head commit existed by that time. Returns None when the commit has no
+        check suites (caller fails closed).
+        """
+        owner, name = repo.split("/", 1)
+        payload = await self.request(
+            app_slug, "GET", f"/repos/{owner}/{name}/commits/{sha}/check-suites", repository=repo
+        )
+        suites = payload.get("check_suites") if isinstance(payload, dict) else None
+        timestamps = [
+            str(suite.get("created_at") or "")
+            for suite in suites or []
+            if isinstance(suite, dict) and suite.get("created_at")
+        ]
+        return max(timestamps) if timestamps else None
+
     async def issue_reactions(
         self,
         app_slug: str,

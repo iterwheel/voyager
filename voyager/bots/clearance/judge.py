@@ -92,16 +92,19 @@ def codex_followup_reaction(followup_body: str | None) -> str | None:
             else:
                 any_positive = True
             start = pos + len(token)
-    if any_positive:
-        return "positive"
+    # Codex P1 on #254/#334: an explicit negation anywhere in the follow-up is
+    # stronger evidence than an unnegated positive — "the leak is fixed but
+    # the race is not addressed" rejects the fix. Negative wins.
     if any_negated_positive:
         return "negative"
+    if any_positive:
+        return "positive"
     return None
 
 
 _NEGATOR_RE = re.compile(
     r"\b(?:"
-    r"not|never|"
+    r"not|never|no|"
     r"isn'?t|aren'?t|wasn'?t|weren'?t|won'?t|don'?t|doesn'?t|didn'?t|"
     r"hasn'?t|haven'?t|can'?t|cannot|cant|dont|doesnt|didnt|hasnt|havent|"
     r"remains?|still|yet|without|lack(?:s|ing|ed)?|missing"

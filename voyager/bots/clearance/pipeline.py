@@ -698,15 +698,17 @@ def _head_advanced_after_thread(
 ) -> bool:
     """Issue #254: independent corroboration that the reviewed head moved.
 
-    True only when the PR head commit's own committed date is known AND is
-    strictly newer than the thread's first comment — the Codex finding. The
-    signal is bound to the exact head commit (REST /commits/{sha}), so a push
-    to any OTHER branch cannot masquerade as motion on the reviewed head
-    (Codex P1 on #254). A head that predates the finding means no commits
-    landed on this branch after the review, so an investigator RESOLVED
-    derived from author prose is prose-only and must not mutate thread state
-    (legit flow — push the fix, then reply — has the head after the finding
-    and stays corroborated). Unknown commit date (None) fails closed.
+    True only when a SERVER-OBSERVED timestamp for the reviewed head commit
+    (newest check-suite created_at via REST /commits/{sha}/check-suites) is
+    known AND is strictly newer than the thread's first comment — the Codex
+    finding. Server observation matters twice over: repository-level push
+    timestamps advance on pushes to any OTHER branch, and git committer dates
+    are client-controlled (forgeable GIT_COMMITTER_DATE) — both were Codex P1s
+    on this corroboration path. A head not observed after the finding means no
+    corroborated motion on this branch, so an investigator RESOLVED derived
+    from author prose is prose-only and must not mutate thread state (legit
+    flow — push the fix, CI runs — is observed after the finding and stays
+    corroborated). No check suites (or fetch failure) fails closed.
     ISO-8601 timestamps compare lexicographically (GitHub emits UTC 'Z').
     """
     if not current_head_updated_at:
@@ -947,7 +949,7 @@ async def _process_thread(
     profile_name: str | None = None,
     pr_pushed_at: str | None = None,
     current_head_updated_at: str | None = None,
-    head_commit_committed_at: str | None = None,
+    head_server_observed_at: str | None = None,
     known_limitation_store: KnownLimitationStore | None = None,
 ) -> tuple[Thread, ThreadSnapshot] | None:
     """Classify, judge, and build Thread + ThreadSnapshot for one Codex thread.
@@ -1244,7 +1246,7 @@ async def _process_thread(
             adopted_verdict = coerced
             adopted_reason = llm_decision.reason
             if coerced == Verdict.RESOLVED and not _head_advanced_after_thread(
-                thread_dict, head_commit_committed_at
+                thread_dict, head_server_observed_at
             ):
                 # Issue #254: the investigator's inputs are untrusted (author
                 # reply, attacker-quotable Codex comments, diff text). A RESOLVED
@@ -2296,19 +2298,11 @@ async def _compute_clearance_automation_unlocked(
             safe["status"],
         )
         current_head_updated_at = None
-    # Issue #63: staleness timestamp for stale-thread detection. A Codex
-    # thread whose first comment predates the most recent push may have been
-    # addressed in a newer commit even though GitHub didn't mark it outdated.
-    # Issue #250: the REST "Get a pull request" object has NO top-level
-    # pushed_at field — reading pr_data["pushed_at"] always yielded None and
-    # the stale-thread routing was dead in production. Source it from the
-    # GraphQL head-observation timestamp instead (same "when was the current
-    # head pushed" semantics, and it is a field that actually exists).
-    pr_pushed_at: str | None = current_head_updated_at
-    # Issue #254 (Codex P1): corroboration must be bound to the reviewed PR's
-    # head commit — repository-level push timestamps advance on pushes to ANY
-    # branch, which a fork author could use to fake code motion. Fetch the
-    # head commit's own committed date; None (fetch failure) fails closed.
+    # Issue #254 (Codex P1): head-motion signals must be bound to the reviewed
+    # PR's head — repository-level push timestamps (the head-observation
+    # fallback above) advance on pushes to ANY branch, which a fork author
+    # could use to fake code motion. Fetch the head commit's own committed
+    # date; None (fetch failure) fails closed.
     head_commit_committed_at: str | None = None
     if head_sha:
         try:
@@ -2319,7 +2313,7 @@ async def _compute_clearance_automation_unlocked(
             safe = _safe_exception_fields(exc)
             _log.warning(
                 "head commit date fetch failed for %s#%s head=%s "
-                "(investigator corroboration will fail closed): class=%s status=%s",
+                "(stale-thread routing + corroboration will fail closed): class=%s status=%s",
                 repository,
                 pr_number,
                 head_sha,
@@ -2327,6 +2321,38 @@ async def _compute_clearance_automation_unlocked(
                 safe["status"],
             )
             head_commit_committed_at = None
+    # Codex P1 (forged dates): git committer dates are client-controlled, so
+    # the corroboration signal uses the newest server-side check-suite
+    # timestamp for the head commit instead — proof GitHub observed the head
+    # after the finding. No check suites (or fetch failure) fails closed.
+    head_server_observed_at: str | None = None
+    if head_sha:
+        try:
+            head_server_observed_at = await client.commit_check_suite_observed_at(
+                CLEARANCE_AGENT_SLUG, repository, head_sha
+            )
+        except Exception as exc:
+            safe = _safe_exception_fields(exc)
+            _log.warning(
+                "head check-suite timestamp fetch failed for %s#%s head=%s "
+                "(investigator corroboration will fail closed): class=%s status=%s",
+                repository,
+                pr_number,
+                head_sha,
+                safe["error_class"],
+                safe["status"],
+            )
+            head_server_observed_at = None
+    # Issue #63: staleness timestamp for stale-thread detection. A Codex
+    # thread whose first comment predates the most recent push may have been
+    # addressed in a newer commit even though GitHub didn't mark it outdated.
+    # Issue #250: the REST "Get a pull request" object has NO top-level
+    # pushed_at field — reading pr_data["pushed_at"] always yielded None and
+    # the stale-thread routing was dead in production. Codex P1 on #334:
+    # source it from the PR head commit's committed date (bound to the
+    # reviewed head, not the repository-wide push fallback); None fails safe
+    # (stale routing simply does not fire — pre-#250 production behavior).
+    pr_pushed_at: str | None = head_commit_committed_at
     # Issue #62: detect fork PRs. The REST API always includes head.repo.full_name
     # and base.repo.full_name; when they differ the PR is from a fork.
     head_repo: str | None = (pr_data.get("head") or {}).get("repo", {}).get("full_name") or None
@@ -2390,7 +2416,7 @@ async def _compute_clearance_automation_unlocked(
             profile_name=default_profile_name,
             pr_pushed_at=pr_pushed_at,
             current_head_updated_at=current_head_updated_at,
-            head_commit_committed_at=head_commit_committed_at,
+            head_server_observed_at=head_server_observed_at,
             known_limitation_store=known_limitation_store,
         )
         if result is None:
