@@ -9,6 +9,8 @@ release note for the explicit migration path.
 ## [Unreleased]
 - fix(bots): fence-aware command triggers (#256) ([#343](https://github.com/iterwheel/voyager/pull/343)).
 
+- fix(assembly): idempotency key derives from the issue number, not the title (#257) ([#345](https://github.com/iterwheel/voyager/pull/345)).
+
 ### Added
 
 - Merge loop writes a SECOND, local-only, full-fidelity audit file
