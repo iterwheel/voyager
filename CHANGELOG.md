@@ -13,6 +13,8 @@ release note for the explicit migration path.
 
 - fix(tests): scrub checkout pointers only when they target this checkout (#330 follow-up) ([#346](https://github.com/iterwheel/voyager/pull/346)).
 
+- fix(clearance): refresh readiness on manual thread resolve/unresolve (#339) ([#347](https://github.com/iterwheel/voyager/pull/347)).
+
 ### Added
 
 - Merge loop writes a SECOND, local-only, full-fidelity audit file
