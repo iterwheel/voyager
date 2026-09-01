@@ -54,13 +54,16 @@ _REPO_ROOT = Path(__file__).resolve().parent
 def _outer_repo_git_dir() -> Path | None:
     """Absolute git dir of THIS checkout, discovered WITHOUT the pointer env.
 
-    Returns None when git is unavailable or this checkout has no discoverable
-    git dir (callers then fail toward the previous unconditional scrub).
+    Returns None when git is unavailable, discovery fails, or the discovered
+    repository belongs to an ANCESTOR of ``_REPO_ROOT`` (a nested pointer-only
+    checkout would otherwise inherit the ancestor's git dir and lose its
+    pointer-only status — Codex P2 on #346). Callers then fail toward the
+    pointer-only branch or the previous unconditional scrub.
     """
     env = {k: v for k, v in os.environ.items() if k not in _REPO_POINTER_VARS}
     try:
         out = subprocess.run(
-            ["git", "rev-parse", "--absolute-git-dir"],
+            ["git", "rev-parse", "--absolute-git-dir", "--show-toplevel"],
             cwd=str(_REPO_ROOT),
             env=env,
             capture_output=True,
@@ -72,7 +75,18 @@ def _outer_repo_git_dir() -> Path | None:
         return None
     if out.returncode != 0:
         return None
-    resolved = Path(out.stdout.strip())
+    lines = out.stdout.splitlines()
+    if len(lines) < 2:
+        return None
+    resolved = Path(lines[0].strip())
+    try:
+        toplevel = Path(lines[1].strip()).resolve()
+    except OSError:
+        return None
+    if toplevel != _REPO_ROOT:
+        # Discovery walked up to an ancestor repository; that git dir does
+        # not describe THIS checkout and must not drive the scrub decision.
+        return None
     return resolved if str(resolved) else None
 
 

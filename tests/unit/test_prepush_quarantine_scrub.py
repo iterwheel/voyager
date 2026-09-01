@@ -241,3 +241,29 @@ def test_normal_checkout_scrubs_only_this_repos_pointers(monkeypatch):
     scrub = _decide_pointer_scrub(own, True)
     assert "GIT_WORK_TREE" in scrub
     assert "GIT_DIR" not in scrub
+
+
+def test_ancestor_git_dir_discovery_is_rejected(tmp_path, monkeypatch):
+    """Codex P2 on #346: a pointer-only checkout nested INSIDE another git
+    repository must not inherit the ancestor's git dir from discovery —
+    that would drop its pointer-only status and scrub the intentional
+    GIT_DIR/GIT_WORK_TREE pair that describes the checkout."""
+    import conftest
+    from conftest import _decide_pointer_scrub, _outer_repo_git_dir
+
+    ancestor = tmp_path / "ancestor"
+    ancestor.mkdir()
+    _tmp_git_repo(ancestor)
+    nested = ancestor / "nested"
+    nested.mkdir()
+
+    monkeypatch.setattr(conftest, "_REPO_ROOT", nested.resolve())
+    # Discovery without pointers walks UP to the ancestor — must be rejected
+    # because the ancestor's top level is not the checkout root.
+    assert _outer_repo_git_dir() is None
+    # Pointer-only branch therefore keeps every pointer.
+    assert _decide_pointer_scrub(None, has_local_git_entry=False) == []
+
+    # Control: a real checkout of the ancestor discovers its own git dir.
+    monkeypatch.setattr(conftest, "_REPO_ROOT", ancestor.resolve())
+    assert _outer_repo_git_dir() == (ancestor / ".git").resolve()
