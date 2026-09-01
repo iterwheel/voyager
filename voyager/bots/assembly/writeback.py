@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import re
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -73,19 +74,22 @@ if TYPE_CHECKING:
 _assembly_writeback_locks: dict[tuple[str, str], asyncio.Lock] = {}
 
 
-def _get_lock(repository: str, branch_name: str) -> asyncio.Lock:
-    """Return (creating if needed) the per-(repo, branch) writeback lock.
+def _get_lock(repository: str, key: str) -> asyncio.Lock:
+    """Return (creating if needed) the per-(repo, key) writeback lock.
 
-    Lock dict grows monotonically (no TTL). At Voyager's ~50 issues/year
+    Issue #257: callers key on the ISSUE NUMBER (``f"issue-{n}"``), not the
+    branch name — the branch name derives from the mutable issue title, so a
+    title edit between runs would mint a second lock and let two deliveries
+    race. Lock dict grows monotonically (no TTL). At Voyager's ~50 issues/year
     cadence x 64 bytes/lock the worst-case footprint is ~3 KB until bridge
     restart, which is well within acceptable. WeakValueDictionary migration
     trigger is documented in CHG-1819 D6 / Out of Scope.
     """
-    key = (repository, branch_name)
-    lock = _assembly_writeback_locks.get(key)
+    lock_key = (repository, key)
+    lock = _assembly_writeback_locks.get(lock_key)
     if lock is None:
         lock = asyncio.Lock()
-        _assembly_writeback_locks[key] = lock
+        _assembly_writeback_locks[lock_key] = lock
     return lock
 
 
@@ -839,6 +843,40 @@ async def dispatch_assembly_writeback(
         ),
         delivery_id=delivery_id,
     )
+
+    # Issue #257: the branch name derives from the mutable issue title. If the
+    # title was edited since the first run, the freshly computed name points at
+    # a branch that does not exist and the run would push a duplicate branch
+    # plus a duplicate PR for the same issue. Resolve the issue's existing
+    # open Assembly PR (head branch "<number>-…") and reuse its branch.
+    async def _apply_stable_issue_branch(contract: AssemblyJobContract) -> AssemblyJobContract:
+        """Resolve the issue's existing Assembly branch (issue #257).
+
+        Runs BEFORE the lock (fast path) and AGAIN inside it (Codex P1 on
+        #337): two concurrent deliveries with different title-derived names
+        can both miss pre-lock; the second must observe the first delivery's
+        PR once it holds the lock.
+        """
+        stable_branch = await _existing_branch_for_issue(
+            client, repository, contract.issue_number, contract.branch_name
+        )
+        if stable_branch and stable_branch != contract.branch_name:
+            _log.info(
+                "assembly_issue_branch_reuse: %s",
+                json.dumps(
+                    {
+                        "event": "assembly_issue_branch_reuse",
+                        "repository": repository,
+                        "issue": contract.issue_number,
+                        "reused_branch": stable_branch,
+                        "computed_branch": contract.branch_name,
+                    }
+                ),
+            )
+            return replace(contract, branch_name=stable_branch)
+        return contract
+
+    contract = await _apply_stable_issue_branch(contract)
     contract_dict = contract.to_dict()
     base_result["contract"] = contract_dict
     base_result["audit_id"] = generate_audit_id(
@@ -848,16 +886,21 @@ async def dispatch_assembly_writeback(
     )
 
     # ------------------------------------------------------------------
-    # CHG-1819 F3 — per-(repository, branch_name) asyncio lock.
+    # CHG-1819 F3 — per-(repository, issue) asyncio lock.
     #
     # Serialises concurrent `/assembly` deliveries that target the same
-    # branch so two background tasks cannot both compute the same commits
+    # issue so two background tasks cannot both compute the same commits
     # and race on `create_branch_ref` (which would 422 the second caller).
-    # Scope per CHG-1819 D5: branch is the shared GitHub resource; the
-    # delivery_id is unique per webhook and would never block. Lock dict
-    # growth is documented on `_get_lock`.
+    # Issue #257: keyed on the issue number, never the branch name — the
+    # branch name derives from the mutable issue title, and a title edit
+    # between runs must not mint a fresh lock (or a second, duplicate loop).
+    # Lock dict growth is documented on `_get_lock`.
     # ------------------------------------------------------------------
-    async with _get_lock(repository, contract.branch_name):
+    async with _get_lock(repository, f"issue-{contract.issue_number}"):
+        # Codex P1 on #337: re-resolve under the lock so a concurrent delivery
+        # that opened its PR while we waited observes it and reuses its branch.
+        contract = await _apply_stable_issue_branch(contract)
+        base_result["contract"] = contract.to_dict()
         # Resolve session metadata inside the same per-branch lock that
         # protects adapter execution. This keeps the PR head-SHA compatibility
         # check adjacent to the run that consumes the session and avoids a
@@ -1667,6 +1710,102 @@ async def _ensure_branch(
             )
         )
         return False
+
+
+async def _existing_branch_for_issue(
+    client: GitHubAppClient,
+    repository: str,
+    issue_number: int,
+    computed_branch: str,
+) -> str | None:
+    """Issue #257: return the branch of the issue's existing open Assembly PR.
+
+    Fast path: an open PR already exists for the freshly computed branch name
+    (title unchanged) — return it unchanged. Otherwise search the repo's open
+    PRs whose head branch starts with ``<issue_number>-`` (Assembly naming) and
+    whose body references the issue; reuse that branch so a title edit cannot
+    fork the idempotency key into duplicate branches/PRs. Any lookup failure
+    returns None (caller keeps the computed name — today's behavior).
+    """
+    try:
+        direct = await client.find_pull_request_by_head(
+            ASSEMBLY_AGENT_SLUG, repository, computed_branch
+        )
+        if direct is not None:
+            return computed_branch
+        candidates = await client.find_open_prs_referencing_issue(
+            ASSEMBLY_AGENT_SLUG, repository, issue_number
+        )
+    except Exception:
+        # Resolution is best-effort idempotency hardening (#257): any failure
+        # falls back to the computed branch (pre-existing behavior), logged.
+        _log.warning(
+            "Assembly issue-branch resolution lookup failed",
+            extra={"repository": repository, "issue": issue_number},
+            exc_info=True,
+        )
+        return None
+    try:
+        prefix = f"{issue_number}-"
+        # Codex P2 on #345: exact production-Assembly logins only — a prefix
+        # match would also admit e.g. "iterwheel-assembly-dev[bot]".
+        assembly_pr_authors = frozenset({ASSEMBLY_AGENT_SLUG, f"{ASSEMBLY_AGENT_SLUG}[bot]"})
+        for candidate in candidates or []:
+            # Search results are ISSUE-shaped and carry no `head` — fetch the
+            # pull-request detail to read the head branch (Codex P1 on #337).
+            pr_number = _pr_number_from_search_item(candidate)
+            if pr_number <= 0:
+                continue
+            pr = await client.pull_request(ASSEMBLY_AGENT_SLUG, repository, pr_number)
+            if not isinstance(pr, dict):
+                continue
+            # Codex P1 round 8: only an Assembly-authored PR may be reused —
+            # a human PR with a coincidental "<issue>-…" branch and a
+            # "Closes #N" body must never be adopted or overwritten.
+            pr_author = str(((pr.get("user") or {}).get("login")) or "")
+            if pr_author.lower() not in assembly_pr_authors:
+                # exact assembly bot logins: iterwheel-assembly[bot] / iterwheel-assembly
+                continue
+            head_ref = str(((pr.get("head") or {}).get("ref")) or "")
+            body = str(pr.get("body") or "")
+            if head_ref.startswith(prefix) and f"#{issue_number}" in body:
+                # Codex P2 on #345: reuse only same-repository PRs (VOY-1822
+                # invariant). A fork PR's ref is not a branch of the target
+                # repo — reusing it would push a new same-repo branch and
+                # open a duplicate PR while the fork PR stays open. Missing
+                # repo metadata fails closed (not same-repo).
+                head_repo = (((pr.get("head") or {}).get("repo") or {}).get("full_name")) or ""
+                base_repo = (((pr.get("base") or {}).get("repo") or {}).get("full_name")) or ""
+                if head_repo != repository or base_repo != repository:
+                    continue
+                return head_ref
+    except Exception:
+        _log.warning(
+            "Assembly issue-branch candidate scan failed",
+            extra={"repository": repository, "issue": issue_number},
+            exc_info=True,
+        )
+        return None
+    return None
+
+
+def _pr_number_from_search_item(item: dict[str, Any]) -> int:
+    """Pull the PR number out of a /search/issues item (issue-shaped).
+
+    The ``pull_request`` sub-object carries an API URL ending in /pulls/{n};
+    fall back to the top-level number only when that shape is missing (a
+    direct pulls payload already includes head and bypasses this helper).
+    """
+    pr_url = str(((item.get("pull_request") or {}).get("url")) or "")
+    if pr_url.rstrip("/").endswith(f"/pulls/{item.get('number')}"):
+        try:
+            return int(item.get("number") or 0)
+        except (TypeError, ValueError):
+            return 0
+    tail = pr_url.rstrip("/").rsplit("/pulls/", 1)
+    if len(tail) == 2 and tail[1].isdigit():
+        return int(tail[1])
+    return 0
 
 
 async def _verify_pr_head_repo(
