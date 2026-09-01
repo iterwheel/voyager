@@ -11,6 +11,8 @@ release note for the explicit migration path.
 
 - fix(assembly): idempotency key derives from the issue number, not the title (#257) ([#345](https://github.com/iterwheel/voyager/pull/345)).
 
+- fix(tests): scrub checkout pointers only when they target this checkout (#330 follow-up) ([#346](https://github.com/iterwheel/voyager/pull/346)).
+
 ### Added
 
 - Merge loop writes a SECOND, local-only, full-fidelity audit file
