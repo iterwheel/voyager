@@ -95,6 +95,11 @@ release note for the explicit migration path.
   leaving a thumbs-only-clean PR stuck pending forever
   ([#308](https://github.com/iterwheel/voyager/pull/308)).
 
+### Operational configuration shipped in 0.12.0
+
+- **Clearance author wake-up (default OFF).** `[clearance.author_wakeup]` (config) / `CLEARANCE_AUTHOR_WAKEUP_*` (Wukong bridge env, see `deploy/wukong/bridge.env.example`). When enabled and allowlisted per repository (`CLEARANCE_AUTHOR_WAKEUP_ALLOWED_REPOSITORIES`), Clearance notifies the PR author's agent door (`CLEARANCE_AUTHOR_WAKEUP_PFC_DOOR_URL`, default `http://localhost:8420/api/agent-send`) when a verdict is held for their PR — `NOTIFY_AFTER_MINUTES` (10) after the verdict, with fallback escalation at `FALLBACK_AFTER_MINUTES` (20). Delivery follows the durable send-ID retention contract (`REQUIRED_SEND_ID_RETENTION_SECONDS` = 86400, plus receipt poll/timeout, repost-safety-margin, and attempt caps as named in the template). **`CLEARANCE_AUTHOR_WAKEUP_AUTO_REVIEW_FIX` stays `false`** until end-to-end notification delivery is proven. Rollback: `ENABLED=false` — the subsystem is inert and Clearance verdicts behave exactly as before.
+- **Countdown trigger allow-list (required).** `BRIDGE_ALLOWED_REPOSITORIES_ITERWHEEL_COUNTDOWN` (e.g. `iterwheel/voyager`) in the bridge env. Without this entry the server gate default-denies in production (`DRY_RUN=false`) and the Countdown trigger path silently never fires. Rollout sets the entry at deploy; rollback removes it (trigger disabled for that repository only).
+
 ## [0.11.0] — 2026-08-09
 
 ### Changed — Merge-loop approval gate (BREAKING for zero-touch flows)
