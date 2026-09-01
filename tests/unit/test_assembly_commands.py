@@ -34,8 +34,13 @@ def test_command_must_start_line_not_mid_text() -> None:
 
 
 def test_command_with_leading_whitespace_matches() -> None:
-    cmd = parse_assembly_command("    /assembly")
-    assert cmd is not None
+    """Class-closing ruling on #336: visibility is parser-delegated (CommonMark)
+    — a 4-space-indented command at document start is an indented code block
+    and can no longer trigger. The parser's own 1-3 space tolerance still
+    works (checked below), and raw regex tolerance is a separate unit."""
+    assert parse_assembly_command("    /assembly") is None
+    assert parse_assembly_command("  /assembly") is not None
+    assert parse_assembly_command("\t/assembly") is None
 
 
 def test_command_on_subsequent_line_matches() -> None:

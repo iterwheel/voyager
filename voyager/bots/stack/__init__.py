@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from voyager.core.comment_text import visible_comment_text
+
 from .classifier import classify_stack_target
 from .comment import build_stack_comment
 from .constants import (
@@ -28,8 +30,10 @@ def should_run_stack(event: str, payload: dict[str, Any]) -> bool:
     if event == "issue_comment" and action == "created":
         # NOTE: "/stack" substring match also fires on "/stacktrace" — this
         # matches openclaw source behavior and is intentional for now.
+        # Issue #256: match only against visible prose — fenced code blocks
+        # (docs, pasted logs) and block quotes cannot trigger a run.
         body = str((payload.get("comment") or {}).get("body") or "")
-        return "/stack" in body.lower()
+        return "/stack" in visible_comment_text(body).lower()
     return False
 
 
