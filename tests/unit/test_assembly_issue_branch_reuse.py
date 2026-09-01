@@ -44,14 +44,20 @@ def _pr(
     }
 
 
-def _client(*, direct: Any = None, search: list | None = None, pr_head: str = "69-x") -> Any:
+def _client(
+    *,
+    direct: Any = None,
+    search: list | None = None,
+    pr_head: str = "69-x",
+    pr_author: str = "iterwheel-assembly[bot]",
+) -> Any:
     client = AsyncMock()
     client.find_pull_request_by_head = AsyncMock(return_value=direct)
     client.find_open_prs_referencing_issue = AsyncMock(return_value=search or [])
 
     async def _pull_request(_slug: str, _repo: str, number: int) -> dict[str, Any]:
         # Search items are issue-shaped; the resolution fetches the PR detail.
-        return _pr(pr_head, number, "Closes #69")
+        return _pr(pr_head, number, "Closes #69", author=pr_author)
 
     client.pull_request = AsyncMock(side_effect=_pull_request)
     return client
@@ -124,5 +130,26 @@ async def test_human_pr_with_matching_shape_is_not_reused():
     # the human-authored PR detail (returned for any number)
     client.pull_request = AsyncMock(
         return_value=_pr(original, 1300, "Closes #69", author="some-human")
+    )
+    assert await _existing_branch_for_issue(client, "o/r", 69, edited) is None
+
+
+async def test_prefix_spoofing_assembly_login_is_not_reused() -> None:
+    """Codex P2 on #345: a login that merely STARTS with the slug (e.g.
+    iterwheel-assembly-dev[bot]) is a different app — its PR must not be
+    adopted, pushed to, or updated on the issue's behalf."""
+    original = make_branch_name(69, "[Feature]: Implement Assembly bot MVP")
+    edited = make_branch_name(69, "[Feature]: Renamed entirely")
+    client = _client(
+        direct=None,
+        pr_head=original,
+        pr_author="iterwheel-assembly-dev[bot]",
+        search=[
+            {
+                "number": 1300,
+                "body": "Closes #69",
+                "pull_request": {"url": "https://api.example.com/o/r/pulls/1300"},
+            }
+        ],
     )
     assert await _existing_branch_for_issue(client, "o/r", 69, edited) is None

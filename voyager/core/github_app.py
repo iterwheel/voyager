@@ -1006,16 +1006,28 @@ class GitHubAppClient:
 
         Search-API based; callers must re-verify candidates (head-branch
         prefix, body reference) since the numeric query can over-match.
-        Returns [] on failure — never raises.
+        Paginates the FULL result set (a single page can miss the existing
+        PR once >30 open PR bodies match). Returns [] on failure — never
+        raises; a mid-pagination failure keeps the pages already collected.
         """
+        # Codex P2 on #345: paginate before giving up. GitHub search caps
+        # results at 1000 (10 pages x per_page=100).
         query = quote_plus(f"repo:{repo} is:pr is:open {issue_number} in:body")
-        path = f"/search/issues?q={query}&per_page=30"
+        items: list[dict[str, Any]] = []
+        page = 1
         try:
-            payload = await self.request(app_slug, "GET", path, repository=repo)
+            while True:
+                path = f"/search/issues?q={query}&per_page=100&page={page}"
+                payload = await self.request(app_slug, "GET", path, repository=repo)
+                batch = (payload or {}).get("items") if isinstance(payload, dict) else None
+                page_items = [dict(item) for item in batch or [] if isinstance(item, dict)]
+                items.extend(page_items)
+                if len(page_items) < 100 or page >= 10:
+                    break
+                page += 1
         except (httpx.HTTPError, TimeoutError):
-            return []
-        items = (payload or {}).get("items") if isinstance(payload, dict) else None
-        return [dict(item) for item in items or [] if isinstance(item, dict)]
+            return items
+        return items
 
     async def pull_request_head_updated_at(
         self, app_slug: str, repo: str, pull_number: int

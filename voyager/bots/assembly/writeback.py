@@ -1747,6 +1747,9 @@ async def _existing_branch_for_issue(
         return None
     try:
         prefix = f"{issue_number}-"
+        # Codex P2 on #345: exact production-Assembly logins only — a prefix
+        # match would also admit e.g. "iterwheel-assembly-dev[bot]".
+        assembly_pr_authors = frozenset({ASSEMBLY_AGENT_SLUG, f"{ASSEMBLY_AGENT_SLUG}[bot]"})
         for candidate in candidates or []:
             # Search results are ISSUE-shaped and carry no `head` — fetch the
             # pull-request detail to read the head branch (Codex P1 on #337).
@@ -1760,9 +1763,8 @@ async def _existing_branch_for_issue(
             # a human PR with a coincidental "<issue>-…" branch and a
             # "Closes #N" body must never be adopted or overwritten.
             pr_author = str(((pr.get("user") or {}).get("login")) or "")
-            if not pr_author.lower().startswith(f"{ASSEMBLY_AGENT_SLUG}"):
-                # assembly bot logins: iterwheel-assembly[bot] / iterwheel-assembly
-                continue
+            if pr_author.lower() not in assembly_pr_authors:
+                # exact assembly bot logins: iterwheel-assembly[bot] / iterwheel-assembly
                 continue
             head_ref = str(((pr.get("head") or {}).get("ref")) or "")
             body = str(pr.get("body") or "")
