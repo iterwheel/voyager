@@ -7,6 +7,7 @@ minor bumps may still include surface-level breaking changes — see each
 release note for the explicit migration path.
 
 ## [Unreleased]
+- fix(bots): fence-aware command triggers (#256) ([#343](https://github.com/iterwheel/voyager/pull/343)).
 
 ### Added
 
