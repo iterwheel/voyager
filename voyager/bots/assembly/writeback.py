@@ -1769,6 +1769,15 @@ async def _existing_branch_for_issue(
             head_ref = str(((pr.get("head") or {}).get("ref")) or "")
             body = str(pr.get("body") or "")
             if head_ref.startswith(prefix) and f"#{issue_number}" in body:
+                # Codex P2 on #345: reuse only same-repository PRs (VOY-1822
+                # invariant). A fork PR's ref is not a branch of the target
+                # repo — reusing it would push a new same-repo branch and
+                # open a duplicate PR while the fork PR stays open. Missing
+                # repo metadata fails closed (not same-repo).
+                head_repo = (((pr.get("head") or {}).get("repo") or {}).get("full_name")) or ""
+                base_repo = (((pr.get("base") or {}).get("repo") or {}).get("full_name")) or ""
+                if head_repo != repository or base_repo != repository:
+                    continue
                 return head_ref
     except Exception:
         _log.warning(

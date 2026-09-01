@@ -153,3 +153,26 @@ async def test_prefix_spoofing_assembly_login_is_not_reused() -> None:
         ],
     )
     assert await _existing_branch_for_issue(client, "o/r", 69, edited) is None
+
+
+async def test_fork_pr_candidate_is_not_reused() -> None:
+    """Codex P2 on #345: an Assembly-authored FORK PR with the right branch
+    prefix and body is not a branch of the target repository — reusing its
+    ref would push a new same-repo branch and open a duplicate PR while the
+    fork PR stays open (VOY-1822 same-repo invariant)."""
+    original = make_branch_name(69, "[Feature]: Implement Assembly bot MVP")
+    edited = make_branch_name(69, "[Feature]: Renamed entirely")
+    fork_pr = _pr(original, 1300, "Closes #69")
+    fork_pr["head"]["repo"]["full_name"] = "someone/fork"  # base stays o/r
+    client = _client(
+        direct=None,
+        search=[
+            {
+                "number": 1300,
+                "body": "Closes #69",
+                "pull_request": {"url": "https://api.example.com/o/r/pulls/1300"},
+            }
+        ],
+    )
+    client.pull_request = AsyncMock(return_value=fork_pr)
+    assert await _existing_branch_for_issue(client, "o/r", 69, edited) is None
