@@ -402,9 +402,12 @@ def _has_shebang(candidate: Path) -> bool:
 
 
 def _git(repo: Path, git: str, *args: str) -> str:
+    from conftest import isolated_git_env
+
     result = subprocess.run(
         [git, *args],
         cwd=repo,
+        env=isolated_git_env(),
         text=True,
         capture_output=True,
         check=False,

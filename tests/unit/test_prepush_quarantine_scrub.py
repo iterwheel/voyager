@@ -38,14 +38,19 @@ _REPO_POINTERS = {
 }
 
 
-def _child_pytest(env_extra: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
-    env = dict(os.environ)
-    env.update(env_extra)
-    env.pop("GIT_QUARANTINE_PATH", None)
-    for name in _REPO_POINTERS:
-        env.pop(name, None)
-    for name in _HOOK_ENV_QUARANTINE:
-        env.pop(name, None)
+def _child_pytest(
+    env_extra: dict[str, str], *args: str, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    if env is None:
+        # Fresh baseline: strip any ambient hook/quarantine state so the
+        # child sees exactly what the caller passes. An EXPLICIT env is
+        # respected as-is (the intentional-pointer scenarios depend on it).
+        env = dict(os.environ)
+        env.pop("GIT_QUARANTINE_PATH", None)
+        for name in _REPO_POINTERS:
+            env.pop(name, None)
+        for name in _HOOK_ENV_QUARANTINE:
+            env.pop(name, None)
     env.update(env_extra)
     return subprocess.run(
         [sys.executable, "-m", "pytest", "-q", *args],
@@ -121,3 +126,144 @@ def test_git_spawning_suite_passes_with_quarantine_parent_env():
         "git-spawning tests fail under hook env (pre-push hook context):\n"
         f"{result.stdout[-2000:]}\n{result.stderr[-2000:]}"
     )
+
+
+def _tmp_git_repo(tmp: Path) -> Path:
+    """A real throwaway git repo for intentional-pointer scenarios.
+
+    Codex P2 round 6: under a pointer-only checkout the session KEEPS the
+    pointers, so a bare `git init` would honor the inherited GIT_DIR and
+    reinitialize the outer checkout — initialize isolated and verify the
+    resulting git dir is under tmp.
+    """
+    from conftest import isolated_git_env
+
+    subprocess.run(
+        ["git", "init", "--quiet", str(tmp)],
+        env=isolated_git_env(),
+        check=True,
+        timeout=60,
+    )
+    git_dir = tmp / ".git"
+    assert git_dir.exists(), "isolated git init must create tmp/.git, not reuse GIT_DIR"
+    return git_dir
+
+
+def test_intentional_external_repo_pointers_survive(tmp_path):
+    """discussion_r3890533687 (Codex P2 round 2): a checkout whose git
+    location is supplied ONLY via GIT_DIR/GIT_WORK_TREE (git dir mounted
+    elsewhere, no local .git) must keep its pointers — dropping them makes
+    git-spawning tests fail with 'not a git repository'."""
+    external = _tmp_git_repo(tmp_path / "external")
+    work_tree = tmp_path / "external"
+    env = dict(os.environ)
+    for name in _REPO_POINTERS:
+        env.pop(name, None)
+    env.update(
+        {
+            "GIT_DIR": str(external),
+            "GIT_WORK_TREE": str(work_tree),
+            "GIT_INDEX_FILE": str(external / "index"),
+        }
+    )
+    env["VOYAGER_PROBE_EXPECT_POINTERS"] = "1"
+    result = _child_pytest(
+        {},
+        "tests/unit/test_prepush_quarantine_scrub.py::test_intentional_pointers_preserved",
+        env=env,
+    )
+    assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
+
+
+def test_intentional_pointers_preserved():
+    """Runs as a CHILD pytest under external GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE.
+
+    The VOYAGER_PROBE_EXPECT_POINTERS marker distinguishes the intentional-
+    pointer probe run from a plain standalone invocation; without it a scrub
+    that already dropped the vars would turn this into a vacuous skip/pass.
+    """
+    import pytest
+
+    if os.environ.get("VOYAGER_PROBE_EXPECT_POINTERS") != "1":
+        pytest.skip("child-only probe: run via test_intentional_external_repo_pointers_survive")
+    for name in _REPO_POINTERS:
+        assert os.environ.get(name), f"{name} must survive when it points elsewhere"
+
+
+def test_hook_contaminated_repo_pointers_are_scrubbed():
+    """Pointers that point at THIS repo are hook leakage and must be scrubbed."""
+    git_dir = subprocess.run(
+        ["git", "rev-parse", "--absolute-git-dir"],
+        cwd=str(_REPO_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+    ).stdout.strip()
+    result = _child_pytest(
+        {
+            "GIT_DIR": git_dir,
+            "GIT_WORK_TREE": str(_REPO_ROOT),
+        },
+        "tests/unit/test_prepush_quarantine_scrub.py::test_no_hook_env_leak",
+    )
+    assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
+
+
+def test_pointer_only_checkout_keeps_all_pointers():
+    """Codex P2 on #338: a checkout with NO local .git entry is described only
+    by its env pointers — discovery without them fails, and the decision must
+    KEEP every pointer (they are the checkout metadata, not leakage)."""
+    from conftest import _decide_pointer_scrub
+
+    assert _decide_pointer_scrub(None, has_local_git_entry=False) == []
+
+
+def test_unresolvable_normal_checkout_scrubs_all():
+    """Discovery failure WITH a local .git entry fails toward the safe scrub."""
+    from conftest import _decide_pointer_scrub
+
+    assert _decide_pointer_scrub(None, has_local_git_entry=True) == [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+    ]
+
+
+def test_normal_checkout_scrubs_only_this_repos_pointers(monkeypatch):
+    """Pointers pointing elsewhere survive; pointers here are scrubbed."""
+    import conftest
+    from conftest import _decide_pointer_scrub
+
+    own = conftest._REPO_ROOT / ".git"
+    monkeypatch.setenv("GIT_DIR", "/tmp/elsewhere/.git")
+    monkeypatch.setenv("GIT_WORK_TREE", str(conftest._REPO_ROOT))
+    scrub = _decide_pointer_scrub(own, True)
+    assert "GIT_WORK_TREE" in scrub
+    assert "GIT_DIR" not in scrub
+
+
+def test_ancestor_git_dir_discovery_is_rejected(tmp_path, monkeypatch):
+    """Codex P2 on #346: a pointer-only checkout nested INSIDE another git
+    repository must not inherit the ancestor's git dir from discovery —
+    that would drop its pointer-only status and scrub the intentional
+    GIT_DIR/GIT_WORK_TREE pair that describes the checkout."""
+    import conftest
+    from conftest import _decide_pointer_scrub, _outer_repo_git_dir
+
+    ancestor = tmp_path / "ancestor"
+    ancestor.mkdir()
+    _tmp_git_repo(ancestor)
+    nested = ancestor / "nested"
+    nested.mkdir()
+
+    monkeypatch.setattr(conftest, "_REPO_ROOT", nested.resolve())
+    # Discovery without pointers walks UP to the ancestor — must be rejected
+    # because the ancestor's top level is not the checkout root.
+    assert _outer_repo_git_dir() is None
+    # Pointer-only branch therefore keeps every pointer.
+    assert _decide_pointer_scrub(None, has_local_git_entry=False) == []
+
+    # Control: a real checkout of the ancestor discovers its own git dir.
+    monkeypatch.setattr(conftest, "_REPO_ROOT", ancestor.resolve())
+    assert _outer_repo_git_dir() == (ancestor / ".git").resolve()
