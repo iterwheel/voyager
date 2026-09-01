@@ -7,6 +7,8 @@ minor bumps may still include surface-level breaking changes — see each
 release note for the explicit migration path.
 
 ## [Unreleased]
+
+## [0.12.0] — 2026-09-01
 - fix(bots): fence-aware command triggers (#256) ([#343](https://github.com/iterwheel/voyager/pull/343)).
 
 - fix(assembly): idempotency key derives from the issue number, not the title (#257) ([#345](https://github.com/iterwheel/voyager/pull/345)).
